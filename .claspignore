@@ -1,0 +1,21 @@
+# Keep repository/docs files out of the deployed Apps Script project.
+README.md
+LICENSE
+.git/**
+.github/**
+.claude/**
+.vscode/**
+.idea/**
+.gitignore
+.gitattributes
+.clasp.example.json
+
+# Local-only clasp binding
+.clasp.json
+
+# OS/temp files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
+*.bak

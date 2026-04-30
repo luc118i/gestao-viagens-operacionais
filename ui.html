@@ -1,0 +1,436 @@
+<script>
+  // ============================================================
+  //  ui.js  —  Módulo de interações da interface
+  //  Responsabilidade: upload de arquivo, drag-and-drop,
+  //  modal de ponto manual, editor de motorista, tabs, PDF/print,
+  //  toasts, loading overlay
+  // ============================================================
+
+  const UIModule = (() => {
+    // ---- Estado ----
+    let _csvText = null;
+    let _onFileReady = null; // callback chamado com o texto do CSV
+
+    // ============================================================
+    //  UPLOAD
+    // ============================================================
+
+    /**
+     * Inicializa a zona de upload (click + drag-and-drop).
+     * @param {Function} onReady  callback(csvText: string)
+     */
+    function initUpload(onReady) {
+      _onFileReady = onReady;
+      const zone = document.getElementById("uploadZone");
+      const input = document.getElementById("fileInput");
+
+      // O input cobre toda a zona com opacity:0 — clique nativo, sem .click() programático
+      // Input file change
+      input.addEventListener("change", (e) => {
+        if (e.target.files[0]) _handleFile(e.target.files[0]);
+      });
+
+      // Drag over
+      zone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        zone.classList.add("drag-over");
+      });
+
+      zone.addEventListener("dragleave", () => {
+        zone.classList.remove("drag-over");
+      });
+
+      // Drop
+      zone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        zone.classList.remove("drag-over");
+        const file = e.dataTransfer.files[0];
+        if (file) _handleFile(file);
+      });
+    }
+
+    function _handleFile(file) {
+      const allowed = [".csv", ".txt", "text/csv", "text/plain"];
+      const ext = "." + file.name.split(".").pop().toLowerCase();
+      if (!allowed.includes(ext) && !allowed.includes(file.type)) {
+        showToast("Formato inválido. Use arquivos .csv ou .txt", "error");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        _csvText = e.target.result;
+
+        // Atualiza UI da zona de upload
+        const zone = document.getElementById("uploadZone");
+        const icon = document.getElementById("uploadIcon");
+        const label = document.getElementById("uploadLabel");
+        const hint = document.getElementById("uploadHint");
+        const fname = document.getElementById("uploadedFileName");
+
+        zone.classList.add("has-file");
+        if (icon) icon.textContent = "OK";
+        if (label) label.textContent = "Arquivo carregado";
+        if (hint) hint.textContent = file.name;
+        if (fname) {
+          fname.textContent = `${file.name} (${_fmtBytes(file.size)})`;
+          fname.style.display = "block";
+        }
+
+        // Habilita botão processar somente se esquema já selecionado
+        const btn = document.getElementById("btnProcessar");
+        const selEsq = document.getElementById("selectEsquema");
+        if (btn) btn.disabled = !(selEsq && selEsq.value);
+
+        if (_onFileReady) _onFileReady(_csvText);
+      };
+
+      reader.onerror = () => showToast("Erro ao ler o arquivo.", "error");
+      // ISO-8859-1 (Latin-1) cobre Windows-1252, encoding padrão dos
+      // relatórios exportados pelos sistemas brasileiros de monitoramento
+      reader.readAsText(file, "ISO-8859-1");
+    }
+
+    function getCsvText() {
+      return _csvText;
+    }
+
+    function resetUpload() {
+      _csvText = null;
+      const zone  = document.getElementById("uploadZone");
+      const icon  = document.getElementById("uploadIcon");
+      const label = document.getElementById("uploadLabel");
+      const hint  = document.getElementById("uploadHint");
+      const fname = document.getElementById("uploadedFileName");
+      const btn   = document.getElementById("btnProcessar");
+      const input = document.getElementById("fileInput");
+      if (zone)  zone.classList.remove("has-file");
+      if (icon)  icon.textContent  = "📁";
+      if (label) label.textContent = "Clique ou arraste o arquivo";
+      if (hint)  hint.textContent  = "Formato: .csv (separado por TAB)";
+      if (fname) { fname.textContent = ""; fname.style.display = "none"; }
+      if (btn)   btn.disabled = true;
+      if (input) input.value = "";
+    }
+
+    // ============================================================
+    //  TABS
+    // ============================================================
+
+    function initTabs() {
+      document.querySelectorAll(".tab-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const targetId = btn.dataset.tab;
+
+          // Remove classe active apenas dos botões
+          document
+            .querySelectorAll(".tab-btn")
+            .forEach((b) => b.classList.remove("active"));
+
+          // Oculta todos os painéis (mas mantém overflow-y: auto)
+          document.querySelectorAll(".tab-panel").forEach((p) => {
+            p.style.display = "none";
+            p.classList.remove("active");
+          });
+
+          // Ativa o novo
+          btn.classList.add("active");
+          const panel = document.getElementById(targetId);
+          if (panel) {
+            panel.style.display = "block";
+            panel.classList.add("active");
+          }
+        });
+      });
+    }
+
+    // ============================================================
+    //  EDITOR DE MOTORISTA
+    // ============================================================
+
+    /**
+     * Inicializa o editor de motorista.
+     * @param {Function} onChange  callback(novoNome: string)
+     */
+    function initDriverEditor(onChange) {
+      const btnEdit = document.getElementById("btnEditDriver");
+      const display = document.getElementById("driverDisplay");
+      const input = document.getElementById("driverInput");
+      const nameEl = document.getElementById("driverName");
+
+      if (!btnEdit) return;
+
+      btnEdit.addEventListener("click", () => {
+        const currentName = nameEl ? nameEl.textContent.trim() : "";
+        input.value = currentName === "Não Informado" ? "" : currentName;
+        display.style.display = "none";
+        input.style.display = "block";
+        input.focus();
+      });
+
+      const confirmEdit = () => {
+        const newName = input.value.trim();
+        display.style.display = "flex";
+        input.style.display = "none";
+
+        if (newName && nameEl) {
+          nameEl.textContent = newName;
+          nameEl.className = "driver-name";
+          if (onChange) onChange(newName);
+          showToast(`Motorista atualizado: ${newName}`, "success");
+        }
+      };
+
+      input.addEventListener("blur", confirmEdit);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          confirmEdit();
+        }
+        if (e.key === "Escape") {
+          display.style.display = "flex";
+          input.style.display = "none";
+        }
+      });
+    }
+
+    // ============================================================
+    //  MODAL DE PONTO MANUAL
+    // ============================================================
+
+    /**
+     * Inicializa o modal de adição de ponto manual.
+     * @param {Function} onConfirm  callback(ponto: Object)
+     */
+    function initManualPointModal(onConfirm) {
+      const overlay = document.getElementById("modalPontoManual");
+      const btnAdd = document.getElementById("btnAddPonto");
+      const btnClose = document.getElementById("btnCloseModal");
+      const btnCancel = document.getElementById("btnCancelModal");
+      const btnOk = document.getElementById("btnConfirmModal");
+
+      if (!overlay) return;
+
+      const open = () => overlay.classList.add("open");
+      const close = () => {
+        overlay.classList.remove("open");
+        _clearModalForm();
+      };
+
+      if (btnAdd) btnAdd.addEventListener("click", open);
+      if (btnClose) btnClose.addEventListener("click", close);
+      if (btnCancel) btnCancel.addEventListener("click", close);
+
+      // Fecha ao clicar fora do modal
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) close();
+      });
+
+      if (btnOk) {
+        btnOk.addEventListener("click", () => {
+          const ponto = document.getElementById("manualPonto").value.trim();
+          const lat = parseFloat(document.getElementById("manualLat").value);
+          const lng = parseFloat(document.getElementById("manualLng").value);
+          const entrada = document.getElementById("manualEntrada").value.trim();
+          const saida = document.getElementById("manualSaida").value.trim();
+
+          if (!ponto) {
+            showToast("Informe o nome do ponto.", "error");
+            return;
+          }
+          if (isNaN(lat) || isNaN(lng)) {
+            showToast("Coordenadas inválidas.", "error");
+            return;
+          }
+
+          const pontoObj = {
+            seq: -1, // será ajustado pelo app
+            veiculo: "",
+            ponto: ponto,
+            entrada: entrada || null,
+            saida: saida || null,
+            parada_s: 0,
+            intervalo_s: 0,
+            funcionario: "",
+            lat: lat,
+            lng: lng,
+            tipo: "Manual",
+            vel_max: 0,
+            raio: 0,
+            pedagio: false,
+            rodoviaria: false,
+            garagem: false,
+            matched: true,
+            manual: true,
+          };
+
+          if (onConfirm) onConfirm(pontoObj);
+          close();
+          showToast(`Ponto "${ponto}" adicionado.`, "success");
+        });
+      }
+    }
+
+    function _clearModalForm() {
+      [
+        "manualPonto",
+        "manualLat",
+        "manualLng",
+        "manualEntrada",
+        "manualSaida",
+      ].forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.value = "";
+      });
+    }
+
+    // ============================================================
+    //  BOTÃO LIMPAR
+    // ============================================================
+
+    function initLimpar(onLimpar) {
+      const btn = document.getElementById("btnLimpar");
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        if (!confirm("Limpar todos os dados e começar uma nova análise?"))
+          return;
+
+        _csvText = null;
+
+        // Reseta upload zone
+        const zone = document.getElementById("uploadZone");
+        const icon = document.getElementById("uploadIcon");
+        const label = document.getElementById("uploadLabel");
+        const hint = document.getElementById("uploadHint");
+        const fname = document.getElementById("uploadedFileName");
+        const input = document.getElementById("fileInput");
+
+        if (zone) zone.classList.remove("has-file");
+        if (icon) icon.textContent = "📁";
+        if (label) label.textContent = "Clique ou arraste o arquivo";
+        if (hint) hint.textContent = "Formato: .csv (separado por TAB)";
+        if (fname) {
+          fname.textContent = "";
+          fname.style.display = "none";
+        }
+        if (input) input.value = "";
+
+        const btnProcessar = document.getElementById("btnProcessar");
+        if (btnProcessar) btnProcessar.disabled = true;
+
+        if (onLimpar) onLimpar();
+      });
+    }
+
+    // ============================================================
+    //  PDF / PRINT
+    // ============================================================
+
+    function initPrint() {
+      const btn = document.getElementById("btnPDF");
+      if (!btn) return;
+      btn.addEventListener("click", () => {
+        // Garante que todas as tabs estão visíveis antes de imprimir
+        document.querySelectorAll(".tab-panel").forEach((p) => {
+          p.setAttribute(
+            "data-was-active",
+            p.classList.contains("active") ? "1" : "0",
+          );
+          p.classList.add("active");
+        });
+
+        window.print();
+
+        // Restaura estado das tabs
+        setTimeout(() => {
+          document.querySelectorAll(".tab-panel").forEach((p) => {
+            if (p.getAttribute("data-was-active") !== "1") {
+              p.classList.remove("active");
+            }
+          });
+        }, 500);
+      });
+    }
+
+    // ============================================================
+    //  LOADING OVERLAY
+    // ============================================================
+
+    function showLoading(msg) {
+      const overlay = document.getElementById("loadingOverlay");
+      const text = document.getElementById("loadingText");
+      if (overlay) overlay.classList.add("visible");
+      if (text) text.textContent = msg || "Processando...";
+    }
+
+    function hideLoading() {
+      const overlay = document.getElementById("loadingOverlay");
+      if (overlay) overlay.classList.remove("visible");
+    }
+
+    // ============================================================
+    //  TOASTS
+    // ============================================================
+
+    /**
+     * Exibe uma notificação toast.
+     * @param {string} message
+     * @param {'success'|'error'|'warning'|'info'} type
+     * @param {number} duration  ms (padrão 3500)
+     */
+    function showToast(message, type = "info", duration = 3500) {
+      const container = document.getElementById("toastContainer");
+      if (!container) return;
+
+      const icons = {
+        success: "Sucesso",
+        error: "Erro",
+        warning: "Atenção",
+        info: "Info",
+      };
+
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.innerHTML = `<span>${icons[type] || "Info"}</span> ${_escHtml(message)}`;
+      container.appendChild(toast);
+
+      setTimeout(() => {
+        toast.style.transition = "opacity 0.3s, transform 0.3s";
+        toast.style.opacity = "0";
+        toast.style.transform = "translateX(20px)";
+        setTimeout(() => toast.remove(), 350);
+      }, duration);
+    }
+
+    // ============================================================
+    //  HELPERS
+    // ============================================================
+
+    function _fmtBytes(bytes) {
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function _escHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    return {
+      initUpload,
+      initTabs,
+      initDriverEditor,
+      initManualPointModal,
+      initLimpar,
+      initPrint,
+      showLoading,
+      hideLoading,
+      showToast,
+      getCsvText,
+      resetUpload,
+    };
+  })();
+</script>

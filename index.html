@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Análise Operacional · Viação Catedral</title>
+
+    <!-- Leaflet CSS -->
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin=""
+    />
+
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <?!= include('style') ?>
+  </head>
+  <body>
+    <div class="app-wrapper">
+      <!-- ========== HEADER ========== -->
+      <header class="app-header">
+        <div class="header-left">
+          <div class="header-logo">VC</div>
+          <div>
+            <div class="header-title">Análise Operacional</div>
+            <div class="header-sub">Viação Catedral · BI Operacional</div>
+          </div>
+        </div>
+
+        <div class="header-center">
+          <div style="display:flex; align-items:center; gap:6px; flex:1; min-width:0;">
+            <div class="esquema-combobox" id="esquemaCombobox">
+              <div class="esquema-combobox-input-wrap">
+                <input
+                  type="text"
+                  id="esquemaSearch"
+                  class="esquema-search-input"
+                  placeholder="Pesquisar linha, código ou horário…"
+                  autocomplete="off"
+                />
+                <span class="esquema-combobox-chevron" id="esquemaChevron">▾</span>
+              </div>
+              <div class="esquema-dropdown" id="esquemaDropdown"></div>
+            </div>
+            <button
+              id="btnRefreshEsquemas"
+              title="Atualizar lista de esquemas"
+              style="flex-shrink:0; background:none; border:1px solid var(--border); border-radius:7px; width:32px; height:32px; cursor:pointer; font-size:15px; color:var(--text3); display:flex; align-items:center; justify-content:center; transition:color 0.15s, border-color 0.15s;"
+              onmouseover="this.style.color='var(--laranja)';this.style.borderColor='var(--laranja)';"
+              onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border)';"
+            >↻</button>
+          </div>
+          <!-- hidden: mantém compatibilidade com código que lê selectEsquema.value -->
+          <input type="hidden" id="selectEsquema" value="" />
+          <div id="esquemaInfo" class="esquema-info" style="display:none"></div>
+        </div>
+
+        <div class="header-right">
+          <button
+            id="btnRelatorio"
+            disabled
+            style="display:none; padding:5px 14px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="if(!this.disabled){this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';}"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
+          >📋 Relatório</button>
+          <button
+            id="btnVincularMotorista"
+            disabled
+            style="display:none; padding:5px 14px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="if(!this.disabled){this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';}"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
+          >👤 Motorista</button>
+          <button
+            id="btnNovaAnalise"
+            title="Limpar dados e iniciar nova análise"
+            onclick="AppModule._novaAnalise()"
+            style="padding:5px 14px; border-radius:6px; border:1.5px solid var(--laranja); background:var(--laranja); color:#fff; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="this.style.opacity='0.85';"
+            onmouseout="this.style.opacity='1';"
+          >+ Nova Análise</button>
+          <button
+            id="btnGerenciarEsquemas"
+            title="Abrir Web App de gestão de esquemas"
+            onclick="window.open('<?= webAppUrl ?>?page=manager', '_blank')"
+            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
+          >🗺 Esquemas</button>
+          <span id="badgeVeiculo" class="badge" style="display: none">
+            <span id="badgeVeiculoNum">—</span>
+          </span>
+          <span id="badgeAlertas" class="badge vermelho" style="display: none">
+            <span id="badgeAlertasNum">0</span> alertas
+          </span>
+          <span id="badgeStatus" class="badge verde" style="display: none">
+            Análise carregada
+          </span>
+        </div>
+      </header>
+
+      <!-- ========== SEÇÃO CONFIGURAÇÃO ========== -->
+      <section class="section section-config" id="sectionConfig">
+
+        <!-- Card centralizado de upload -->
+        <div style="display:flex; justify-content:center; padding:32px 16px 24px;">
+          <div style="width:100%; max-width:480px; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px 28px 24px; box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+
+            <div style="text-align:center; margin-bottom:20px;">
+              <div style="font-size:16px; font-weight:700; color:var(--text); margin-bottom:4px;">Análise Operacional de Viagem</div>
+              <div style="font-size:12px; color:var(--text3);">Envie o relatório CSV e selecione o esquema para iniciar</div>
+            </div>
+
+            <!-- Zona de upload — label nativo abre o diálogo sem JS (.click bloqueado em iframe GAS) -->
+            <label for="fileInput" class="upload-zone" id="uploadZone" style="cursor:pointer; display:flex;">
+              <span class="upload-icon" id="uploadIcon">📁</span>
+              <div class="upload-text">
+                <strong id="uploadLabel">Clique ou arraste o arquivo</strong>
+                <span id="uploadHint">Formato: .csv (separado por TAB)</span>
+              </div>
+            </label>
+            <input type="file" id="fileInput" accept=".csv,.txt" style="display:none;" />
+            <div id="uploadedFileName" style="display:none; font-size:11px; color:var(--text3); margin-top:6px; text-align:center;"></div>
+
+            <!-- Esquema -->
+            <div id="uploadEsquemaWrap" style="margin-top:16px;">
+              <div style="font-size:11px; font-weight:600; color:var(--text2); margin-bottom:6px;">Esquema da viagem *</div>
+              <div style="position:relative;" id="uploadEsquemaCombobox">
+                <input
+                  type="text"
+                  id="uploadEsquemaSearch"
+                  autocomplete="off"
+                  placeholder="Buscar linha, código ou horário…"
+                  style="width:100%; box-sizing:border-box; padding:8px 12px; border:1.5px solid var(--border); border-radius:8px; font-size:13px; color:var(--text); background:var(--bg); outline:none; transition:border-color 0.15s;"
+                />
+                <div id="uploadEsquemaDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:var(--bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.1); max-height:200px; overflow-y:auto; z-index:200; margin-top:3px;"></div>
+              </div>
+              <div id="uploadEsquemaInfo" style="font-size:11px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(34,169,106,0.07); border:1px solid rgba(34,169,106,0.25); color:#22a96a; display:none; font-weight:600;"></div>
+            </div>
+
+            <button class="btn btn-primary btn-full" id="btnProcessar" style="margin-top:18px; height:42px; font-size:14px;" disabled>
+              ▶ Processar Viagem
+            </button>
+          </div>
+        </div>
+
+        <!-- Elementos ocultos necessários para o JS (motorista, relatório, etc.) -->
+        <div style="display:none;">
+          <div id="uploadWelcome"></div>
+          <div id="colUpload"></div>
+          <div id="sectionMotorista">
+            <div id="autoVinculoCard"></div>
+            <div id="motoristaDisplay">
+              <div class="driver-row">
+                <span class="driver-name uninformed" id="driverName">Não Informado</span>
+                <button class="btn-icon" id="btnEditDriver">✏</button>
+              </div>
+              <div id="trechoSummary"></div>
+              <div id="listaVinculosInline"></div>
+            </div>
+            <div id="motoristaFormInline">
+              <input type="text" class="form-input" id="sidebarMatricula" />
+              <button class="btn btn-secondary" id="btnSidebarBuscar">Buscar</button>
+              <div id="sidebarNomeResult"></div>
+              <input type="text" class="form-input" id="sidebarNomeMotorista" />
+              <div id="sidebarTrechoSection">
+                <select class="form-input" id="sidebarPontoInicio"></select>
+                <select class="form-input" id="sidebarPontoFim"></select>
+              </div>
+              <button class="btn btn-primary" id="btnSidebarConfirmar">✓ Confirmar</button>
+              <button class="btn btn-ghost" id="btnSidebarCancelar">Cancelar</button>
+            </div>
+            <button class="btn-icon" id="btnAddMotorista">+</button>
+          </div>
+          <!-- Modo de Relatório (oculto — acessível via modal Gerar Relatório) -->
+          <div>
+            <input type="radio" name="tipoRelatorio" value="MOTORISTA" />
+            <input type="radio" name="tipoRelatorio" value="TRECHO" />
+            <input type="radio" name="tipoRelatorio" value="COMPLETO" checked />
+            <div id="relMotoristaFieldsInline">
+              <select class="form-input" id="relSelectMotorista"><option value="">— Selecione —</option></select>
+            </div>
+            <div id="relTrechoFieldsInline">
+              <select class="form-input" id="relPontoA"></select>
+              <select class="form-input" id="relPontoB"></select>
+            </div>
+            <div id="relPreview"></div>
+            <button class="btn btn-primary" id="btnGerarRelatorioInline" disabled>📋 Gerar Relatório</button>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ========== SEÇÃO RESUMO ========== -->
+      <section
+        class="section section-resumo"
+        id="sectionResumo"
+        style="display: none; padding-top: 0"
+      >
+        <div class="summary-bar">
+          <div class="sum-card">
+            <div class="sum-value" id="sumPlanejados">—</div>
+            <div class="sum-label">Planejados</div>
+          </div>
+          <div class="sum-card">
+            <div class="sum-value verde" id="sumRealizados">—</div>
+            <div class="sum-label">Realizados</div>
+          </div>
+          <div class="sum-card">
+            <div class="sum-value" id="sumNaoVisitados">—</div>
+            <div class="sum-label">Não visitados</div>
+          </div>
+          <div class="sum-card">
+            <div class="sum-value laranja" id="sumKm">—</div>
+            <div class="sum-label">Km Total</div>
+          </div>
+          <div class="sum-card">
+            <div class="sum-value" id="sumTempo">—</div>
+            <div class="sum-label">Tempo viagem</div>
+          </div>
+          <div class="sum-card" id="sumMaiorParadaCard" title="">
+            <div class="sum-value" id="sumMaiorParadaDur">—</div>
+            <div class="sum-label" id="sumMaiorParadaLabel">Maior Parada</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== MODO DE VISUALIZAÇÃO ========== -->
+      <section id="sectionModoVisualizacao" style="display:none; padding:0 24px 14px; max-width:1200px; margin:0 auto; width:100%;">
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap; padding:10px 16px; background:var(--surface); border:1px solid var(--border); border-radius:10px; box-shadow:var(--shadow-sm);">
+          <span style="font-size:11px; font-weight:700; color:var(--text3); text-transform:uppercase; letter-spacing:0.6px; margin-right:4px;">Visualizar:</span>
+          <button id="modoBtn_COMPLETO" class="modo-btn active" onclick="AppModule._setModo('COMPLETO')">Completo</button>
+          <button id="modoBtn_MOTORISTA" class="modo-btn" onclick="AppModule._setModo('MOTORISTA')">Por Motorista</button>
+          <button id="modoBtn_TRECHO" class="modo-btn" onclick="AppModule._setModo('TRECHO')">Por Trecho</button>
+
+          <div id="modoMotoristaFields" style="display:none; align-items:center; gap:8px; margin-left:8px;">
+            <select id="modoSelectMotorista" style="padding:5px 10px; border:1px solid var(--border); border-radius:7px; font-size:12px; color:var(--text); background:var(--bg); outline:none; cursor:pointer; height:30px;">
+              <option value="">— Selecione motorista —</option>
+            </select>
+          </div>
+
+          <div id="modoTrechoFields" style="display:none; align-items:center; gap:6px; margin-left:8px;">
+            <select id="modoPontoA" style="padding:5px 10px; border:1px solid var(--border); border-radius:7px; font-size:12px; color:var(--text); background:var(--bg); outline:none; cursor:pointer; height:30px;">
+              <option value="">— Início —</option>
+            </select>
+            <span style="color:var(--text3); font-size:14px; font-weight:600; line-height:1;">→</span>
+            <select id="modoPontoB" style="padding:5px 10px; border:1px solid var(--border); border-radius:7px; font-size:12px; color:var(--text); background:var(--bg); outline:none; cursor:pointer; height:30px;">
+              <option value="">— Fim —</option>
+            </select>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== SEÇÃO MAPA OPERACIONAL ========== -->
+      <section
+        class="section section-mapa"
+        id="sectionMapa"
+        style="display: none; padding-top: 0"
+      >
+        <div class="mapa-panel-full">
+          <div class="panel-header">
+            <span class="panel-title">Mapa Operacional</span>
+            <span class="legenda-inline">
+              <span class="leg-dot verde"></span>Realizado
+              <span class="leg-dot cinza"></span>Não visitado
+              <span class="leg-dot laranja"></span>Controle
+              <span class="leg-dot azul"></span>Rodoviária
+            </span>
+          </div>
+          <div id="mapPlaceholder" class="map-placeholder">
+            <span class="map-placeholder-icon">🗺</span>
+            <span id="mapPlaceholderText" class="map-placeholder-text">Importe um relatório para visualizar a rota</span>
+            <button
+              id="btnVerMapa"
+              onclick="AppModule.abrirMapa()"
+              style="display:none; margin-top:12px; padding:10px 24px; background:var(--azul,#1a73e8); color:#fff; border:none; border-radius:8px; font-size:14px; font-weight:600; cursor:pointer; gap:8px; align-items:center;"
+            >🗺 Visualizar Mapa</button>
+          </div>
+          <div
+            id="map"
+            style="display: none; width: 100%; flex: 1; min-height: 0"
+          ></div>
+        </div>
+      </section>
+
+      <!-- ========== SEÇÃO EVENTOS DA ROTA ========== -->
+      <section
+        class="section section-eventos"
+        id="sectionEventos"
+        style="display: none; padding-top: 0"
+      >
+        <div class="eventos-panel-full">
+          <div class="panel-header">
+            <span class="panel-title">Eventos da Rota</span>
+            <span id="countPontos" class="count-badge">0</span>
+          </div>
+          <div class="tabela-wrapper eventos-tabela-wrapper">
+            <table class="events-table" id="tabelaPontos">
+              <thead>
+                <tr>
+                  <th class="seq-cell">#</th>
+                  <th>Ponto</th>
+                  <th>Tipo</th>
+                  <th>Status</th>
+                  <th>Entrada</th>
+                  <th>Saída</th>
+                  <th>Parada</th>
+                  <th>Excesso</th>
+                </tr>
+              </thead>
+              <tbody id="tbodyPontos"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========== SEÇÃO ALERTAS ========== -->
+      <section
+        class="section section-alertas"
+        id="sectionAlertas"
+        style="display: none; padding-top: 0"
+      >
+        <div
+          style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+          "
+        >
+          <div style="font-size: 13px; font-weight: 700; color: var(--text)">
+            Alertas Operacionais
+          </div>
+          <span id="countAlertas" class="count-badge">0</span>
+        </div>
+        <div class="alertas-list" id="alertasGrid"></div>
+      </section>
+
+      <!-- ========== SEÇÃO VELOCIDADE (tabs legado — oculto, para compatibilidade) ========== -->
+      <div id="bottomPanels" style="display: none">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="tabPontos">
+            Pontos da Rota
+            <span class="tab-badge" id="countPontosLegado">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tabVelocidade">
+            Velocidade por Trecho
+            <span class="tab-badge" id="countTrechos">0</span>
+          </button>
+          <button class="tab-btn" data-tab="tabAlertasLegado">
+            Alertas
+            <span class="tab-badge vermelho" id="countAlertasLegado">0</span>
+          </button>
+        </div>
+        <div class="tab-panel active" id="tabPontos" style="display: none">
+          <table class="analysis-table">
+            <thead>
+              <tr>
+                <th class="seq-cell">#</th>
+                <th>Ponto de Controle</th>
+                <th>Tipo</th>
+                <th>Entrada</th>
+                <th>Saída</th>
+                <th>Parada</th>
+                <th style="text-align: center">Identificado</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyPontosLegado"></tbody>
+          </table>
+        </div>
+        <div class="tab-panel" id="tabVelocidade">
+          <table class="analysis-table" id="tabelaVelocidade">
+            <thead>
+              <tr>
+                <th class="seq-cell">#</th>
+                <th>De</th>
+                <th>Para</th>
+                <th style="text-align: right">Distância</th>
+                <th style="text-align: right">Tempo</th>
+                <th style="text-align: right">Vel. Média</th>
+                <th style="text-align: center">Alertas</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyVelocidade"></tbody>
+          </table>
+        </div>
+        <div class="tab-panel" id="tabAlertasLegado">
+          <div class="alerts-grid" id="alertasGridLegado"></div>
+        </div>
+      </div>
+
+
+      <!-- ========== FOOTER ========== -->
+      <footer>
+        <div class="footer-inner">
+          <div class="footer-left">
+            <div class="footer-brand">BI Operacional · Viação Catedral</div>
+            <div>Controle de Ocorrências · Sistema de Análise Interna</div>
+            <div id="footerPeriodo"></div>
+          </div>
+          <div class="footer-right">
+            <div>Desenvolvido por</div>
+            <div style="font-weight: 600; color: var(--text)">Lucas Inácio</div>
+            <div>Analista de Dados · Viação Catedral</div>
+          </div>
+        </div>
+      </footer>
+    </div>
+    <!-- /app-wrapper -->
+
+    <!-- Modal: Ponto Manual -->
+    <div class="modal-overlay" id="modalPontoManual">
+      <div class="modal">
+        <div class="modal-header">
+          <span class="modal-title">Adicionar Ponto Manual</span>
+          <button class="modal-close" id="btnCloseModal">✕</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nome do Ponto</label>
+          <input
+            type="text"
+            class="form-input"
+            id="manualPonto"
+            placeholder="Ex: Posto BR-101 km 230"
+          />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Latitude</label>
+            <input
+              type="number"
+              class="form-input"
+              id="manualLat"
+              placeholder="-5.7945"
+              step="0.0001"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Longitude</label>
+            <input
+              type="number"
+              class="form-input"
+              id="manualLng"
+              placeholder="-35.2110"
+              step="0.0001"
+            />
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label class="form-label">Entrada (YYYY-MM-DD HH:MM:SS)</label>
+            <input
+              type="text"
+              class="form-input"
+              id="manualEntrada"
+              placeholder="2026-04-12 10:30:00"
+            />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Saída (YYYY-MM-DD HH:MM:SS)</label>
+            <input
+              type="text"
+              class="form-input"
+              id="manualSaida"
+              placeholder="2026-04-12 10:45:00"
+            />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btnCancelModal">Cancelar</button>
+          <button class="btn btn-primary" id="btnConfirmModal">
+            Adicionar Ponto
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Motoristas da Viagem -->
+    <div class="modal-overlay" id="modalMotorista">
+      <div class="modal" style="width:520px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
+        <div class="modal-header">
+          <span class="modal-title">Motoristas da Viagem</span>
+          <button class="modal-close" id="btnCloseMotoristaModal">✕</button>
+        </div>
+        <div style="flex:1; overflow-y:auto; padding:0 24px 8px;">
+          <!-- Banner iButton ausente -->
+          <div id="motoristaIbuttonAviso" style="display:none; margin-top:16px; padding:12px 14px; background:rgba(244,121,32,0.07); border:1.5px solid rgba(244,121,32,0.3); border-radius:8px;">
+            <div style="font-size:12px; font-weight:700; color:var(--laranja);">⚠ iButton não detectado</div>
+            <div style="font-size:11px; color:var(--text2); margin-top:3px;">Nenhum motorista foi identificado no arquivo CSV. O equipamento iButton pode não ter sido utilizado nesta viagem.</div>
+          </div>
+          <!-- Detectados pelo iButton -->
+          <div id="motoristaDetectadosList"></div>
+          <!-- Confirmados -->
+          <div id="motoristaVinculadosList"></div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btnCancelMotoristaModal">Fechar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Gerar Relatório -->
+    <div class="modal-overlay" id="modalRelatorio">
+      <div class="modal" style="width: 480px">
+        <div class="modal-header">
+          <span class="modal-title">Gerar Relatório</span>
+          <button class="modal-close" id="btnCloseRelatorioModal">✕</button>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Tipo de Relatório</label>
+          <div style="display: flex; gap: 16px; margin-top: 6px; flex-wrap: wrap;">
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+                font-size: 13px;
+                color: var(--text2);
+              "
+            >
+              <input
+                type="radio"
+                name="tipoRelatorioModal"
+                value="MOTORISTA"
+                checked
+              />
+              Por Motorista
+            </label>
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+                font-size: 13px;
+                color: var(--text2);
+              "
+            >
+              <input type="radio" name="tipoRelatorioModal" value="TRECHO" />
+              Por Trecho
+            </label>
+            <label
+              style="
+                display: flex;
+                align-items: center;
+                gap: 6px;
+                cursor: pointer;
+                font-size: 13px;
+                color: var(--text2);
+              "
+            >
+              <input type="radio" name="tipoRelatorioModal" value="COMPLETO" />
+              Relatório Completo
+            </label>
+          </div>
+        </div>
+        <div id="relMotoristaFields">
+          <div class="form-group">
+            <label class="form-label">Motorista Vinculado</label>
+            <select class="form-input" id="relSelectMotoristaModal">
+              <option value="">— Selecione —</option>
+            </select>
+          </div>
+        </div>
+        <div id="relTrechoFields" style="display: none">
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Ponto A (início)</label>
+              <select class="form-input" id="relPontoAModal"></select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Ponto B (fim)</label>
+              <select class="form-input" id="relPontoBModal"></select>
+            </div>
+          </div>
+        </div>
+        <div id="relCompletoFields" style="display: none">
+          <div style="font-size: 12px; color: var(--text2); padding: 8px 0; line-height: 1.6;">
+            Consolida todos os pontos, velocidades e alertas da viagem em um único relatório.
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btnCancelRelatorioModal">
+            Cancelar
+          </button>
+          <button class="btn btn-primary" id="btnConfirmRelatorioModal">
+            📋 Gerar
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay" id="loadingOverlay">
+      <div class="spinner"></div>
+      <span class="loading-text" id="loadingText">Processando...</span>
+    </div>
+
+    <!-- Toast container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- Leaflet JS -->
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      crossorigin=""
+    ></script>
+
+    <!-- html2canvas — captura do mapa para PDF -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js" crossorigin="anonymous"></script>
+
+    <?!= include('map') ?> <?!= include('analysis') ?> <?!= include('ui') ?>
+    <?!= include('app') ?>
+  </body>
+</html>

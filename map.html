@@ -1,0 +1,550 @@
+<script>
+// ============================================================
+//  map.js  —  Leaflet + satélite Esri + rota colorida por velocidade
+//  Roteamento: OSRM em chunks (steps=true) → uma requisição
+//  por chunk, geometria por leg → cor por velocidade do trecho
+// ============================================================
+
+var MapModule = (function () {
+  var map             = null;
+  var markers         = [];
+  var polylines       = [];
+  var markersNaoVisit = []; // marcadores de pontos não visitados (esquema)
+  var ready           = false;
+  var pendingTrip     = null;
+  var pendingComp     = null;
+  var pendingLocais   = null;
+
+  var OSRM_CHUNK = 25;
+
+  // Cores dos marcadores por tipo de local
+  var CORES = {
+    controle:     '#f47920',
+    auxiliar:     '#22c97a',
+    naoaut:       '#e05050',
+    garagem:      '#888888',
+    rodoviaria:   '#4a9eff',
+    desconhecido: '#aaaaaa'
+  };
+
+  // Cores da rota por velocidade
+  var COR_VERDE    = '#22c97a'; // dentro do limite
+  var COR_AMARELO  = '#f0c040'; // acima do limite, ≤ 100 km/h
+  var COR_VERMELHO = '#e05050'; // acima de 100 km/h
+  var COR_CINZA    = '#888888'; // sem dados suficientes
+
+  // ── init ────────────────────────────────────────────────
+  function init() {
+    if (map) return;
+    var el = document.getElementById('map');
+    if (!el) return;
+
+    map = L.map('map', { zoomControl: true }).setView([-14.235, -51.9253], 4);
+
+    // Satélite Esri (gratuito, sem chave)
+    L.tileLayer(
+      'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+      {
+        attribution: 'Imagens &copy; <a href="https://www.esri.com/">Esri</a>',
+        maxZoom: 19,
+        crossOrigin: true
+      }
+    ).addTo(map);
+
+    // Overlay de nomes e ruas sobre o satélite
+    L.tileLayer(
+      'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+      { subdomains: 'abcd', maxZoom: 19, opacity: 0.85, crossOrigin: true }
+    ).addTo(map);
+
+    ready = true;
+
+    if (pendingTrip) {
+      renderRoute(pendingTrip, pendingComp, pendingLocais);
+      pendingTrip   = null;
+      pendingComp   = null;
+      pendingLocais = null;
+    }
+  }
+
+  function onGoogleMapsReady() {} // compatibilidade
+
+  // ── renderRoute ─────────────────────────────────────────
+  /**
+   * Renderiza a rota no mapa.
+   * @param {Array}  enrichedTrip  — pontos realizados
+   * @param {Array}  [comparacao]  — opcional: resultado de compararRota()
+   *   Se fornecido, cria marcadores cinzas para pontos não visitados.
+   */
+  // Retorna uma Promise que resolve quando o roteamento (OSRM) termina.
+  function renderRoute(enrichedTrip, comparacao, locaisCache) {
+    if (!enrichedTrip || !enrichedTrip.length) return Promise.resolve();
+
+    if (!ready || !map) {
+      pendingTrip   = enrichedTrip.slice();
+      pendingComp   = comparacao   ? comparacao.slice()   : null;
+      pendingLocais = locaisCache  ? locaisCache.slice()  : null;
+      return Promise.resolve();
+    }
+
+    clearMap();
+
+    var comCoord = enrichedTrip.filter(function (p) {
+      return p.lat && p.lng;
+    });
+
+    if (!comCoord.length) {
+      UIModule.showToast('Nenhum ponto com coordenadas encontrado.', 'warning');
+      return Promise.resolve();
+    }
+
+    document.getElementById('map').style.display            = 'block';
+    document.getElementById('mapPlaceholder').style.display = 'none';
+    map.invalidateSize();
+
+    addMarkers(enrichedTrip);
+
+    // Adiciona marcadores de pontos não visitados (se comparação fornecida)
+    if (comparacao && comparacao.length) {
+      _addNaoVisitadosMarkers(comparacao, locaisCache || []);
+    }
+
+    fitMapToBounds(comCoord);
+    return _drawColoredRoute(comCoord);
+  }
+
+  // ── markers ─────────────────────────────────────────────
+  function addMarkers(enrichedTrip) {
+    enrichedTrip.forEach(function (p) {
+      if (!p.lat || !p.lng) return;
+      markers.push(_createMarker(p));
+    });
+  }
+
+  function addMarker(ponto, seq) {
+    if (!ready || !map || !ponto.lat || !ponto.lng) return;
+    markers.push(_createMarker(Object.assign({}, ponto, { seq: seq })));
+  }
+
+  // ── bounds ───────────────────────────────────────────────
+  function fitMapToBounds(points) {
+    if (!ready || !map || !points || !points.length) return;
+    var ll = points
+      .filter(function (p) { return p.lat && p.lng; })
+      .map(function (p)    { return [Number(p.lat), Number(p.lng)]; });
+    if (ll.length) map.fitBounds(ll, { padding: [40, 40] });
+  }
+
+  // ── clearMap ─────────────────────────────────────────────
+  function clearMap() {
+    markers.forEach(function (m) { m.remove(); });
+    polylines.forEach(function (p) { p.remove(); });
+    markersNaoVisit.forEach(function (m) { m.remove(); });
+    markers = []; polylines = []; markersNaoVisit = [];
+  }
+
+  // ── marcadores de pontos não visitados ────────────────────
+  /**
+   * Cria marcadores cinzas para pontos do esquema não visitados.
+   * Usa coordenadas do ponto_realizado quando disponível — ou omite
+   * (ponto não visitado não tem coordenadas por definição, mas pode
+   * ter coord se o ponto existe na base LOCAIS porém não foi passado).
+   * Para simplificar, omite pontos sem coordenadas conhecidas.
+   */
+  function _addNaoVisitadosMarkers(comparacao, locaisCache) {
+    // Indexa locais por código para lookup O(1)
+    var locaisMap = {};
+    (locaisCache || []).forEach(function(l) {
+      if (l.codigo) locaisMap[String(l.codigo)] = l;
+    });
+
+    var seq = 0;
+    comparacao.forEach(function(item, idx) {
+      if (item.visitado) return;
+
+      // Busca coordenadas no cache de locais pelo id_ponto
+      var local = locaisMap[String(item.id_ponto)];
+      var lat = (local && local.lat) || null;
+      var lng = (local && local.lng) || null;
+      if (!lat || !lng) return;
+
+      seq++;
+      var ordem = item.ordem || (idx + 1);
+
+      var icon = L.divIcon({
+        className: '',
+        html: '<div style="' +
+          'width:26px;height:26px;border-radius:50%;' +
+          'background:#6b7280;' +
+          'border:2px dashed rgba(255,255,255,0.85);' +
+          'display:flex;align-items:center;justify-content:center;' +
+          'font-size:10px;font-weight:700;color:#fff;' +
+          'box-shadow:0 2px 6px rgba(0,0,0,0.35);' +
+          'opacity:0.85;' +
+          '">' + ordem + '</div>',
+        iconSize:    [26, 26],
+        iconAnchor:  [13, 13],
+        popupAnchor: [0, -15]
+      });
+
+      var nomePonto = item.nome_ponto || item.id_ponto || '—';
+      var tipo      = item.tipo || (local && local.tipo) || '';
+
+      var popup =
+        '<div style="font-family:Inter,Arial,sans-serif;font-size:12px;line-height:1.6;min-width:200px;color:#1a1d23;">' +
+        '<div style="display:flex;align-items:center;gap:7px;margin-bottom:7px;padding-bottom:6px;border-bottom:1px solid #e2e5ea;">' +
+          '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:#6b7280;flex-shrink:0;"></span>' +
+          '<strong>' + _esc(nomePonto) + '</strong>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;">' +
+          '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;white-space:nowrap;">#</td>' +
+              '<td style="color:#5a6070;">' + ordem + '</td></tr>' +
+          (tipo ? '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;">Tipo</td>' +
+              '<td style="color:#5a6070;">' + _esc(tipo) + '</td></tr>' : '') +
+          '<tr><td colspan="2" style="padding-top:6px;">' +
+            '<span style="background:#f3f4f6;color:#6b7280;border-radius:4px;padding:2px 8px;font-size:11px;font-weight:600;">✗ Não visitado</span>' +
+          '</td></tr>' +
+        '</table></div>';
+
+      var m = L.marker([Number(lat), Number(lng)], { icon: icon });
+      m.bindPopup(popup, { className: 'leaflet-popup-light', maxWidth: 240 });
+      m.addTo(map);
+      markersNaoVisit.push(m);
+    });
+  }
+
+  function panTo(lat, lng) {
+    if (!ready || !map) return;
+    map.setView([Number(lat), Number(lng)], 13);
+  }
+
+  function isReady() { return ready; }
+
+  // ── rota colorida por velocidade ─────────────────────────
+  /**
+   * Calcula as cores de todos os segmentos, divide em chunks e
+   * faz as requisições OSRM de forma sequencial.
+   * Usa steps=true para obter a geometria de cada leg (trecho)
+   * separadamente, permitindo colorir por velocidade.
+   */
+  // Retorna uma Promise que resolve quando todos os chunks OSRM terminam.
+  function _drawColoredRoute(points) {
+    // Pré-calcula a cor de cada segmento A→B
+    var segColors = [];
+    for (var i = 0; i < points.length - 1; i++) {
+      segColors.push(_calcSegColor(points[i], points[i + 1]));
+    }
+
+    // Divide em chunks de até OSRM_CHUNK pontos com sobreposição de 1
+    var chunks = [];
+    for (var j = 0; j < points.length - 1; j += OSRM_CHUNK - 1) {
+      var end = Math.min(j + OSRM_CHUNK, points.length);
+      chunks.push({ pts: points.slice(j, end), offset: j });
+      if (end >= points.length) break;
+    }
+    if (!chunks.length) chunks.push({ pts: points, offset: 0 });
+
+    // Executa os chunks de forma sequencial; retorna a Promise da sequência completa
+    var totalFallbacks = 0;
+    var sequence = Promise.resolve();
+
+    chunks.forEach(function (chunk) {
+      sequence = sequence.then(function () {
+        return _requestOSRMChunk(chunk.pts, chunk.offset, segColors)
+          .then(function (ok) {
+            if (!ok) totalFallbacks++;
+          });
+      });
+    });
+
+    return sequence.then(function () {
+      if (totalFallbacks === chunks.length && chunks.length > 0) {
+        UIModule.showToast('Roteamento indisponível. Traçado em linha reta.', 'warning', 5000);
+      } else if (totalFallbacks > 0) {
+        UIModule.showToast(totalFallbacks + ' trecho(s) em linha reta.', 'warning', 4000);
+      }
+    });
+  }
+
+  /**
+   * Faz uma requisição OSRM para um chunk de pontos.
+   * Usa steps=true + geometries=geojson para obter a geometria
+   * de cada leg (A→B) separadamente e colorir por velocidade.
+   */
+  function _requestOSRMChunk(pts, offset, segColors) {
+    if (pts.length < 2) return Promise.resolve(true);
+
+    var coords = pts.map(function (p) {
+      return p.lng + ',' + p.lat;
+    }).join(';');
+
+    var url = 'https://router.project-osrm.org/route/v1/driving/' + coords +
+              '?overview=false&steps=true&geometries=geojson&continue_straight=false';
+
+    return fetch(url)
+      .then(function (r) { return r.ok ? r.json() : false; })
+      .then(function (data) {
+        if (!data || data.code !== 'Ok' || !data.routes || !data.routes[0]) {
+          _drawFallbackChunk(pts, offset, segColors);
+          return false;
+        }
+
+        var legs = data.routes[0].legs || [];
+        legs.forEach(function (leg, legIdx) {
+          var color = segColors[offset + legIdx] || COR_CINZA;
+
+          // Concatena as coordenadas de todos os steps do leg
+          var latlngs = [];
+          (leg.steps || []).forEach(function (step) {
+            var coords = step.geometry && step.geometry.coordinates;
+            if (!coords) return;
+            coords.forEach(function (c) {
+              // Evita duplicar o ponto de junção entre steps
+              var ll = [c[1], c[0]];
+              var last = latlngs[latlngs.length - 1];
+              if (!last || last[0] !== ll[0] || last[1] !== ll[1]) {
+                latlngs.push(ll);
+              }
+            });
+          });
+
+          if (latlngs.length >= 2) {
+            _drawPolyline(latlngs, color, 4, 0.9);
+          } else {
+            // Fallback para este leg específico
+            _drawFallbackPair(pts[legIdx], pts[legIdx + 1], color);
+          }
+        });
+
+        return true;
+      })
+      .catch(function (err) {
+        console.warn('[Map] OSRM erro:', err && err.message ? err.message : err);
+        _drawFallbackChunk(pts, offset, segColors);
+        return false;
+      });
+  }
+
+  function _drawFallbackChunk(pts, offset, segColors) {
+    for (var i = 0; i < pts.length - 1; i++) {
+      _drawFallbackPair(pts[i], pts[i + 1], segColors[offset + i] || COR_CINZA);
+    }
+  }
+
+  function _drawFallbackPair(A, B, color) {
+    if (!A || !B || !A.lat || !B.lat) return;
+    _drawPolyline(
+      [[Number(A.lat), Number(A.lng)], [Number(B.lat), Number(B.lng)]],
+      color, 2, 0.6, '8 6'
+    );
+  }
+
+  function _drawPolyline(latlngs, color, weight, opacity, dashArray) {
+    if (!latlngs || latlngs.length < 2 || !ready || !map) return;
+    var opts = { color: color, weight: weight, opacity: opacity };
+    if (dashArray) opts.dashArray = dashArray;
+    var poly = L.polyline(latlngs, opts);
+    poly.addTo(map);
+    polylines.push(poly);
+  }
+
+  // ── cálculo de cor por velocidade ────────────────────────
+  /**
+   * Determina a cor do segmento A→B com base na velocidade média.
+   * Usa haversine (distância) + diff de tempo (saída A → entrada B).
+   */
+  function _calcSegColor(A, B) {
+    if (!A || !B || !A.lat || !A.lng || !B.lat || !B.lng) return COR_CINZA;
+    if (!A.saida || !B.entrada) return COR_CINZA;
+
+    var t1 = _parseDate(A.saida);
+    var t2 = _parseDate(B.entrada);
+    if (!t1 || !t2) return COR_CINZA;
+
+    var diffH = (t2 - t1) / 3600000; // horas
+    if (diffH <= 0) return COR_CINZA;
+
+    var distKm  = _haversine(Number(A.lat), Number(A.lng), Number(B.lat), Number(B.lng));
+    var velKmh  = distKm / diffH;
+    var velMax  = Number(B.vel_max) || 0;
+
+    if (velKmh > 100)                   return COR_VERMELHO;
+    if (velMax > 0 && velKmh > velMax)  return COR_AMARELO;
+    return COR_VERDE;
+  }
+
+  // ── marker ───────────────────────────────────────────────
+  function _createMarker(ponto) {
+    var cor = _getCor(ponto);
+    var label = ponto.proibido42
+      ? '<span style="font-size:13px;line-height:1;">⛔</span>'
+      : (ponto.seq || '');
+    var tamanho = ponto.proibido42 ? 28 : 24;
+    var icon = L.divIcon({
+      className: '',
+      html: '<div style="' +
+        'width:' + tamanho + 'px;height:' + tamanho + 'px;border-radius:50%;' +
+        'background:' + cor + ';' +
+        'border:2px solid rgba(255,255,255,0.85);' +
+        'display:flex;align-items:center;justify-content:center;' +
+        'font-size:10px;font-weight:700;color:#fff;' +
+        'box-shadow:0 2px 10px rgba(180,0,0,0.7);' +
+        '">' + label + '</div>',
+      iconSize:    [tamanho, tamanho],
+      iconAnchor:  [tamanho/2, tamanho/2],
+      popupAnchor: [0, -14]
+    });
+
+    var m = L.marker([Number(ponto.lat), Number(ponto.lng)], { icon: icon });
+    m.bindPopup(_buildPopupContent(ponto), {
+      className: 'leaflet-popup-light',
+      maxWidth: 280
+    });
+    m.addTo(map);
+    return m;
+  }
+
+  function _getCor(ponto) {
+    if (ponto.proibido42) return '#d00000'; // vermelho escuro = local proibido
+    if (!ponto.matched)   return CORES.desconhecido;
+    if (ponto.garagem)    return CORES.garagem;
+    if (ponto.rodoviaria) return CORES.rodoviaria;
+    var t = _norm(ponto.tipo);
+    if (t.indexOf('controle')       !== -1) return CORES.controle;
+    if (t.indexOf('auxiliar')       !== -1) return CORES.auxiliar;
+    if (t.indexOf('nao autorizado') !== -1) return CORES.naoaut;
+    return CORES.desconhecido;
+  }
+
+  function _getTipoLabel(ponto) {
+    if (!ponto.matched)   return 'Não Identificado';
+    if (ponto.garagem)    return 'Garagem';
+    if (ponto.rodoviaria) return 'Rodoviária';
+    if (ponto.pedagio)    return 'Pedágio';
+    var t = _norm(ponto.tipo);
+    if (t.indexOf('controle')       !== -1) return 'Ponto de Controle';
+    if (t.indexOf('auxiliar')       !== -1) return 'Ponto Auxiliar';
+    if (t.indexOf('nao autorizado') !== -1) return 'Local Não Autorizado';
+    return ponto.tipo || '—';
+  }
+
+  // ── popup ────────────────────────────────────────────────
+  function _buildPopupContent(ponto) {
+    var cor       = _getCor(ponto);
+    var tipoLabel = _getTipoLabel(ponto);
+    var entrada   = _fmtDt(ponto.entrada);
+    var saida     = _fmtDt(ponto.saida);
+    var parada    = ponto.parada_s > 0 ? _fmtDur(ponto.parada_s) : '—';
+    var coords    = (ponto.lat && ponto.lng)
+                      ? Number(ponto.lat).toFixed(4) + ', ' + Number(ponto.lng).toFixed(4)
+                      : '—';
+    var paradaColor = ponto.parada_s > 3600 ? '#d94040'
+                    : ponto.parada_s > 1800 ? '#e8a020'
+                    : '#9aa0ad';
+
+    return '<div style="font-family:Inter,Arial,sans-serif;font-size:12px;line-height:1.6;min-width:220px;color:#1a1d23;">' +
+      '<div style="display:flex;align-items:center;gap:7px;margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid #e2e5ea;">' +
+        '<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:' + cor + ';flex-shrink:0;"></span>' +
+        '<strong style="color:#1a1d23;">' + _esc(ponto.ponto) + '</strong>' +
+      '</div>' +
+      '<table style="width:100%;border-collapse:collapse;">' +
+        '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;white-space:nowrap;">#</td><td style="color:#5a6070;">' + ponto.seq + '</td></tr>' +
+        '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;">Tipo</td><td style="color:' + cor + ';font-weight:600;">' + tipoLabel + '</td></tr>' +
+        '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;">Entrada</td><td style="color:#5a6070;font-family:monospace;">' + entrada + '</td></tr>' +
+        '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;">Saída</td><td style="color:#5a6070;font-family:monospace;">' + saida + '</td></tr>' +
+        '<tr><td style="color:#9aa0ad;padding:2px 8px 2px 0;">Parada</td><td style="color:' + paradaColor + ';font-weight:600;">' + parada + '</td></tr>' +
+        '<tr><td style="color:#c0c4cc;padding:2px 8px 2px 0;">Coords</td><td style="color:#c0c4cc;font-size:10px;">' + coords + '</td></tr>' +
+      '</table>' +
+    '</div>';
+  }
+
+  // ── utilitários ───────────────────────────────────────────
+  function _haversine(lat1, lng1, lat2, lng2) {
+    var R    = 6371;
+    var dLat = (lat2 - lat1) * Math.PI / 180;
+    var dLng = (lng2 - lng1) * Math.PI / 180;
+    var a    = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+               Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+               Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  }
+
+  function _parseDate(str) {
+    if (!str) return null;
+    try { return new Date(String(str).replace(' ', 'T')); } catch (e) { return null; }
+  }
+
+  function _norm(s) {
+    return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  }
+
+  function _fmtDt(dtStr) {
+    if (!dtStr || String(dtStr).trim() === '') return '—';
+    var parts = String(dtStr).trim().replace('T', ' ').split(' ');
+    if (parts.length < 2) return dtStr;
+    var d = parts[0].split('-');
+    var t = parts[1].split(':');
+    if (d.length < 3 || t.length < 2) return dtStr;
+    return d[2] + '/' + d[1] + ' ' + t[0] + ':' + t[1];
+  }
+
+  function _fmtDur(sec) {
+    if (!sec || sec <= 0) return '—';
+    var h = Math.floor(sec / 3600);
+    var m = Math.floor((sec % 3600) / 60);
+    if (h > 0 && m > 0) return h + 'h ' + m + 'min';
+    if (h > 0) return h + 'h';
+    if (m > 0) return m + 'min';
+    return (sec % 60) + 's';
+  }
+
+  function _esc(str) {
+    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /**
+   * Captura o mapa atual como imagem JPEG (base64 data URI).
+   * Requer html2canvas e crossOrigin:true nos tile layers.
+   * Retorna Promise<string|null> — null se captura não for possível.
+   */
+  function captureImage() {
+    if (!ready || !map || typeof html2canvas === 'undefined') {
+      return Promise.resolve(null);
+    }
+    var el = document.getElementById('map');
+    if (!el || el.style.display === 'none') return Promise.resolve(null);
+
+    // Limita dimensão máxima para manter base64 em tamanho razoável
+    var w = Math.min(el.offsetWidth  || 800, 900);
+    var h = Math.min(el.offsetHeight || 400, 480);
+
+    return html2canvas(el, {
+      useCORS:                true,
+      allowTaint:             false,
+      foreignObjectRendering: true,
+      logging:                false,
+      scale:                  1,
+      width:                  w,
+      height:                 h
+    }).then(function (canvas) {
+      return canvas.toDataURL('image/jpeg', 0.82);
+    }).catch(function (err) {
+      console.warn('[Map] captureImage falhou:', err && err.message ? err.message : err);
+      return null;
+    });
+  }
+
+  return {
+    init:              init,
+    onGoogleMapsReady: onGoogleMapsReady,
+    renderRoute:       renderRoute,
+    addMarkers:        addMarkers,
+    addMarker:         addMarker,
+    fitMapToBounds:    fitMapToBounds,
+    clearMap:          clearMap,
+    panTo:             panTo,
+    isReady:           isReady,
+    captureImage:      captureImage
+  };
+})();
+</script>

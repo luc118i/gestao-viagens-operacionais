@@ -1,0 +1,709 @@
+<script>
+  // ============================================================
+  //  analysis.js  —  Módulo de análise e renderização de dados
+  //  Tema: claro (redesign)
+  // ============================================================
+
+  const AnalysisModule = (() => {
+
+    var TEMPO_ESPERADO_PADRAO = 40 * 60;
+    var TOLERANCIA_S = 5 * 60; // margem de segurança antes de marcar excesso
+
+    // ============================================================
+    //  renderPontosTable — nova tabela de eventos (colunas: #, Ponto, Status, Parada, Excesso)
+    // ============================================================
+
+    /**
+     * Renderiza a tabela de eventos (pontos) na nova coluna da direita.
+     * @param {Array} enrichedTrip
+     * @param {Array} [comparacao]
+     */
+    function renderPontosTable(enrichedTrip, comparacao) {
+      const tbody = document.getElementById('tbodyPontos');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+
+      // Mapa código → comparação
+      const statusMap = {};
+      if (comparacao && comparacao.length) {
+        comparacao.forEach(function(c) {
+          if (c.id_ponto) statusMap[String(c.id_ponto)] = c;
+        });
+      }
+
+      // Se temos esquema, usar comparação como base + paradas fora do esquema intercaladas
+      if (comparacao && comparacao.length) {
+        var extras = _renderMergedRows(tbody, comparacao, enrichedTrip);
+        _setText('countPontos', comparacao.length + extras);
+      } else {
+        _renderEnrichedRows(tbody, enrichedTrip);
+        _setText('countPontos', enrichedTrip.length);
+      }
+    }
+
+    function _renderEnrichedRows(tbody, enrichedTrip) {
+      enrichedTrip.forEach(function(ponto) {
+        var tr = document.createElement('tr');
+
+        var paradaS  = ponto.parada_s || 0;
+        var esperado = _getTempoEsperado(ponto);
+        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+
+        // Classe da linha baseada em severidade contextual
+        if (!ponto.matched && paradaS > 5 * 60) {
+          tr.classList.add('row-critico'); // parada prolongada em local desconhecido
+        } else if (excessoS > 30 * 60) {
+          tr.classList.add('row-critico');
+        } else if (excessoS > 0 || (!ponto.matched && paradaS > 0)) {
+          tr.classList.add('row-excesso');
+        } else if (!ponto.matched) {
+          tr.classList.add('row-nao-visitado');
+        }
+
+        var statusTag = _getStatusTag(ponto, excessoS);
+
+        var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
+        var excessoHtml = excessoS > 0
+          ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+          : '<span style="color:var(--text3);">—</span>';
+
+        tr.innerHTML =
+          '<td class="seq-cell">' + ponto.seq + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
+          '<td>' + _buildTipoTag(ponto) + '</td>' +
+          '<td>' + statusTag + '</td>' +
+          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
+          '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
+          '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    function _renderComparacaoRows(tbody, comparacao) {
+      comparacao.forEach(function(item, idx) {
+        var tr = document.createElement('tr');
+        var pr = item.ponto_realizado;
+
+        if (!item.visitado) {
+          tr.classList.add('row-nao-visitado');
+        } else if (pr) {
+          var paradaS  = pr.parada_s || 0;
+          var esperado = _getTempoEsperado(pr);
+          var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+          if (excessoS > 30 * 60) tr.classList.add('row-critico');
+          else if (excessoS > 0)  tr.classList.add('row-excesso');
+        }
+
+        var statusTag = item.visitado
+          ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
+          : '<span class="tag tag-nao-visitado">✗ Não visitado</span>';
+
+        var paradaS  = pr ? (pr.parada_s || 0) : 0;
+        var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
+        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+
+        var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
+        var excessoHtml = excessoS > 0
+          ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+          : '<span style="color:var(--text3);">—</span>';
+
+        var tipoTag = pr ? _buildTipoTag(pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
+
+        tr.innerHTML =
+          '<td class="seq-cell">' + (item.ordem || (idx + 1)) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
+          '<td>' + tipoTag + '</td>' +
+          '<td>' + statusTag + '</td>' +
+          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
+          '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
+          '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+
+        tbody.appendChild(tr);
+      });
+    }
+
+    /**
+     * Renderiza comparação do esquema intercalada com paradas fora do esquema.
+     * Retorna o número de paradas extras (não esquema) renderizadas.
+     */
+    function _renderMergedRows(tbody, comparacao, enrichedTrip) {
+      // Seq dos pontos já cobertos pelo comparacao (visitados)
+      var seqsUsados = new Set();
+      comparacao.forEach(function(c) {
+        if (c.ponto_realizado && c.ponto_realizado.seq != null) seqsUsados.add(c.ponto_realizado.seq);
+      });
+
+      // Codigos do esquema (para excluir pontos que são do esquema mas aparecem no enrichedTrip)
+      var codigosEsquema = new Set(comparacao.map(function(c) { return String(c.id_ponto || ''); }));
+
+      // Paradas fora do esquema: matched, com parada > 0, não já cobertas pelo esquema
+      var extras = enrichedTrip.filter(function(pt) {
+        if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return false;
+        if (seqsUsados.has(pt.seq)) return false;
+        if (pt.codigo && codigosEsquema.has(String(pt.codigo))) return false;
+        return true;
+      });
+
+      if (!extras.length) {
+        _renderComparacaoRows(tbody, comparacao);
+        return 0;
+      }
+
+      // Ordena extras por entrada
+      extras.sort(function(a, b) {
+        return (a.entrada || '') < (b.entrada || '') ? -1 : 1;
+      });
+
+      // Merge: insere cada extra antes do próximo ponto visitado do esquema com entrada > extra.entrada
+      var extraIdx = 0;
+      comparacao.forEach(function(item) {
+        var schemaTime = item.ponto_realizado ? (item.ponto_realizado.entrada || '') : '';
+        // Insere extras que ocorreram antes deste ponto do esquema
+        while (extraIdx < extras.length) {
+          var stopTime = extras[extraIdx].entrada || '';
+          if (schemaTime && stopTime && stopTime < schemaTime) {
+            _renderNonSchemaStopRow(tbody, extras[extraIdx]);
+            extraIdx++;
+          } else {
+            break;
+          }
+        }
+        _renderSchemaRow(tbody, item);
+      });
+      // Extras restantes (após o último ponto visitado)
+      while (extraIdx < extras.length) {
+        _renderNonSchemaStopRow(tbody, extras[extraIdx]);
+        extraIdx++;
+      }
+
+      return extras.length;
+    }
+
+    function _renderSchemaRow(tbody, item) {
+      var tr = document.createElement('tr');
+      var pr = item.ponto_realizado;
+
+      if (!item.visitado) {
+        tr.classList.add('row-nao-visitado');
+      } else if (pr) {
+        var paradaS  = pr.parada_s || 0;
+        var esperado = _getTempoEsperado(pr);
+        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+        if (excessoS > 30 * 60) tr.classList.add('row-critico');
+        else if (excessoS > 0)  tr.classList.add('row-excesso');
+      }
+
+      var statusTag = item.visitado
+        ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
+        : '<span class="tag tag-nao-visitado">✗ Não visitado</span>';
+
+      var paradaS  = pr ? (pr.parada_s || 0) : 0;
+      var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
+      var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+
+      var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
+      var excessoHtml = excessoS > 0
+        ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+        : '<span style="color:var(--text3);">—</span>';
+
+      var tipoTag = pr ? _buildTipoTag(pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
+
+      tr.innerHTML =
+        '<td class="seq-cell">' + (item.ordem || '') + '</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
+        '<td>' + tipoTag + '</td>' +
+        '<td>' + statusTag + '</td>' +
+        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
+        '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
+        '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+
+      tbody.appendChild(tr);
+    }
+
+    function _renderNonSchemaStopRow(tbody, ponto) {
+      var tr = document.createElement('tr');
+      var paradaS  = ponto.parada_s || 0;
+      var excessoS = paradaS; // parada inteira é excesso — não deveria existir
+
+      tr.style.fontStyle = 'italic';
+
+      var tipoTag, statusTag;
+      if (ponto.proibido42) {
+        // Parada irregular: local tipo 42 — crítico absoluto
+        tr.classList.add('row-critico');
+        tipoTag = '<span class="tag-tipo" style="background:#d00000;color:#fff;font-weight:700;">⛔ Irregular</span>';
+        statusTag = '<span class="tag tag-status-critico" title="Parada de ' + Math.round(paradaS/60) + ' min em local proibido">⛔ Parada Irregular</span>';
+      } else {
+        // Não previsto: parada em local conhecido mas fora do esquema da viagem
+        if (paradaS > 15 * 60) tr.classList.add('row-critico');
+        else if (paradaS > 0)   tr.classList.add('row-excesso');
+        tipoTag = '<span class="tag-tipo tag-nao-aut">Não previsto</span>';
+        statusTag = _getStatusTag(ponto, excessoS);
+      }
+
+      var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
+      var excessoHtml = excessoS > 0
+        ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+        : '<span style="color:var(--text3);">—</span>';
+
+      tr.innerHTML =
+        '<td class="seq-cell" style="color:var(--text3);">•</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
+        '<td>' + tipoTag + '</td>' +
+        '<td>' + statusTag + '</td>' +
+        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
+        '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
+        '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+
+      tbody.appendChild(tr);
+    }
+
+    // ============================================================
+    //  renderComparacao — alias legado
+    // ============================================================
+
+    function renderComparacao(comparacao) {
+      renderPontosTable([], comparacao);
+    }
+
+    // ============================================================
+    //  renderVelocidadeTable — inalterada (alimenta tab legado)
+    // ============================================================
+
+    function renderVelocidadeTable(segments) {
+      const tbody = document.getElementById('tbodyVelocidade');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+
+      segments.forEach(function(seg) {
+        var tr = document.createElement('tr');
+
+        var dist  = seg.distKm  != null ? seg.distKm.toFixed(1)  + ' km' : '—';
+        var tempo = seg.tempoMin != null ? _fmtMinutes(seg.tempoMin) : '—';
+
+        var velHtml   = '—';
+        var rowClass  = '';
+
+        if (seg.velocidadeKmh != null) {
+          var vel      = seg.velocidadeKmh;
+          var velClass = 'vel-aceitavel';
+          if (vel > 95)      { velClass = 'vel-alta';  rowClass = 'row-vel-alta';  }
+          else if (vel < 70) { velClass = 'vel-baixa'; rowClass = 'row-vel-baixa'; }
+          velHtml = '<span class="vel-cell ' + velClass + '">' + vel.toFixed(1) + ' km/h</span>';
+        } else {
+          velHtml = '<span class="vel-nd">—</span>';
+        }
+
+        if (rowClass) tr.className = rowClass;
+
+        var alertasHtml = '';
+        if (seg.alertas && seg.alertas.length > 0) {
+          alertasHtml = seg.alertas.map(function(a) {
+            var color = a.nivel === 'critico' ? 'var(--vermelho)' : a.nivel === 'parada' ? 'var(--azul)' : 'var(--amarelo)';
+            return '<span style="font-size:10px; color:' + color + ';" title="' + _escHtml(a.descricao) + '">•</span>';
+          }).join(' ');
+        }
+
+        tr.innerHTML =
+          '<td class="seq-cell">' + seg.seq + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(seg.de) + '">' + _escHtml(_truncate(seg.de, 28)) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(seg.para) + '">' + _escHtml(_truncate(seg.para, 28)) + '</td>' +
+          '<td style="text-align:right; white-space:nowrap; font-family:monospace;">' + dist + '</td>' +
+          '<td style="text-align:right; white-space:nowrap;">' + tempo + '</td>' +
+          '<td style="text-align:right;">' + velHtml + '</td>' +
+          '<td style="text-align:center;">' + (alertasHtml || '<span style="color:var(--text3)">—</span>') + '</td>';
+
+        tbody.appendChild(tr);
+      });
+
+      _setText('countTrechos', segments.length);
+    }
+
+    // ============================================================
+    //  renderAlertas — cards no novo layout + grid legado
+    // ============================================================
+
+    function renderAlertas(alerts) {
+      // Nova seção de alertas
+      var container = document.getElementById('alertasGrid');
+      if (container) {
+        container.innerHTML = '';
+      }
+
+      var tipoConfig = {
+        VELOCIDADE_EXCESSIVA:  { label: 'Excesso Crítico de Velocidade', nivel: 'critico'      },
+        VELOCIDADE_ALTA:       { label: 'Excesso de Velocidade',         nivel: 'atencao'      },
+        VELOCIDADE_BAIXA:      { label: 'Velocidade Abaixo do Ideal',    nivel: 'atencao'      },
+        PARADA_PROIBIDA:       { label: 'Parada em Local Proibido',      nivel: 'critico'      },
+        PARADA_LONGA:          { label: 'Parada Prolongada',             nivel: 'parada'       },
+        LOCAL_NAO_IDENTIFICADO:{ label: 'Local Não Identificado',        nivel: 'info'         },
+        PONTO_NAO_VISITADO:    { label: 'Ponto Não Visitado',            nivel: 'nao-visitado' }
+      };
+
+      // Tipos válidos — alertas já foram filtrados na origem com tolerâncias corretas
+      var tiposValidos = Object.keys(tipoConfig);
+      var operacionais = alerts.filter(function(a) {
+        return tiposValidos.indexOf(a.tipo) !== -1;
+      });
+
+      // Atualiza contadores
+      _setText('countAlertas', operacionais.length);
+
+      // Seção alertas visível apenas se há alertas
+      var sectionAlertas = document.getElementById('sectionAlertas');
+      if (sectionAlertas) {
+        sectionAlertas.style.display = operacionais.length > 0 ? 'block' : 'none';
+      }
+
+      if (container) {
+        if (operacionais.length === 0) {
+          container.innerHTML = '<div class="no-alerts">Nenhum alerta operacional identificado nesta viagem.</div>';
+        } else {
+          var ordem = ['VELOCIDADE_EXCESSIVA', 'VELOCIDADE_ALTA', 'VELOCIDADE_BAIXA', 'PARADA_PROIBIDA', 'PARADA_LONGA', 'LOCAL_NAO_IDENTIFICADO', 'PONTO_NAO_VISITADO'];
+          var grupos = {};
+          operacionais.forEach(function(a) {
+            if (!grupos[a.tipo]) grupos[a.tipo] = [];
+            grupos[a.tipo].push(a);
+          });
+
+          ordem.forEach(function(tipo) {
+            if (!grupos[tipo]) return;
+            var cfg = tipoConfig[tipo] || { label: tipo, nivel: 'info' };
+            grupos[tipo].forEach(function(alerta) {
+              var card = document.createElement('div');
+              card.className = 'alert-card ' + cfg.nivel;
+
+              // Monta linha de contexto para alertas de velocidade (campos novos)
+              var ctxHtml = '';
+              if (alerta.velocidadeKmh != null && alerta.distKm != null && alerta.tempoMin != null) {
+                var classTxt = alerta.classificacao === 'EXCESSO_CRITICO' ? 'Excesso crítico'
+                             : alerta.classificacao === 'EXCESSO'         ? 'Excesso de velocidade'
+                             : alerta.classificacao === 'BAIXA'           ? 'Abaixo do ideal'
+                             : '';
+                ctxHtml = '<div class="alert-ctx">'
+                  + '<span class="alert-ctx-item">📍 ' + _escHtml(alerta.trecho || '') + '</span>'
+                  + '<span class="alert-ctx-item">📏 ' + alerta.distKm.toFixed(1) + ' km</span>'
+                  + '<span class="alert-ctx-item">⏱ ' + alerta.tempoMin + ' min</span>'
+                  + '<span class="alert-ctx-item">🚌 ' + alerta.velocidadeKmh + ' km/h</span>'
+                  + (classTxt ? '<span class="alert-ctx-badge">' + classTxt + '</span>' : '')
+                  + '</div>';
+              } else if (alerta.trecho) {
+                ctxHtml = '<div class="alert-trecho">Trecho: ' + _escHtml(alerta.trecho) + '</div>';
+              }
+
+              card.innerHTML =
+                '<span class="alert-icon"></span>' +
+                '<div class="alert-body">' +
+                  '<div class="alert-title">' + cfg.label + '</div>' +
+                  '<div class="alert-desc">' + _escHtml(alerta.descricao) + '</div>' +
+                  ctxHtml +
+                '</div>';
+              container.appendChild(card);
+            });
+          });
+        }
+      }
+    }
+
+    // ============================================================
+    //  renderSummary — preenche cards de resumo + badges
+    // ============================================================
+
+    function renderSummary(summary) {
+      // Cards da seção resumo
+      _setText('sumKm',      summary.totalKm != null ? summary.totalKm + ' km' : '—');
+      _setText('sumTempo',   summary.tempoTotalMin > 0 ? _fmtMinutes(summary.tempoTotalMin) : '—');
+
+      // Planejados = total de pontos (até esquema sobrescrever)
+      _setText('sumPlanejados', summary.totalPontos || '—');
+
+      // Realizados = pontos matched (sobrescrito depois pela comparação)
+      _setText('sumRealizados', '—');
+      _setText('sumNaoVisitados', '—');
+
+      // Maior parada: duração como valor, nome do ponto como label secundária
+      var mp = summary.maiorParada;
+      if (mp) {
+        _setText('sumMaiorParadaDur', mp.duracaoStr);
+        _setText('sumMaiorParadaLabel', mp.ponto);
+        var card = document.getElementById('sumMaiorParadaCard');
+        if (card) card.title = 'Local com maior tempo de permanência: ' + mp.ponto + ' — ' + mp.duracaoStr;
+      } else {
+        _setText('sumMaiorParadaDur', '—');
+        _setText('sumMaiorParadaLabel', 'Maior Parada');
+      }
+
+      // Badges no header
+      _showBadge('badgeVeiculo', true);
+      _setText('badgeVeiculoNum', summary.veiculo || '—');
+
+      if (summary.totalAlertas > 0) {
+        _showBadge('badgeAlertas', true);
+        _setText('badgeAlertasNum', summary.totalAlertas);
+      } else {
+        _showBadge('badgeAlertas', false);
+      }
+
+      _showBadge('badgeStatus', true);
+
+      // Motorista na coluna de configuração
+      var driverName = document.getElementById('driverName');
+      if (driverName) {
+        driverName.textContent = summary.motorista || 'Não Informado';
+        driverName.className = 'driver-name' +
+          (!summary.motorista || summary.motorista === 'Não Informado' ? ' uninformed' : '');
+      }
+
+      // Footer período
+      var footerPeriodo = document.getElementById('footerPeriodo');
+      if (footerPeriodo && summary.dataViagem) {
+        footerPeriodo.textContent = 'Viagem: ' + summary.dataViagem +
+          (summary.dataFim && summary.dataFim !== summary.dataViagem ? ' – ' + summary.dataFim : '');
+      }
+
+      // Mostrar seção resumo
+      var secResumo = document.getElementById('sectionResumo');
+      if (secResumo) secResumo.style.display = 'block';
+
+      // Mostrar seções exclusivas de mapa e eventos
+      var secMapa = document.getElementById('sectionMapa');
+      if (secMapa) secMapa.style.display = 'block';
+
+      var secEventos = document.getElementById('sectionEventos');
+      if (secEventos) secEventos.style.display = 'block';
+    }
+
+    // ============================================================
+    //  Atualiza contadores de comparação (chamado por _calcularComparacao)
+    // ============================================================
+
+    function atualizarContadoresComparacao(comparacao) {
+      if (!comparacao) return;
+      var realizados   = comparacao.filter(function(c) { return c.visitado; }).length;
+      var naoVisitados = comparacao.length - realizados;
+
+      var elRealizados = document.getElementById('sumRealizados');
+      if (elRealizados) {
+        elRealizados.textContent = realizados;
+        elRealizados.className = 'sum-value verde';
+      }
+
+      var elNao = document.getElementById('sumNaoVisitados');
+      if (elNao) {
+        elNao.textContent = naoVisitados;
+        elNao.className = 'sum-value' + (naoVisitados > 0 ? ' vermelho' : '');
+      }
+
+      _setText('sumPlanejados', comparacao.length);
+    }
+
+    // ============================================================
+    //  resetUI
+    // ============================================================
+
+    function resetUI() {
+      // Limpa tabela de eventos
+      var tbodyPontos = document.getElementById('tbodyPontos');
+      if (tbodyPontos) tbodyPontos.innerHTML = '';
+
+      var tbodyVel = document.getElementById('tbodyVelocidade');
+      if (tbodyVel) tbodyVel.innerHTML = '';
+
+      var alertasGrid = document.getElementById('alertasGrid');
+      if (alertasGrid) alertasGrid.innerHTML = '';
+
+      // Oculta seções
+      ['sectionResumo', 'sectionMapa', 'sectionEventos', 'sectionAlertas'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+      });
+
+      // Badges
+      ['badgeVeiculo', 'badgeAlertas', 'badgeStatus'].forEach(function(id) {
+        _showBadge(id, false);
+      });
+
+      // Contadores
+      ['countPontos', 'countTrechos', 'countAlertas'].forEach(function(id) {
+        _setText(id, '0');
+      });
+
+      // Cards de resumo
+      ['sumKm', 'sumTempo', 'sumMaiorParadaDur', 'sumPlanejados', 'sumRealizados', 'sumNaoVisitados'].forEach(function(id) {
+        _setText(id, '—');
+      });
+      _setText('sumMaiorParadaLabel', 'Maior Parada');
+
+      // Resets de classe dos cards
+      ['sumRealizados', 'sumNaoVisitados', 'sumMaiorParadaDur'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.className = 'sum-value';
+      });
+      var elReal = document.getElementById('sumRealizados');
+      if (elReal) elReal.classList.add('verde');
+
+      // Mapa
+      var mapEl = document.getElementById('map');
+      var mapPH = document.getElementById('mapPlaceholder');
+      if (mapEl) mapEl.style.display = 'none';
+      if (mapPH) mapPH.style.display = 'flex';
+
+      // Footer período
+      var fp = document.getElementById('footerPeriodo');
+      if (fp) fp.textContent = '';
+
+      // Motorista
+      var driverName = document.getElementById('driverName');
+      if (driverName) {
+        driverName.textContent = 'Não Informado';
+        driverName.className = 'driver-name uninformed';
+      }
+    }
+
+    // ============================================================
+    //  Helpers privados
+    // ============================================================
+
+    /**
+     * Retorna a tag de status contextual baseada em tempo + identificação do ponto.
+     * Mais informativa que o simples "OK" / "Não id."
+     */
+    function _getStatusTag(ponto, excessoS) {
+      var paradaS = ponto ? (ponto.parada_s || 0) : 0;
+      excessoS = excessoS || 0;
+
+      // Local proibido (tipo 42) — crítico imediato
+      if (ponto && ponto.proibido42) {
+        return '<span class="tag tag-status-critico" title="Parada em local proibido — ' + Math.round(paradaS/60) + ' min">⛔ Local Proibido</span>';
+      }
+
+      // Ponto não identificado na base de locais
+      if (!ponto || !ponto.matched) {
+        if (paradaS === 0) {
+          // Apenas passou sem parar — irrelevante, mas registrado
+          return '<span class="tag tag-nao-visitado" title="Local não cadastrado">Não id.</span>';
+        }
+        if (paradaS <= 3 * 60) {
+          // Parada muito curta (sinal, tráfego) — informativo
+          return '<span class="tag tag-status-transito" title="Parada breve (' + Math.round(paradaS/60) + ' min) em local não identificado">Parada breve</span>';
+        }
+        if (paradaS <= 15 * 60) {
+          // Parada relevante fora de ponto conhecido
+          return '<span class="tag tag-status-excesso" title="' + Math.round(paradaS/60) + ' min em local não identificado">Parada não aut.</span>';
+        }
+        // Parada longa em local desconhecido — crítico
+        return '<span class="tag tag-status-critico" title="' + Math.round(paradaS/60) + ' min em local não identificado — atenção">Parada não aut.</span>';
+      }
+
+      // Ponto identificado — analisa tempo de parada
+      if (paradaS === 0) {
+        // Passou sem parar (sem tempo de parada registrado)
+        return '<span class="tag tag-status-transito" title="Ponto visitado sem parada registrada">Em trânsito</span>';
+      }
+      if (excessoS <= 0) {
+        return '<span class="tag tag-realizado" title="Parada dentro do tempo esperado">✓ OK</span>';
+      }
+      if (excessoS <= 10 * 60) {
+        // Excesso leve — até 10 min
+        return '<span class="tag tag-status-leve" title="Excesso de ' + Math.round(excessoS/60) + ' min">Excesso leve</span>';
+      }
+      if (excessoS <= 30 * 60) {
+        // Parada prolongada — entre 10 e 30 min de excesso
+        return '<span class="tag tag-status-excesso" title="Excesso de ' + Math.round(excessoS/60) + ' min">Prolongada</span>';
+      }
+      // Excesso crítico — mais de 30 min
+      return '<span class="tag tag-status-critico" title="Excesso crítico de ' + Math.round(excessoS/60) + ' min">Crítico</span>';
+    }
+
+    function _getTempoEsperado(ponto) {
+      if (!ponto) return TEMPO_ESPERADO_PADRAO;
+      if (ponto.proibido42) return 0; // qualquer parada em local proibido = excesso total
+      var nome = String(ponto.ponto || '').toUpperCase();
+      if (/RODOVI[AÁ]RIA|RODOVIARIA/.test(nome)) return 15 * 60;
+      if (/GARAGEM/.test(nome)) return 20 * 60;
+      return TEMPO_ESPERADO_PADRAO;
+    }
+
+    function _buildTipoTag(ponto) {
+      if (ponto.proibido42) return '<span class="tag-tipo" style="background:#d00000;color:#fff;">⛔ Proibido</span>';
+      if (!ponto.matched) return '<span class="tag-tipo tag-desconhecido">Não id.</span>';
+      if (ponto.garagem)    return '<span class="tag-tipo tag-garagem">Garagem</span>';
+      if (ponto.rodoviaria) return '<span class="tag-tipo tag-rodoviaria">Rodoviária</span>';
+      if (ponto.pedagio)    return '<span class="tag-tipo tag-rodoviaria">Pedágio</span>';
+      var tipo = (ponto.tipo || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      if (tipo.indexOf('controle') !== -1) return '<span class="tag-tipo tag-controle">Controle</span>';
+      if (tipo.indexOf('auxiliar') !== -1) return '<span class="tag-tipo tag-auxiliar">Auxiliar</span>';
+      if (tipo.indexOf('nao autorizado') !== -1) return '<span class="tag-tipo tag-nao-aut">Não Aut.</span>';
+      return '<span class="tag-tipo tag-desconhecido">' + _escHtml(ponto.tipo || '—') + '</span>';
+    }
+
+    function _fmtDatetime(dtStr) {
+      if (!dtStr || dtStr.trim() === '') return '—';
+      var clean = dtStr.trim().replace('T', ' ').split(' ');
+      if (clean.length < 2) return dtStr;
+      var d = clean[0].split('-');
+      var t = clean[1].split(':');
+      if (d.length < 3 || t.length < 2) return dtStr;
+      return d[2] + '/' + d[1] + ' ' + t[0] + ':' + t[1];
+    }
+
+    function _fmtDuration(seconds) {
+      if (!seconds || seconds <= 0) return '—';
+      var h = Math.floor(seconds / 3600);
+      var m = Math.floor((seconds % 3600) / 60);
+      var s = seconds % 60;
+      if (h > 0 && m > 0) return h + 'h ' + m + 'min';
+      if (h > 0) return h + 'h';
+      if (m > 0 && s > 0) return m + 'min ' + s + 's';
+      if (m > 0) return m + 'min';
+      return s + 's';
+    }
+
+    function _fmtMinutes(minutes) {
+      if (!minutes) return '—';
+      var h = Math.floor(minutes / 60);
+      var m = Math.round(minutes % 60);
+      if (h > 0 && m > 0) return h + 'h ' + m + 'min';
+      if (h > 0) return h + 'h';
+      return m + 'min';
+    }
+
+    function _setText(id, val) {
+      var el = document.getElementById(id);
+      if (el) el.textContent = String(val);
+    }
+
+    function _showBadge(id, show) {
+      var el = document.getElementById(id);
+      if (el) el.style.display = show ? 'inline-flex' : 'none';
+    }
+
+    function _escHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function _truncate(str, maxLen) {
+      if (!str) return '';
+      return str.length > maxLen ? str.substring(0, maxLen) + '…' : str;
+    }
+
+    return {
+      renderPontosTable,
+      renderComparacao,
+      renderVelocidadeTable,
+      renderAlertas,
+      renderSummary,
+      atualizarContadoresComparacao,
+      resetUI
+    };
+  })();
+</script>

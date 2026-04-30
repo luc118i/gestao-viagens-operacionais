@@ -1,0 +1,2522 @@
+<script>
+  // ============================================================
+  //  app.js  —  Orquestrador principal da aplicação
+  //  Tema: claro (redesign)
+  // ============================================================
+
+  const AppModule = (() => {
+    // ---- Estado global da sessão ----
+    let _enrichedTrip = [];
+    let _analysis = null;
+    let _locaisCache = [];
+    let _mapsReady = false;
+    let _tripReady = false;
+
+    let _esquemas = [];
+    let _esquemaPontos = [];
+    let _comparacao = null;
+    let _vinculos = [];
+    let _motoristas = [];
+    let _autoVinculoDataList = []; // [{ nomeCsv, motorista, score, pontoInicio, pontoFim }]
+    let _mapPending = null; // { trip, comp, locais } — aguardando clique do usuário
+
+    // Modo de visualização ativo na tela (afeta mapa, tabela e alertas)
+    let _modoAtivo = 'COMPLETO';
+    let _motoristaAtivo = null; // vinculo ativo quando modo=MOTORISTA
+
+    function _isMapUsable() {
+      return (
+        typeof MapModule !== "undefined" &&
+        MapModule &&
+        typeof MapModule.isReady === "function" &&
+        MapModule.isReady()
+      );
+    }
+
+    // ============================================================
+    //  INICIALIZAÇÃO
+    // ============================================================
+
+    function init() {
+      // Mapa inicializado sob demanda (clique em "Visualizar Mapa")
+      _mapsReady = false;
+
+      // Módulos de UI
+      UIModule.initUpload(_onFileLoaded);
+      UIModule.initManualPointModal(_onManualPointAdded);
+      UIModule.initLimpar(_onLimpar);
+      UIModule.initPrint();
+      UIModule.initTabs();
+
+      // Botão Processar
+      var btnProcessar = document.getElementById("btnProcessar");
+      if (btnProcessar) {
+        btnProcessar.addEventListener("click", _processarViagem);
+      }
+
+      // Form inline de motorista
+      _initSidebarMotorista();
+
+      // Botão "+" — atalho para o modal de motoristas
+      var btnAddMot = document.getElementById('btnAddMotorista');
+      if (btnAddMot) {
+        btnAddMot.addEventListener('click', function() {
+          var overlay = document.getElementById('modalMotorista');
+          if (overlay) { overlay.classList.add('open'); _renderModalMotorista(); }
+        });
+      }
+
+      // Modal de motorista e relatório
+      _initModalMotorista();
+      _initModalRelatorio();
+
+      // Botão "Gerar Relatório" inline (Coluna 3)
+      var btnGerarInline = document.getElementById('btnGerarRelatorioInline');
+      if (btnGerarInline) {
+        btnGerarInline.addEventListener('click', _onGerarRelatorioInline);
+      }
+
+      // Combobox pesquisável de esquema (navbar + upload)
+      _initEsquemaSearch();
+      _initUploadEsquemaSearch();
+
+      // Listener de radio tipoRelatorio (na seção de config, inline)
+      document
+        .querySelectorAll('input[name="tipoRelatorio"]')
+        .forEach(function (radio) {
+          radio.addEventListener("change", function () {
+            var val = radio.value;
+            _modoAtivo = val;
+            var motF = document.getElementById("relMotoristaFieldsInline");
+            var trcF = document.getElementById("relTrechoFieldsInline");
+            if (motF) motF.style.display = val === "MOTORISTA" ? "block" : "none";
+            if (trcF) trcF.style.display = val === "TRECHO"    ? "block" : "none";
+            _atualizarPreviewRelatorio();
+            _aplicarFiltroModo();
+          });
+        });
+
+      // Atualiza view quando motorista selecionado muda
+      var selMot = document.getElementById("relSelectMotorista");
+      if (selMot) selMot.addEventListener("change", function() {
+        var idx = parseInt(selMot.value, 10);
+        _motoristaAtivo = (!isNaN(idx) && _vinculos[idx]) ? _vinculos[idx] : null;
+        _atualizarPreviewRelatorio();
+        _aplicarFiltroModo();
+      });
+
+      // Atualiza view quando pontos A/B mudam (selects ocultos do modal)
+      ["relPontoA", "relPontoB"].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener("change", function() {
+          _atualizarPreviewRelatorio();
+          _aplicarFiltroModo();
+        });
+      });
+
+      // Barra de modo — select de motorista
+      var modoSelMot = document.getElementById('modoSelectMotorista');
+      if (modoSelMot) modoSelMot.addEventListener('change', function() {
+        var idx = parseInt(modoSelMot.value, 10);
+        _motoristaAtivo = (!isNaN(idx) && _vinculos[idx]) ? _vinculos[idx] : null;
+        _aplicarFiltroModo();
+      });
+
+      // Barra de modo — pontos de início/fim do trecho
+      ['modoPontoA', 'modoPontoB'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) el.addEventListener('change', function() { _aplicarFiltroModo(); });
+      });
+
+      // Carrega dados iniciais
+      _loadDadosIniciais();
+
+      // Progressive disclosure: começa com tela de upload limpa
+      var wrapper = document.querySelector('.app-wrapper');
+      if (wrapper) wrapper.classList.add('app--upload-only');
+    }
+
+    // ============================================================
+    //  CARREGAMENTO DE DADOS INICIAIS
+    // ============================================================
+
+    function _loadDadosIniciais() {
+      google.script.run
+        .withSuccessHandler(function (dados) {
+          _esquemas = dados.esquemas || [];
+          _motoristas = dados.motoristas || [];
+
+          // Popula o combobox pesquisável com os esquemas carregados
+          _renderEsquemaOpts('');
+
+          console.log(
+            "[App] Dados iniciais: " +
+              _esquemas.length +
+              " esquemas, " +
+              _motoristas.length +
+              " motoristas",
+          );
+        })
+        .withFailureHandler(function (err) {
+          console.warn(
+            "[App] Aviso: não foi possível carregar dados iniciais.",
+            err,
+          );
+        })
+        .getDadosIniciais();
+
+      _loadLocais();
+    }
+
+    function _loadLocais() {
+      google.script.run
+        .withSuccessHandler(function (locais) {
+          _locaisCache = locais || [];
+          console.log(
+            "[App] Base de locais: " + _locaisCache.length + " registros",
+          );
+        })
+        .withFailureHandler(function (err) {
+          console.warn(
+            "[App] Aviso: não foi possível pré-carregar locais.",
+            err,
+          );
+        })
+        .getLocais();
+    }
+
+    // ============================================================
+    //  SELEÇÃO DE ESQUEMA
+    // ============================================================
+
+    function _onEsquemaChanged() {
+      var sel = document.getElementById("selectEsquema");
+      var idEsquema = sel ? sel.value : "";
+      var infoEl = document.getElementById("esquemaInfo");
+
+      // Atualiza widget de upload: aviso/confirmação de esquema
+      var uploadAviso = document.getElementById('uploadEsquemaAviso');
+      var uploadInfo  = document.getElementById('uploadEsquemaInfo');
+
+      if (!idEsquema) {
+        _esquemaPontos = [];
+        _comparacao = null;
+        if (infoEl) infoEl.style.display = "none";
+        if (uploadAviso) uploadAviso.style.display = 'block';
+        if (uploadInfo)  uploadInfo.style.display  = 'none';
+        // Desabilita btnProcessar se não há esquema
+        var btnP = document.getElementById('btnProcessar');
+        if (btnP && !UIModule.getCsvText()) btnP.disabled = true;
+        return;
+      }
+
+      if (uploadAviso) uploadAviso.style.display = 'none';
+
+      var esqObj = _esquemas.find(function (e) {
+        return e.id_esquema === idEsquema;
+      });
+
+      google.script.run
+        .withSuccessHandler(function (pontos) {
+          _esquemaPontos = pontos || [];
+
+          var esqLabel = (esqObj ? esqObj.nome_linha + " · " : "") + _esquemaPontos.length + " pontos";
+          if (infoEl) {
+            infoEl.textContent = esqLabel;
+            infoEl.style.display = _esquemaPontos.length > 0 ? "block" : "none";
+          }
+          if (uploadInfo) {
+            uploadInfo.textContent = "✓ " + esqLabel;
+            uploadInfo.style.display = 'block';
+          }
+          // Habilita btnProcessar se CSV também já carregado
+          var btnP = document.getElementById('btnProcessar');
+          if (btnP && UIModule.getCsvText()) btnP.disabled = false;
+
+          _popularDropdownsPontos(_esquemaPontos);
+
+          // Mostra seção de trecho no form inline se aberto
+          var sidebarTrecho = document.getElementById("sidebarTrechoSection");
+          var sidebarForm = document.getElementById("motoristaFormInline");
+          if (
+            sidebarTrecho &&
+            sidebarForm &&
+            sidebarForm.style.display !== "none"
+          ) {
+            sidebarTrecho.style.display =
+              _esquemaPontos.length > 0 ? "block" : "none";
+          }
+
+          if (_enrichedTrip.length > 0) {
+            _calcularComparacao();
+          }
+
+          console.log(
+            "[App] Esquema " +
+              idEsquema +
+              ": " +
+              _esquemaPontos.length +
+              " pontos",
+          );
+        })
+        .withFailureHandler(function (err) {
+          console.warn("[App] Erro ao carregar pontos do esquema:", err);
+          UIModule.showToast("Erro ao carregar esquema.", "error");
+        })
+        .getEsquemaPontos(idEsquema);
+    }
+
+    // ============================================================
+    //  COMBOBOX PESQUISÁVEL DE ESQUEMA
+    // ============================================================
+
+    function _initEsquemaSearch() {
+      var wrap    = document.getElementById('esquemaCombobox');
+      var input   = document.getElementById('esquemaSearch');
+      var dropdown = document.getElementById('esquemaDropdown');
+      if (!wrap || !input || !dropdown) return;
+
+      // Abre ao clicar no input
+      input.addEventListener('focus', function() {
+        wrap.classList.add('open');
+        input.classList.add('open');
+        _renderEsquemaOpts(input.value);
+      });
+
+      // Filtra enquanto digita
+      input.addEventListener('input', function() {
+        wrap.classList.add('open');
+        _renderEsquemaOpts(input.value);
+      });
+
+      // Fecha ao clicar fora
+      document.addEventListener('click', function(e) {
+        var btn = document.getElementById('btnRefreshEsquemas');
+        if (!wrap.contains(e.target) && e.target !== btn) {
+          _fecharEsquemaDropdown();
+        }
+      });
+
+      // Botão de refresh: invalida cache no servidor e recarrega
+      var btnRefresh = document.getElementById('btnRefreshEsquemas');
+      if (btnRefresh) {
+        btnRefresh.addEventListener('click', function() {
+          btnRefresh.textContent = '…';
+          btnRefresh.disabled = true;
+          google.script.run
+            .withSuccessHandler(function(novosEsquemas) {
+              _esquemas = novosEsquemas || [];
+              _renderEsquemaOpts(
+                document.getElementById('esquemaSearch')
+                  ? document.getElementById('esquemaSearch').value : ''
+              );
+              btnRefresh.textContent = '↻';
+              btnRefresh.disabled = false;
+              UIModule.showToast(_esquemas.length + ' esquemas carregados.', 'success', 2500);
+            })
+            .withFailureHandler(function(err) {
+              btnRefresh.textContent = '↻';
+              btnRefresh.disabled = false;
+              UIModule.showToast('Erro ao atualizar esquemas.', 'error');
+            })
+            .refreshEsquemas();
+        });
+      }
+
+      // Teclado: ESC fecha, Enter seleciona o primeiro resultado
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { _fecharEsquemaDropdown(); return; }
+        if (e.key === 'Enter') {
+          var first = dropdown.querySelector('.esquema-opt');
+          if (first) first.click();
+        }
+      });
+    }
+
+    function _renderEsquemaOpts(query) {
+      var dropdown = document.getElementById('esquemaDropdown');
+      if (!dropdown) return;
+
+      var q = (query || '').trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+      var filtrados = _esquemas.filter(function(esq) {
+        if (!q) return true;
+        var id   = String(esq.id_esquema || '').toLowerCase();
+        var nome = (esq.nome_linha || '').toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        var hor  = (esq.horario || '').toLowerCase();
+        var sent = (esq.sentido || '').toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        return id.includes(q) || nome.includes(q) || hor.includes(q) || sent.includes(q);
+      });
+
+      var selectedId = document.getElementById('selectEsquema')
+        ? document.getElementById('selectEsquema').value : '';
+
+      if (filtrados.length === 0) {
+        dropdown.innerHTML = '<div class="esquema-opt-noresult">Nenhum resultado encontrado.</div>';
+        return;
+      }
+
+      dropdown.innerHTML = filtrados.map(function(esq) {
+        var id   = _escHtml(String(esq.id_esquema));
+        var nome = _escHtml(esq.nome_linha || esq.id_esquema);
+        var hor  = esq.horario ? _escHtml(esq.horario) : '';
+        var sent = esq.sentido ? _escHtml(esq.sentido) : '';
+        var isSel = String(esq.id_esquema) === selectedId ? ' selected' : '';
+
+        // Destaca o trecho que casou com a busca
+        if (q) {
+          nome = _highlightMatch(nome, query);
+          hor  = hor  ? _highlightMatch(hor,  query) : hor;
+          id   = _highlightMatch(id, query);
+        }
+
+        var meta = '';
+        if (hor)  meta += '<span class="tag-horario">' + hor + '</span>';
+        if (sent) meta += '<span>' + sent + '</span>';
+
+        return '<div class="esquema-opt' + isSel + '" data-id="' + _escHtml(String(esq.id_esquema)) + '">' +
+          '<div class="esquema-opt-main">' + id + ' &mdash; ' + nome + '</div>' +
+          (meta ? '<div class="esquema-opt-meta">' + meta + '</div>' : '') +
+          '</div>';
+      }).join('');
+
+      // Wires de clique
+      dropdown.querySelectorAll('.esquema-opt').forEach(function(el) {
+        el.addEventListener('click', function() {
+          var id = el.getAttribute('data-id');
+          _selecionarEsquema(id);
+        });
+      });
+    }
+
+    function _selecionarEsquema(idEsquema) {
+      var hidden = document.getElementById('selectEsquema');
+      var input  = document.getElementById('esquemaSearch');
+      if (hidden) hidden.value = idEsquema || '';
+
+      var esqObj = _esquemas.find(function(e) { return String(e.id_esquema) === String(idEsquema); });
+      if (input) {
+        if (esqObj) {
+          var label = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+          if (esqObj.horario) label += '  ·  ' + esqObj.horario;
+          input.value = label;
+        } else {
+          input.value = '';
+        }
+      }
+
+      // Sincroniza o mini combobox do upload
+      var uploadInput = document.getElementById('uploadEsquemaSearch');
+      if (uploadInput && esqObj) {
+        uploadInput.value = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+      }
+
+      _fecharEsquemaDropdown();
+      _onEsquemaChanged();
+    }
+
+    function _fecharEsquemaDropdown() {
+      var wrap  = document.getElementById('esquemaCombobox');
+      var input = document.getElementById('esquemaSearch');
+      if (wrap)  wrap.classList.remove('open');
+      if (input) input.classList.remove('open');
+    }
+
+    // Mini combobox de esquema dentro do card de upload
+    function _initUploadEsquemaSearch() {
+      var wrap     = document.getElementById('uploadEsquemaCombobox');
+      var input    = document.getElementById('uploadEsquemaSearch');
+      var dropdown = document.getElementById('uploadEsquemaDropdown');
+      if (!wrap || !input || !dropdown) return;
+
+      function show() {
+        renderOpts(input.value);
+        dropdown.style.display = 'block';
+      }
+      function hide() {
+        dropdown.style.display = 'none';
+      }
+
+      function renderOpts(query) {
+        var q = (query || '').trim().toLowerCase()
+          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+        var list = _esquemas.filter(function(esq) {
+          if (!q) return true;
+          var id   = String(esq.id_esquema || '').toLowerCase();
+          var nome = (esq.nome_linha || '').toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          var hor  = (esq.horario || '').toLowerCase();
+          return id.includes(q) || nome.includes(q) || hor.includes(q);
+        });
+
+        if (list.length === 0) {
+          dropdown.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:var(--text3);">Nenhum resultado.</div>';
+          return;
+        }
+
+        dropdown.innerHTML = list.slice(0, 30).map(function(esq) {
+          var label = _escHtml(esq.id_esquema + ' — ' + (esq.nome_linha || esq.id_esquema));
+          if (esq.horario) label += ' <span style="color:var(--text3);font-size:10px;">· ' + _escHtml(esq.horario) + '</span>';
+          return '<div data-id="' + _escHtml(String(esq.id_esquema)) + '" style="padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border-light,#eee);" onmouseover="this.style.background=\'var(--bg2)\';" onmouseout="this.style.background=\'\';">' + label + '</div>';
+        }).join('');
+
+        dropdown.querySelectorAll('[data-id]').forEach(function(el) {
+          el.addEventListener('click', function() {
+            var id = el.getAttribute('data-id');
+            _selecionarEsquema(id);
+            var esqObj = _esquemas.find(function(e) { return String(e.id_esquema) === String(id); });
+            if (esqObj) {
+              input.value = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+            }
+            hide();
+          });
+        });
+      }
+
+      input.addEventListener('focus', show);
+      input.addEventListener('input', show);
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') { hide(); input.blur(); }
+        if (e.key === 'Enter') {
+          var first = dropdown.querySelector('[data-id]');
+          if (first) first.click();
+        }
+      });
+
+      // Fecha ao clicar fora — mesmo padrão do header (mais confiável que blur em iframe)
+      document.addEventListener('click', function(e) {
+        if (!wrap.contains(e.target)) hide();
+      });
+    }
+
+    /** Envolve o trecho que casou com `query` em <mark> */
+    function _highlightMatch(html, query) {
+      if (!query) return html;
+      var q = query.trim();
+      var re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+      return html.replace(re, '<mark>$1</mark>');
+    }
+
+    /**
+     * Dado um array ordenado de { valor, label }, calcula o conjunto de
+     * valores que estão dentro de algum intervalo já ocupado em _vinculos.
+     * O intervalo é inclusivo: todos os pontos entre ponto_inicio e ponto_fim
+     * (na ordem da lista) são considerados ocupados.
+     * @param {Array<{valor:string, label:string}>} pontos
+     * @returns {Set<string>}
+     */
+    function _calcularPontosOcupados(pontos) {
+      var ocupados = new Set();
+      _vinculos.forEach(function(v) {
+        var idxInicio = -1, idxFim = -1;
+        for (var i = 0; i < pontos.length; i++) {
+          if (pontos[i].valor === v.ponto_inicio) idxInicio = i;
+          if (pontos[i].valor === v.ponto_fim)    idxFim    = i;
+        }
+        if (idxInicio >= 0 && idxFim >= 0) {
+          var lo = Math.min(idxInicio, idxFim);
+          var hi = Math.max(idxInicio, idxFim);
+          for (var j = lo; j <= hi; j++) {
+            ocupados.add(pontos[j].valor);
+          }
+        }
+      });
+      return ocupados;
+    }
+
+    function _getPontosLista() {
+      var pontos = [];
+      if (_enrichedTrip && _enrichedTrip.length > 0) {
+        var vistos = {};
+        _enrichedTrip.forEach(function(p) {
+          var nome = (p.ponto || '').trim();
+          if (nome && !vistos[nome]) {
+            vistos[nome] = true;
+            pontos.push({ valor: (p.codigo || nome), label: nome });
+          }
+        });
+      } else if (_esquemaPontos && _esquemaPontos.length > 0) {
+        _esquemaPontos.forEach(function(p) {
+          pontos.push({ valor: p.id_ponto, label: p.nome_ponto || p.id_ponto });
+        });
+      }
+      return pontos;
+    }
+
+    function _popularDropdownsPontos(pontos) {
+      var ids = [
+        "motoristaInicio",
+        "motoristaFim",
+        "relPontoA",
+        "relPontoB",
+        "relPontoAModal",
+        "relPontoBModal",
+        "sidebarPontoInicio",
+        "sidebarPontoFim",
+        "modoPontoA",
+        "modoPontoB",
+      ];
+      ids.forEach(function (id) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Selecione —</option>';
+        pontos.forEach(function (p) {
+          var opt = document.createElement("option");
+          opt.value = p.id_ponto;
+          opt.textContent = p.nome_ponto || p.id_ponto;
+          sel.appendChild(opt);
+        });
+      });
+    }
+
+    // ============================================================
+    //  CÁLCULO DE COMPARAÇÃO
+    // ============================================================
+
+    function _calcularComparacao() {
+      if (!_esquemaPontos.length || !_enrichedTrip.length) {
+        _comparacao = null;
+        return;
+      }
+
+      var realizadosSet = new Set(
+        _enrichedTrip
+          .filter(function (p) {
+            return p.matched && p.codigo;
+          })
+          .map(function (p) {
+            return String(p.codigo);
+          }),
+      );
+
+      _comparacao = _esquemaPontos.map(function (ep) {
+        var chave = String(ep.id_ponto);
+        var visitado = realizadosSet.has(chave);
+        var pontoReal = visitado
+          ? _enrichedTrip.find(function (p) {
+              return p.matched && String(p.codigo) === chave;
+            }) || null
+          : null;
+        return Object.assign({}, ep, {
+          visitado: visitado,
+          ponto_realizado: pontoReal,
+          status: visitado ? "Realizado" : "Não visitado",
+        });
+      });
+
+      // Re-renderiza tabela e mapa
+      if (_analysis) {
+        AnalysisModule.renderPontosTable(_enrichedTrip, _comparacao);
+      }
+
+      _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
+
+      // Atualiza contadores na seção resumo
+      AnalysisModule.atualizarContadoresComparacao(_comparacao);
+
+      // Habilita botões de ação no header
+      var btnVincular = document.getElementById("btnVincularMotorista");
+      var btnRel = document.getElementById("btnRelatorio");
+      if (btnVincular) btnVincular.disabled = false;
+      if (btnRel) btnRel.disabled = false;
+
+      // Gera alertas de pontos não visitados + paradas não autorizadas (fora do esquema)
+      if (_analysis && _analysis.alerts) {
+        var alertsFiltrados = _analysis.alerts.filter(function (a) {
+          return a.tipo !== "PONTO_NAO_VISITADO" && a.tipo !== "PARADA_PROIBIDA";
+        });
+
+        // Pontos não visitados
+        _comparacao.forEach(function (c) {
+          if (!c.visitado) {
+            alertsFiltrados.push({
+              tipo: "PONTO_NAO_VISITADO",
+              descricao: 'Ponto "' + c.nome_ponto + '" (ID: ' + c.id_ponto + ") não foi visitado nesta viagem",
+              nivel: "nao-visitado",
+              trecho: c.nome_ponto,
+            });
+          }
+        });
+
+        // Paradas não autorizadas: ponto com parada, identificado na base,
+        // mas FORA do esquema da linha
+        var codigosEsquema = new Set(
+          _esquemaPontos.map(function(ep) { return String(ep.id_ponto); })
+        );
+        var TOLERANCIA_NAO_AUT_S = 5 * 60;
+        _enrichedTrip.forEach(function(pt) {
+          if (!pt.matched || !pt.parada_s || pt.parada_s <= TOLERANCIA_NAO_AUT_S) return;
+          if (pt.codigo && codigosEsquema.has(String(pt.codigo))) return; // está no esquema
+          alertsFiltrados.push({
+            tipo: "PARADA_PROIBIDA",
+            descricao: 'Parada de ' + Math.round(pt.parada_s / 60) + ' min em local não autorizado: "' + pt.ponto + '"',
+            nivel: "critico",
+            seq: pt.seq,
+            trecho: pt.ponto
+          });
+        });
+
+        _analysis.alerts = alertsFiltrados;
+        AnalysisModule.renderAlertas(_analysis.alerts);
+      }
+
+      var naoVisitados = _comparacao.filter(function (c) {
+        return !c.visitado;
+      }).length;
+      UIModule.showToast(
+        "Comparação: " +
+          (_comparacao.length - naoVisitados) +
+          " visitados, " +
+          naoVisitados +
+          " não visitados.",
+        naoVisitados > 0 ? "warning" : "success",
+        5000,
+      );
+    }
+
+    // ============================================================
+    //  DETECÇÃO DE PARADAS EM LOCAIS PROIBIDOS (TIPO 42)
+    // ============================================================
+
+    function _haversineM(lat1, lng1, lat2, lng2) {
+      var R = 6371000;
+      var toRad = function(d) { return d * Math.PI / 180; };
+      var dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+      var a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+              Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)*Math.sin(dLng/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+
+    /**
+     * Detecta paradas em locais proibidos (tipo 42) por proximidade de coordenadas.
+     * Marca pt.proibido42 = true e injeta alertas PARADA_PROIBIDA em _analysis.alerts.
+     */
+    function _detectarParadasProibidas() {
+      if (!_locaisCache.length || !_enrichedTrip.length || !_analysis) return;
+
+      var locais42 = _locaisCache.filter(function(l) {
+        return String(l.tipo || '').trim() === '42';
+      });
+      if (!locais42.length) return;
+
+      var MIN_PARADA_S   = 60;  // 1 min mínimo para considerar parada real
+      var RAIO_PADRAO_M  = 100; // 100m se raio não definido no cadastro
+
+      _enrichedTrip.forEach(function(pt) {
+        if (pt.proibido42) return;                      // já detectado
+        if (!pt.parada_s || pt.parada_s < MIN_PARADA_S) return;
+        if (!pt.lat || !pt.lng) return;                 // sem coordenadas
+
+        for (var i = 0; i < locais42.length; i++) {
+          var l = locais42[i];
+          if (!l.lat || !l.lng) continue;
+          var raioM = l.raio > 0 ? l.raio : RAIO_PADRAO_M;
+          var distM = _haversineM(pt.lat, pt.lng, l.lat, l.lng);
+          if (distM <= raioM) {
+            pt.proibido42    = true;
+            pt.nomeProibido42 = l.descricao || l.descResumida || l.codigo || pt.ponto;
+            break;
+          }
+        }
+      });
+
+      // Injeta / atualiza alertas PARADA_PROIBIDA (remove os antigos primeiro)
+      var outros = (_analysis.alerts || []).filter(function(a) { return a.tipo !== 'PARADA_PROIBIDA'; });
+      _enrichedTrip.forEach(function(pt) {
+        if (!pt.proibido42) return;
+        var paradaMin = Math.round(pt.parada_s / 60);
+        outros.push({
+          tipo:      'PARADA_PROIBIDA',
+          descricao: 'Parada de ' + paradaMin + ' min em local proibido: "' + (pt.nomeProibido42 || pt.ponto) + '"',
+          nivel:     'critico',
+          seq:       pt.seq,
+          trecho:    pt.nomeProibido42 || pt.ponto
+        });
+      });
+      _analysis.alerts = outros;
+    }
+
+    // ============================================================
+    //  FLUXO: UPLOAD → PROCESSAR → ANALISAR → RENDERIZAR
+    // ============================================================
+
+    function _onFileLoaded(csvText) {
+      UIModule.showToast(
+        'Arquivo carregado. Clique em "Processar Viagem".',
+        "info",
+      );
+    }
+
+    function _processarViagem() {
+      var csvText = UIModule.getCsvText();
+      if (!csvText) {
+        UIModule.showToast("Nenhum arquivo selecionado.", "error");
+        return;
+      }
+
+      var selEsquema = document.getElementById("selectEsquema");
+      if (!selEsquema || !selEsquema.value) {
+        UIModule.showToast("Selecione o esquema da viagem antes de processar.", "error");
+        return;
+      }
+
+      UIModule.showLoading("Processando relatório de viagem...");
+
+      google.script.run
+        .withSuccessHandler(_onReportProcessed)
+        .withFailureHandler(_onError)
+        .processReport(csvText);
+    }
+
+    function _onReportProcessed(enrichedTrip) {
+      if (!enrichedTrip || enrichedTrip.length === 0) {
+        UIModule.hideLoading();
+        UIModule.showToast(
+          "Nenhum ponto válido encontrado no relatório.",
+          "error",
+        );
+        return;
+      }
+
+      _enrichedTrip = enrichedTrip;
+      UIModule.showLoading("Calculando velocidades e alertas...");
+
+      google.script.run
+        .withSuccessHandler(_onTripAnalyzed)
+        .withFailureHandler(_onError)
+        .analyzeTrip(enrichedTrip);
+    }
+
+    function _onTripAnalyzed(analysisResult) {
+      UIModule.hideLoading();
+
+      if (!analysisResult) {
+        UIModule.showToast("Erro ao analisar a viagem.", "error");
+        return;
+      }
+
+      // Revela a UI completa (remove modo upload-only — mostra header-center, etc.)
+      var wrapper = document.querySelector('.app-wrapper');
+      if (wrapper) wrapper.classList.remove('app--upload-only');
+
+      // Oculta o card de upload após processar
+      var secConfig = document.getElementById('sectionConfig');
+      if (secConfig) {
+        secConfig.style.transition = 'opacity 0.3s';
+        secConfig.style.opacity = '0';
+        setTimeout(function() {
+          secConfig.style.display = 'none';
+          secConfig.style.opacity = '';
+          secConfig.style.transition = '';
+        }, 300);
+      }
+
+      _analysis = analysisResult;
+      _tripReady = true;
+
+      var segments = analysisResult.segments;
+      var alerts = analysisResult.alerts;
+      var summary = analysisResult.summary;
+
+      // Renderiza resumo (mostra sectionResumo e sectionAnalise)
+      AnalysisModule.renderSummary(summary);
+
+      // Detecção de locais proibidos (tipo 42) — marca pt.proibido42 antes de renderizar
+      _detectarParadasProibidas();
+
+      // Tabela de pontos
+      if (_esquemaPontos.length > 0) {
+        _calcularComparacao();
+      } else {
+        AnalysisModule.renderPontosTable(_enrichedTrip);
+
+        // Contadores de realizados/não visitados quando sem esquema
+        var matchados = _enrichedTrip.filter(function (p) {
+          return p.matched;
+        }).length;
+        var naoMatch = _enrichedTrip.length - matchados;
+        var elRealizados = document.getElementById("sumRealizados");
+        if (elRealizados) {
+          elRealizados.textContent = matchados;
+          elRealizados.className = "sum-value verde";
+        }
+        var elNao = document.getElementById("sumNaoVisitados");
+        if (elNao) {
+          elNao.textContent = naoMatch;
+          elNao.className = "sum-value" + (naoMatch > 0 ? " amarelo" : "");
+        }
+        var elPlan = document.getElementById("sumPlanejados");
+        if (elPlan) elPlan.textContent = _enrichedTrip.length;
+      }
+
+      // Tabela de velocidade (legado — mantida)
+      AnalysisModule.renderVelocidadeTable(segments);
+
+      // Alertas
+      AnalysisModule.renderAlertas(alerts);
+
+      // Exibe e habilita botões no header (Relatório e Motorista)
+      var btnVincular = document.getElementById("btnVincularMotorista");
+      var btnRel = document.getElementById("btnRelatorio");
+      if (btnVincular) btnVincular.style.display = '';
+      if (btnRel) btnRel.style.display = '';
+      if (_esquemaPontos.length > 0) {
+        if (btnVincular) btnVincular.disabled = false;
+        if (btnRel) btnRel.disabled = false;
+      }
+
+      // Exibe barra de modo de visualização
+      var secModo = document.getElementById('sectionModoVisualizacao');
+      if (secModo) secModo.style.display = '';
+
+      _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
+
+      var totalPontos = _enrichedTrip.length;
+      var pontosNaoId = _enrichedTrip.filter(function (p) {
+        return !p.matched;
+      }).length;
+      var naoIdMsg =
+        pontosNaoId > 0
+          ? " (" +
+            pontosNaoId +
+            " não identificado" +
+            (pontosNaoId > 1 ? "s" : "") +
+            ")"
+          : "";
+
+      UIModule.showToast(
+        totalPontos +
+          " pontos processados" +
+          naoIdMsg +
+          ". " +
+          alerts.length +
+          " alerta" +
+          (alerts.length !== 1 ? "s" : "") +
+          ".",
+        alerts.length > 0 ? "warning" : "success",
+        5000,
+      );
+
+      // Atualiza preview de relatório com dados recém-processados
+      _atualizarPreviewRelatorio();
+
+      // Tenta auto-vínculo de motorista pelo nome do CSV
+      _tentarAutoVinculo();
+
+      // Rola para o mapa após a transição de ocultar o upload
+      setTimeout(function () {
+        var secMapa = document.getElementById("sectionMapa");
+        if (secMapa)
+          secMapa.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 450);
+    }
+
+    // ============================================================
+    //  FORMULÁRIO INLINE DE MOTORISTA
+    // ============================================================
+
+    function _initSidebarMotorista() {
+      var btnEdit = document.getElementById("btnEditDriver");
+      var displayEl = document.getElementById("motoristaDisplay");
+      var formInline = document.getElementById("motoristaFormInline");
+      var inputMat = document.getElementById("sidebarMatricula");
+      var inputNome = document.getElementById("sidebarNomeMotorista");
+      var nomeResult = document.getElementById("sidebarNomeResult");
+      var btnBuscar = document.getElementById("btnSidebarBuscar");
+      var btnConfirmar = document.getElementById("btnSidebarConfirmar");
+      var btnCancelar = document.getElementById("btnSidebarCancelar");
+
+      if (!btnEdit) return;
+
+      btnEdit.addEventListener("click", function () {
+        var currentName =
+          (document.getElementById("driverName") || {}).textContent || "";
+        if (inputNome)
+          inputNome.value = currentName === "Não Informado" ? "" : currentName;
+        if (inputMat) inputMat.value = "";
+        if (nomeResult) {
+          nomeResult.textContent = "";
+          nomeResult.style.color = "";
+        }
+
+        if (_vinculos.length > 0) {
+          var ultimo = _vinculos[_vinculos.length - 1];
+          var selIni = document.getElementById("sidebarPontoInicio");
+          var selFim = document.getElementById("sidebarPontoFim");
+          if (selIni && ultimo.ponto_inicio) selIni.value = ultimo.ponto_inicio;
+          if (selFim && ultimo.ponto_fim) selFim.value = ultimo.ponto_fim;
+        }
+
+        var trechoSection = document.getElementById("sidebarTrechoSection");
+        if (trechoSection) {
+          var temPontos = _esquemaPontos.length > 0 || _enrichedTrip.length > 0;
+          trechoSection.style.display = temPontos ? "block" : "none";
+          // Popula selects do trecho com pontos do enrichedTrip quando não há esquema
+          if (_esquemaPontos.length === 0 && _enrichedTrip.length > 0) {
+            _popularSidebarTrechoDeEnrichedTrip();
+          }
+        }
+
+        if (displayEl) displayEl.style.display = "none";
+        if (formInline) formInline.style.display = "block";
+        if (inputMat)
+          setTimeout(function () {
+            inputMat.focus();
+          }, 50);
+      });
+
+      if (btnCancelar) {
+        btnCancelar.addEventListener("click", function () {
+          if (displayEl) displayEl.style.display = "block";
+          if (formInline) formInline.style.display = "none";
+        });
+      }
+
+      function _buscar() {
+        var mat = inputMat ? inputMat.value.trim() : "";
+        if (!mat) {
+          UIModule.showToast("Informe a matrícula.", "error");
+          return;
+        }
+        var found = _motoristas.find(function (m) {
+          return String(m.matricula).trim() === mat;
+        });
+        if (found) {
+          if (inputNome) inputNome.value = found.nome;
+          if (nomeResult) {
+            nomeResult.textContent =
+              found.nome + (found.base ? " · " + found.base : "");
+            nomeResult.style.color = "var(--verde)";
+          }
+        } else {
+          if (nomeResult) {
+            nomeResult.textContent = "Matrícula não encontrada.";
+            nomeResult.style.color = "var(--vermelho)";
+          }
+        }
+      }
+
+      if (btnBuscar) btnBuscar.addEventListener("click", _buscar);
+      if (inputMat) {
+        inputMat.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            _buscar();
+          }
+        });
+      }
+
+      if (btnConfirmar) {
+        btnConfirmar.addEventListener("click", function () {
+          var nome = inputNome ? inputNome.value.trim() : "";
+          var mat = inputMat ? inputMat.value.trim() : "";
+
+          if (!nome) {
+            UIModule.showToast("Informe o nome do motorista.", "error");
+            return;
+          }
+
+          if (_analysis && _analysis.summary) {
+            _analysis.summary.motorista = nome;
+          }
+
+          var driverNameEl = document.getElementById("driverName");
+          if (driverNameEl) {
+            driverNameEl.textContent = nome;
+            driverNameEl.className = "driver-name";
+          }
+
+          var trechoSection = document.getElementById("sidebarTrechoSection");
+          var trechoAtivo =
+            trechoSection && trechoSection.style.display !== "none";
+          var selIni = document.getElementById("sidebarPontoInicio");
+          var selFim = document.getElementById("sidebarPontoFim");
+          var inicio = selIni ? selIni.value : "";
+          var fim = selFim ? selFim.value : "";
+          var trechoSumEl = document.getElementById("trechoSummary");
+
+          if (trechoAtivo && inicio && fim) {
+            var existIdx = mat
+              ? _vinculos.findIndex(function (v) {
+                  return v.matricula === mat;
+                })
+              : -1;
+            var vinculo = {
+              matricula: mat || "—",
+              nome: nome,
+              ponto_inicio: inicio,
+              ponto_fim: fim,
+            };
+            if (existIdx >= 0) {
+              _vinculos[existIdx] = vinculo;
+            } else {
+              _vinculos.push(vinculo);
+            }
+
+            _populaSelectMotoristaRelatorio();
+            _renderVinculadosList();
+
+            var inicioNome = _nomePontoPorId(inicio);
+            var fimNome = _nomePontoPorId(fim);
+            if (trechoSumEl) {
+              trechoSumEl.innerHTML =
+                '<span style="color:var(--laranja);">▸</span> ' +
+                _escHtml(inicioNome) +
+                ' <span style="color:var(--text3); margin:0 3px;">→</span> ' +
+                _escHtml(fimNome);
+              trechoSumEl.style.display = "block";
+            }
+
+            UIModule.showToast(
+              '"' + nome + '" · ' + inicioNome + " → " + fimNome,
+              "success",
+              4000,
+            );
+          } else {
+            if (trechoSumEl) trechoSumEl.style.display = "none";
+            UIModule.showToast("Motorista definido: " + nome, "success", 3000);
+          }
+
+          if (displayEl) displayEl.style.display = "block";
+          if (formInline) formInline.style.display = "none";
+        });
+      }
+
+      if (inputNome) {
+        inputNome.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (btnConfirmar) btnConfirmar.click();
+          }
+        });
+      }
+    }
+
+    // ============================================================
+    //  MODAL DE VINCULAÇÃO DE MOTORISTA
+    // ============================================================
+
+    function _initModalMotorista() {
+      var overlay   = document.getElementById("modalMotorista");
+      var btnOpen   = document.getElementById("btnVincularMotorista");
+      var btnClose  = document.getElementById("btnCloseMotoristaModal");
+      var btnCancel = document.getElementById("btnCancelMotoristaModal");
+      if (!overlay) return;
+
+      var open  = function() { overlay.classList.add("open");    _renderModalMotorista(); };
+      var close = function() { overlay.classList.remove("open"); };
+
+      if (btnOpen)   btnOpen.addEventListener("click", open);
+      if (btnClose)  btnClose.addEventListener("click", close);
+      if (btnCancel) btnCancel.addEventListener("click", close);
+      overlay.addEventListener("click", function(e) { if (e.target === overlay) close(); });
+    }
+
+    // ---- Render master do modal ----
+    function _renderModalMotorista() {
+      _renderIbuttonAviso();
+      _renderDetectadosList();
+      _renderVinculadosList();
+    }
+
+    function _renderIbuttonAviso() {
+      var el = document.getElementById('motoristaIbuttonAviso');
+      if (!el) return;
+      var temDados = _autoVinculoDataList.length > 0 ||
+        _vinculos.some(function(v) { return v.nomeCsv; });
+      el.style.display = temDados ? 'none' : '';
+    }
+
+    function _renderDetectadosList() {
+      var container = document.getElementById('motoristaDetectadosList');
+      if (!container) return;
+      if (!_autoVinculoDataList.length) { container.innerHTML = ''; return; }
+
+      var html = '<div style="font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.06em; color:var(--text3); margin:16px 0 8px;">Detectados pelo iButton</div>';
+      html += _autoVinculoDataList.map(function(d, idx) {
+        if (d.cadastrando) return _renderCardCadastro(d, idx);
+        if (d.editando)    return _renderCardEdit(d, idx);
+        return _renderCardView(d, idx);
+      }).join('');
+      container.innerHTML = html;
+
+      // Popula selects de cards em modo edição ou cadastro
+      _autoVinculoDataList.forEach(function(d, idx) {
+        if (d.editando || d.cadastrando) _popularSelectsCard(idx);
+      });
+    }
+
+    function _renderCardView(d, idx) {
+      var matched = !!d.motorista;
+      var nome = matched ? d.motorista.nome : '';
+      var mat  = matched ? String(d.motorista.matricula || '') : '';
+
+      var nomeHtml = matched
+        ? '<span style="font-size:14px;font-weight:700;color:var(--text);">' + _escHtml(nome) + '</span>' +
+          (mat ? '<span style="font-size:11px;color:var(--text3);margin-left:6px;">mat. ' + _escHtml(mat) + '</span>' : '') +
+          '<span style="font-size:10px;background:rgba(34,169,106,0.12);color:#22a96a;padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px;">' + (d.score||0) + '% match</span>'
+        : '<span style="font-size:12px;color:var(--amarelo);font-weight:600;">Não encontrado na base</span>' +
+          '<span style="font-size:11px;color:var(--text3);margin-left:6px;">— cadastre para registrar</span>';
+
+      var trechoAviso = (d.pontoInicio && d.pontoInicio === (d.pontoFim || d.pontoInicio))
+        ? '<span style="font-size:10px;background:rgba(232,160,32,0.12);color:var(--amarelo);padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px;" title="Início e fim idênticos — use Editar para corrigir o trecho">⚠ mesmo ponto</span>'
+        : '';
+      var trechoHtml = d.pontoInicio
+        ? '<strong>' + _escHtml(d.pontoInicio) + '</strong><span style="color:var(--text3);"> → </span><strong>' + _escHtml(d.pontoFim || d.pontoInicio) + '</strong>' + trechoAviso
+        : '<em style="color:var(--text3);">trecho não detectado</em>';
+
+      var btnPrimario = matched
+        ? '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">✓ Confirmar</button>'
+        : '<button onclick="AppModule._toggleCadastroCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">+ Cadastrar</button>';
+
+      return '<div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-top:10px;background:var(--surface);">' +
+        '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3);margin-bottom:8px;">iButton · <em style="font-style:normal;color:var(--text2);">"' + _escHtml(d.nomeCsv) + '"</em></div>' +
+        '<div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:8px;">' + nomeHtml + '</div>' +
+        '<div style="font-size:11px;color:var(--text2);">Trecho: ' + trechoHtml + '</div>' +
+        '<div style="display:flex;gap:8px;margin-top:12px;">' +
+          btnPrimario +
+          '<button onclick="AppModule._toggleEditCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;">✎ Editar</button>' +
+          '<button onclick="AppModule._descartarCard(' + idx + ')" style="padding:5px 10px;border-radius:6px;background:transparent;border:none;color:var(--text3);font-size:12px;cursor:pointer;">Ignorar</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function _renderCardEdit(d, idx) {
+      var mat  = d.editMat  !== undefined ? d.editMat  : (d.motorista ? String(d.motorista.matricula || '') : '');
+      var nome = d.editNome !== undefined ? d.editNome : (d.motorista ? d.motorista.nome : '');
+      var inputStyle = 'width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);outline:none;';
+      var selStyle   = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);';
+
+      return '<div style="border:1.5px solid var(--laranja);border-radius:10px;padding:14px 16px;margin-top:10px;background:var(--surface);">' +
+        '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3);margin-bottom:10px;">iButton · <em style="font-style:normal;color:var(--text2);">"' + _escHtml(d.nomeCsv) + '"</em></div>' +
+        '<div style="display:flex;gap:6px;margin-bottom:6px;">' +
+          '<input id="mCard_mat_' + idx + '" type="text" value="' + _escHtml(mat) + '" placeholder="Matrícula" style="' + inputStyle + '" />' +
+          '<button onclick="AppModule._buscarMotoristaCard(' + idx + ')" style="flex-shrink:0;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;white-space:nowrap;">Buscar</button>' +
+        '</div>' +
+        '<div id="mCard_nome_' + idx + '" style="font-size:12px;min-height:18px;margin-bottom:10px;color:' + (nome ? 'var(--verde)' : 'var(--text3)') + ';">' + _escHtml(nome || '—') + '</div>' +
+        '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;">Trecho</div>' +
+        '<div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">' +
+          '<div style="flex:1;min-width:0;"><select id="mCard_ini_' + idx + '" style="' + selStyle + '"></select></div>' +
+          '<span style="flex-shrink:0;color:var(--text3);font-weight:600;font-size:13px;">→</span>' +
+          '<div style="flex:1;min-width:0;"><select id="mCard_fim_' + idx + '" style="' + selStyle + '"></select></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">✓ Confirmar</button>' +
+          '<button onclick="AppModule._toggleEditCard(' + idx + ')" style="padding:5px 12px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text3);font-size:12px;cursor:pointer;">Cancelar</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function _renderCardCadastro(d, idx) {
+      var inputStyle = 'padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);outline:none;width:100%;box-sizing:border-box;';
+      var selStyle   = 'width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);';
+
+      return '<div style="border:1.5px solid #22a96a;border-radius:10px;padding:14px 16px;margin-top:10px;background:var(--surface);">' +
+        '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:#22a96a;margin-bottom:10px;">Cadastrar motorista · iButton: <em style="font-style:normal;color:var(--text2);">"' + _escHtml(d.nomeCsv) + '"</em></div>' +
+        '<div style="display:flex;gap:6px;margin-bottom:8px;">' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;">Matrícula (opcional)</div>' +
+            '<input id="mCard_mat_' + idx + '" type="text" value="" placeholder="Ex: 12345" style="' + inputStyle + '" />' +
+          '</div>' +
+          '<div style="flex:2;">' +
+            '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;">Nome *</div>' +
+            '<input id="mCard_nomeInput_' + idx + '" type="text" value="' + _escHtml(d.nomeCsv) + '" placeholder="Nome do motorista" style="' + inputStyle + '" />' +
+          '</div>' +
+        '</div>' +
+        '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;">Trecho</div>' +
+        '<div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;">' +
+          '<div style="flex:1;min-width:0;"><select id="mCard_ini_' + idx + '" style="' + selStyle + '"></select></div>' +
+          '<span style="flex-shrink:0;color:var(--text3);font-weight:600;">→</span>' +
+          '<div style="flex:1;min-width:0;"><select id="mCard_fim_' + idx + '" style="' + selStyle + '"></select></div>' +
+        '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button onclick="AppModule._cadastrarConfirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">💾 Cadastrar e Confirmar</button>' +
+          '<button onclick="AppModule._toggleCadastroCard(' + idx + ')" style="padding:5px 12px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text3);font-size:12px;cursor:pointer;">Cancelar</button>' +
+        '</div>' +
+      '</div>';
+    }
+
+    function _toggleCadastroCard(idx) {
+      var d = _autoVinculoDataList[idx];
+      if (!d) return;
+      d.cadastrando = !d.cadastrando;
+      d.editando    = false;
+      _renderDetectadosList();
+    }
+
+    function _cadastrarConfirmarCard(idx) {
+      var d = _autoVinculoDataList[idx];
+      if (!d) return;
+
+      var matInput  = document.getElementById('mCard_mat_' + idx);
+      var nomeInput = document.getElementById('mCard_nomeInput_' + idx);
+      var selIni    = document.getElementById('mCard_ini_' + idx);
+      var selFim    = document.getElementById('mCard_fim_' + idx);
+
+      var mat    = matInput  ? matInput.value.trim()  : '';
+      var nome   = nomeInput ? nomeInput.value.trim() : '';
+      var inicio = selIni    ? selIni.value           : '';
+      var fim    = selFim    ? selFim.value            : '';
+
+      if (!nome) { UIModule.showToast('Informe o nome do motorista.', 'error'); return; }
+      if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
+
+      if (mat) {
+        var dup = _vinculos.find(function(v) { return v.matricula && v.matricula === mat; });
+        if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
+      }
+
+      // Confirma vínculo imediatamente (otimista)
+      _vinculos.push({ matricula: mat, nome: nome, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: d.seqMin != null ? d.seqMin : null, seqMax: d.seqMax != null ? d.seqMax : null });
+      _autoVinculoDataList.splice(idx, 1);
+      _populaSelectMotoristaRelatorio();
+      _atualizarPreviewRelatorio();
+      _renderModalMotorista();
+      UIModule.showToast('Motorista "' + nome + '" vinculado.', 'success', 3000);
+
+      // Salva na planilha em background (falha não bloqueia)
+      google.script.run
+        .withSuccessHandler(function(saved) {
+          _motoristas.push({ matricula: saved.matricula || mat, nome: saved.nome || nome, base: saved.base || '' });
+          UIModule.showToast('"' + (saved.nome || nome) + '" cadastrado na base de motoristas.', 'info', 3000);
+        })
+        .withFailureHandler(function(err) {
+          console.warn('[App] Erro ao salvar motorista na planilha:', err);
+          UIModule.showToast('Vinculado localmente, mas falha ao salvar na planilha.', 'warning');
+        })
+        .salvarMotorista({ matricula: mat, nome: nome, base: '', ibutton: d.nomeCsv || '' });
+    }
+
+    function _popularSelectsCard(idx) {
+      var d = _autoVinculoDataList[idx];
+      if (!d) return;
+      var pontos = _getPontosLista();
+      var optsBase = '<option value="">— Selecione —</option>' +
+        pontos.map(function(p) {
+          return '<option value="' + _escHtml(p.valor) + '">' + _escHtml(p.label) + '</option>';
+        }).join('');
+
+      var selIni = document.getElementById('mCard_ini_' + idx);
+      var selFim = document.getElementById('mCard_fim_' + idx);
+      if (selIni) { selIni.innerHTML = optsBase; _preencherSelectTrecho(selIni, d.pontoInicio); }
+      if (selFim) { selFim.innerHTML = optsBase; _preencherSelectTrecho(selFim, d.pontoFim || d.pontoInicio); }
+    }
+
+    function _toggleEditCard(idx) {
+      var d = _autoVinculoDataList[idx];
+      if (!d) return;
+      if (!d.editando) {
+        d.editMat  = d.motorista ? String(d.motorista.matricula || '') : '';
+        d.editNome = d.motorista ? d.motorista.nome : '';
+      }
+      d.editando = !d.editando;
+      _renderDetectadosList();
+    }
+
+    function _buscarMotoristaCard(idx) {
+      var matInput = document.getElementById('mCard_mat_' + idx);
+      var nomeDisp = document.getElementById('mCard_nome_' + idx);
+      var d = _autoVinculoDataList[idx];
+      if (!matInput || !d) return;
+
+      var mat = matInput.value.trim();
+      var encontrado = mat ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; }) : null;
+
+      d.editMat  = mat;
+      d.editNome = encontrado ? encontrado.nome : '';
+
+      if (nomeDisp) {
+        if (encontrado) {
+          nomeDisp.textContent = encontrado.nome + (encontrado.base ? ' · ' + encontrado.base : '');
+          nomeDisp.style.color = 'var(--verde)';
+        } else {
+          nomeDisp.textContent = mat ? 'Matrícula não encontrada' : '—';
+          nomeDisp.style.color = mat ? 'var(--vermelho)' : 'var(--text3)';
+        }
+      }
+    }
+
+    function _confirmarCard(idx) {
+      var d = _autoVinculoDataList[idx];
+      if (!d) return;
+
+      var mat, nome, inicio, fim;
+
+      if (d.editando) {
+        var matInput = document.getElementById('mCard_mat_' + idx);
+        var nomeDisp = document.getElementById('mCard_nome_' + idx);
+        var selIni   = document.getElementById('mCard_ini_' + idx);
+        var selFim   = document.getElementById('mCard_fim_' + idx);
+        mat    = matInput ? matInput.value.trim() : '';
+        nome   = (nomeDisp && nomeDisp.style.color !== 'var(--vermelho)') ? nomeDisp.textContent.trim() : '';
+        inicio = selIni ? selIni.value : '';
+        fim    = selFim ? selFim.value : '';
+        if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
+        if (!nome && mat) {
+          var m = _motoristas.find(function(x) { return String(x.matricula).trim() === mat; });
+          nome = m ? m.nome : '(não cadastrado)';
+        }
+        if (!nome || nome === '—') nome = d.nomeCsv;
+      } else {
+        if (!d.pontoInicio) { UIModule.showToast('Trecho não detectado. Clique em Editar.', 'warning'); return; }
+        mat    = d.motorista ? String(d.motorista.matricula || '') : '';
+        nome   = d.motorista ? d.motorista.nome : d.nomeCsv;
+        inicio = d.pontoInicio;
+        fim    = d.pontoFim || d.pontoInicio;
+      }
+
+      if (mat) {
+        var dup = _vinculos.find(function(v) { return v.matricula && v.matricula === mat; });
+        if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
+      }
+
+      _vinculos.push({ matricula: mat, nome: nome || d.nomeCsv, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: d.seqMin != null ? d.seqMin : null, seqMax: d.seqMax != null ? d.seqMax : null });
+      _autoVinculoDataList.splice(idx, 1);
+      _populaSelectMotoristaRelatorio();
+      _atualizarPreviewRelatorio();
+      UIModule.showToast('Motorista "' + (nome || d.nomeCsv) + '" vinculado.', 'success', 3000);
+      _renderModalMotorista();
+
+      // Salva o iButton na planilha para reconhecimento automático nas próximas sessões
+      if (d.nomeCsv && d.motorista && !d.motorista.ibutton) {
+        google.script.run
+          .atualizarIbuttonMotorista(mat, nome || d.nomeCsv, d.nomeCsv);
+        d.motorista.ibutton = d.nomeCsv;
+      }
+    }
+
+    function _descartarCard(idx) {
+      _autoVinculoDataList.splice(idx, 1);
+      _renderDetectadosList();
+      _renderIbuttonAviso();
+    }
+
+    function _renderVinculadosList() {
+      var container   = document.getElementById('motoristaVinculadosList');
+      var listaInline = document.getElementById('listaVinculosInline');
+
+      if (!_vinculos.length) {
+        if (container)   container.innerHTML = '';
+        if (listaInline) listaInline.style.display = 'none';
+        return;
+      }
+
+      var html = '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3);margin:16px 0 8px;border-top:1px solid var(--border);padding-top:14px;">Confirmados</div>';
+      html += _vinculos.map(function(v, i) {
+        var inicioNome = _nomePontoPorId(v.ponto_inicio);
+        var fimNome    = _nomePontoPorId(v.ponto_fim);
+        var csvLabel   = (v.nomeCsv && v.nomeCsv !== v.nome)
+          ? '<div style="font-size:10px;color:var(--text3);margin-top:1px;">iButton: "' + _escHtml(v.nomeCsv) + '"</div>'
+          : '';
+        return '<div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:1px solid var(--border);border-radius:8px;margin-bottom:6px;background:var(--bg);">' +
+          '<div style="flex:1;">' +
+            '<div style="font-size:13px;font-weight:700;color:var(--text);">' + _escHtml(v.nome) +
+              (v.matricula ? '<span style="font-weight:400;color:var(--text3);font-size:11px;"> · mat. ' + _escHtml(v.matricula) + '</span>' : '') +
+            '</div>' +
+            csvLabel +
+            '<div style="font-size:11px;color:var(--laranja);margin-top:4px;">' + _escHtml(inicioNome) + ' → ' + _escHtml(fimNome) + '</div>' +
+          '</div>' +
+          '<button onclick="AppModule._removerVinculo(' + i + ')" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0;line-height:1;" title="Remover">✕</button>' +
+        '</div>';
+      }).join('');
+
+      if (container) container.innerHTML = html;
+
+      if (listaInline) {
+        listaInline.innerHTML = _vinculos.map(function(v) {
+          var ini = _nomePontoPorId(v.ponto_inicio);
+          var fim = _nomePontoPorId(v.ponto_fim);
+          return '<div style="font-size:11px;color:var(--text2);padding:3px 0;display:flex;align-items:center;gap:4px;">' +
+            '<span style="width:6px;height:6px;border-radius:50%;background:var(--laranja);flex-shrink:0;"></span>' +
+            '<span style="font-weight:600;">' + _escHtml(v.nome) + '</span>' +
+            '<span style="color:var(--text3);font-size:10px;">' + _escHtml(ini) + ' → ' + _escHtml(fim) + '</span>' +
+            '</div>';
+        }).join('');
+        listaInline.style.display = 'block';
+      }
+    }
+
+    function _removerVinculo(idx) {
+      _vinculos.splice(idx, 1);
+      _populaSelectMotoristaRelatorio();
+      _atualizarPreviewRelatorio();
+      var modal = document.getElementById('modalMotorista');
+      if (modal && modal.classList.contains('open')) {
+        _renderModalMotorista();
+      } else {
+        _renderVinculadosList();
+      }
+    }
+
+    function _nomePontoPorId(idPonto) {
+      var p = _esquemaPontos.find(function (ep) {
+        return ep.id_ponto === idPonto;
+      });
+      return p ? p.nome_ponto : idPonto;
+    }
+
+    // ============================================================
+    //  MODAL DE RELATÓRIO
+    // ============================================================
+
+    function _initModalRelatorio() {
+      var overlay = document.getElementById("modalRelatorio");
+      var btnOpen = document.getElementById("btnRelatorio");
+      var btnClose = document.getElementById("btnCloseRelatorioModal");
+      var btnCancel = document.getElementById("btnCancelRelatorioModal");
+      var btnConfirm = document.getElementById("btnConfirmRelatorioModal");
+
+      if (!overlay) return;
+
+      var open = function () {
+        overlay.classList.add("open");
+      };
+      var close = function () {
+        overlay.classList.remove("open");
+      };
+
+      if (btnOpen) btnOpen.addEventListener("click", open);
+      if (btnClose) btnClose.addEventListener("click", close);
+      if (btnCancel) btnCancel.addEventListener("click", close);
+      overlay.addEventListener("click", function (e) {
+        if (e.target === overlay) close();
+      });
+
+      // Toggle tipo de relatório no modal
+      document
+        .querySelectorAll('input[name="tipoRelatorioModal"]')
+        .forEach(function (radio) {
+          radio.addEventListener("change", function () {
+            var val = radio.value;
+            var motFields = document.getElementById("relMotoristaFields");
+            var trcFields = document.getElementById("relTrechoFields");
+            var cmpFields = document.getElementById("relCompletoFields");
+            if (motFields) motFields.style.display = val === "MOTORISTA" ? "block" : "none";
+            if (trcFields) trcFields.style.display = val === "TRECHO"    ? "block" : "none";
+            if (cmpFields) cmpFields.style.display = val === "COMPLETO"  ? "block" : "none";
+          });
+        });
+
+      if (btnConfirm) {
+        btnConfirm.addEventListener("click", _onConfirmRelatorio);
+      }
+    }
+
+    function _populaSelectMotoristaRelatorio() {
+      // Modal de relatório
+      var selModal = document.getElementById("relSelectMotoristaModal");
+      if (selModal) {
+        selModal.innerHTML = '<option value="">— Selecione —</option>';
+        _vinculos.forEach(function (v, i) {
+          var opt = document.createElement("option");
+          opt.value = i;
+          opt.textContent = v.nome + " (" + v.matricula + ")";
+          selModal.appendChild(opt);
+        });
+      }
+
+      // Select inline na seção de config (oculto)
+      var selInline = document.getElementById("relSelectMotorista");
+      if (selInline) {
+        selInline.innerHTML = '<option value="">— Selecione —</option>';
+        _vinculos.forEach(function (v, i) {
+          var opt = document.createElement("option");
+          opt.value = i;
+          opt.textContent = v.nome + " (" + v.matricula + ")";
+          selInline.appendChild(opt);
+        });
+      }
+
+      // Select da barra de modo de visualização
+      var selModo = document.getElementById("modoSelectMotorista");
+      if (selModo) {
+        var prevVal = selModo.value;
+        selModo.innerHTML = '<option value="">— Selecione motorista —</option>';
+        _vinculos.forEach(function (v, i) {
+          var opt = document.createElement("option");
+          opt.value = i;
+          opt.textContent = v.nome + (v.matricula ? " (" + v.matricula + ")" : "");
+          selModo.appendChild(opt);
+        });
+        // Restaura seleção anterior se ainda válida
+        if (prevVal !== '' && _vinculos[parseInt(prevVal, 10)]) selModo.value = prevVal;
+      }
+    }
+
+    function _onConfirmRelatorio() {
+      // Lê tipo do modal (radio tipoRelatorioModal)
+      var tipoEl = document.querySelector(
+        'input[name="tipoRelatorioModal"]:checked',
+      );
+      var tipo = tipoEl ? tipoEl.value : "COMPLETO";
+      var enviarAPI = true;
+
+      var selEsquema = document.getElementById("selectEsquema");
+      var idEsquema = selEsquema ? selEsquema.value : "";
+      var esqObj = _esquemas.find(function (e) {
+        return e.id_esquema === idEsquema;
+      });
+      var nomeLinha = esqObj ? esqObj.nome_linha : "";
+
+      var params = {
+        tipo: tipo,
+        enviarAPI: enviarAPI,
+        idEsquema: idEsquema,
+        nomeLinha: nomeLinha,
+        horario: esqObj ? (esqObj.horario || '') : '',
+        enrichedTrip: _enrichedTrip,
+        esquemaPontos: _esquemaPontos,
+        segments: _analysis ? _analysis.segments : [],
+        summary:  _analysis ? _analysis.summary  : {},
+      };
+
+      if (tipo === "MOTORISTA") {
+        var selMot = document.getElementById("relSelectMotoristaModal");
+        var idx = selMot ? parseInt(selMot.value, 10) : -1;
+        if (isNaN(idx) || idx < 0 || !_vinculos[idx]) {
+          UIModule.showToast("Selecione um motorista vinculado.", "error");
+          return;
+        }
+        params.motorista = _vinculos[idx];
+      } else if (tipo === "TRECHO") {
+        var pontoA = document.getElementById("relPontoAModal")
+          ? document.getElementById("relPontoAModal").value
+          : "";
+        var pontoB = document.getElementById("relPontoBModal")
+          ? document.getElementById("relPontoBModal").value
+          : "";
+        if (!pontoA || !pontoB) {
+          UIModule.showToast("Selecione os pontos A e B do trecho.", "error");
+          return;
+        }
+        params.idPontoA = pontoA;
+        params.idPontoB = pontoB;
+      }
+      // tipo === 'COMPLETO': sem filtros adicionais — envia tudo
+
+      UIModule.showLoading("Capturando mapa e gerando relatório...");
+
+      _gerarComCaptura(params,
+        function (result) {
+          UIModule.hideLoading();
+          document.getElementById("modalRelatorio").classList.remove("open");
+          console.log("[App] Payload do relatório:", result.payload);
+          UIModule.showToast("Relatório gerado com sucesso!", "success", 5000);
+          if (result.apiResponse) {
+            console.log("[App] Resposta da API:", result.apiResponse);
+            if (result.apiResponse.body && result.apiResponse.body.url) {
+              var fname = _buildPdfFilename(tipo, params.motorista);
+              _downloadPdf(result.apiResponse.body.url, fname);
+            }
+            UIModule.showToast("PDF pronto para download.", "success", 4000);
+          }
+        },
+        function (err) {
+          UIModule.hideLoading();
+          var msg = err && err.message ? err.message : String(err);
+          UIModule.showToast("Erro ao gerar relatório: " + msg, "error", 6000);
+          console.error("[App] Erro ao gerar relatório:", err);
+        }
+      );
+    }
+
+    // ============================================================
+    //  PONTO MANUAL
+    // ============================================================
+
+    function _onManualPointAdded(ponto) {
+      if (!_enrichedTrip || _enrichedTrip.length === 0) {
+        UIModule.showToast(
+          "Processe uma viagem antes de adicionar pontos manuais.",
+          "error",
+        );
+        return;
+      }
+
+      ponto.seq = _enrichedTrip.length + 1;
+      ponto.veiculo = _enrichedTrip[0] ? _enrichedTrip[0].veiculo : "";
+      _enrichedTrip.push(ponto);
+
+      UIModule.showLoading("Recalculando análise...");
+
+      google.script.run
+        .withSuccessHandler(function (analysisResult) {
+          UIModule.hideLoading();
+          _analysis = analysisResult;
+
+          var segments = analysisResult.segments;
+          var alerts = analysisResult.alerts;
+          var summary = analysisResult.summary;
+
+          AnalysisModule.renderSummary(summary);
+
+          if (_esquemaPontos.length > 0) {
+            _calcularComparacao();
+          } else {
+            AnalysisModule.renderPontosTable(_enrichedTrip);
+          }
+
+          AnalysisModule.renderVelocidadeTable(segments);
+          AnalysisModule.renderAlertas(alerts);
+
+          _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
+
+          if (
+            _isMapUsable() &&
+            ponto.lat &&
+            ponto.lng &&
+            typeof MapModule.panTo === "function"
+          ) {
+            MapModule.panTo(ponto.lat, ponto.lng);
+          }
+        })
+        .withFailureHandler(_onError)
+        .analyzeTrip(_enrichedTrip);
+    }
+
+    // ============================================================
+    //  LIMPAR
+    // ============================================================
+
+    function _onLimpar() {
+      _enrichedTrip = [];
+      _analysis = null;
+      _tripReady = false;
+      _comparacao = null;
+      _vinculos = [];
+      _esquemaPontos = [];
+      _autoVinculoDataList = [];
+
+      // Reseta form inline de motorista
+      var motoristaDisplay = document.getElementById("motoristaDisplay");
+      var motoristaFormInline = document.getElementById("motoristaFormInline");
+      var trechoSummaryEl = document.getElementById("trechoSummary");
+      if (motoristaDisplay) motoristaDisplay.style.display = "block";
+      if (motoristaFormInline) motoristaFormInline.style.display = "none";
+      if (trechoSummaryEl) trechoSummaryEl.style.display = "none";
+
+      // Reseta combobox de esquema
+      var selEsquema = document.getElementById("selectEsquema");
+      if (selEsquema) selEsquema.value = "";
+      var searchInput = document.getElementById("esquemaSearch");
+      if (searchInput) searchInput.value = "";
+      _fecharEsquemaDropdown();
+      var infoEl = document.getElementById("esquemaInfo");
+      if (infoEl) {
+        infoEl.textContent = "";
+        infoEl.style.display = "none";
+      }
+
+      // Oculta e desabilita botões do header
+      ["btnVincularMotorista", "btnRelatorio"].forEach(function(id) {
+        var b = document.getElementById(id);
+        if (b) { b.disabled = true; b.style.display = 'none'; }
+      });
+
+      if (
+        typeof MapModule !== "undefined" &&
+        MapModule &&
+        typeof MapModule.clearMap === "function"
+      ) {
+        MapModule.clearMap();
+      }
+
+      // Reseta estado do mapa lazy
+      _mapPending = null;
+      _mapsReady = false;
+      var btnVerMapa = document.getElementById('btnVerMapa');
+      var mapPlaceholderText = document.getElementById('mapPlaceholderText');
+      if (btnVerMapa) btnVerMapa.style.display = 'none';
+      if (mapPlaceholderText) mapPlaceholderText.textContent = 'Importe um relatório para visualizar a rota';
+
+      AnalysisModule.resetUI();
+
+      // Reseta modo ativo
+      _modoAtivo = 'COMPLETO';
+      _motoristaAtivo = null;
+      var radios = document.querySelectorAll('input[name="tipoRelatorio"]');
+      radios.forEach(function(r) { r.checked = (r.value === 'COMPLETO'); });
+      var motF = document.getElementById('relMotoristaFieldsInline');
+      var trcF = document.getElementById('relTrechoFieldsInline');
+      if (motF) motF.style.display = 'none';
+      if (trcF) trcF.style.display = 'none';
+
+      // Reseta barra de modo de visualização
+      var secModo = document.getElementById('sectionModoVisualizacao');
+      if (secModo) secModo.style.display = 'none';
+      ['COMPLETO', 'MOTORISTA', 'TRECHO'].forEach(function(m) {
+        var btn = document.getElementById('modoBtn_' + m);
+        if (btn) {
+          if (m === 'COMPLETO') btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+      var modoMotF = document.getElementById('modoMotoristaFields');
+      var modoTrcF = document.getElementById('modoTrechoFields');
+      if (modoMotF) modoMotF.style.display = 'none';
+      if (modoTrcF) modoTrcF.style.display = 'none';
+
+      // Reseta zona de upload e mini combobox de esquema
+      if (typeof UIModule.resetUpload === 'function') UIModule.resetUpload();
+      var uploadEsqInput = document.getElementById('uploadEsquemaSearch');
+      var uploadEsqInfo  = document.getElementById('uploadEsquemaInfo');
+      if (uploadEsqInput) uploadEsqInput.value = '';
+      if (uploadEsqInfo)  { uploadEsqInfo.style.display = 'none'; uploadEsqInfo.textContent = ''; }
+
+      // Restaura o card de upload para nova análise
+      var secConfig = document.getElementById('sectionConfig');
+      if (secConfig) {
+        secConfig.style.display = '';
+        secConfig.style.opacity = '0';
+        setTimeout(function() {
+          secConfig.style.transition = 'opacity 0.3s';
+          secConfig.style.opacity = '1';
+          setTimeout(function() { secConfig.style.transition = ''; }, 350);
+        }, 30);
+      }
+
+      // Volta ao modo upload inicial
+      var wrapper = document.querySelector('.app-wrapper');
+      if (wrapper) wrapper.classList.add('app--upload-only');
+
+      UIModule.showToast("Dados limpos com sucesso.", "info");
+    }
+
+    // ============================================================
+    //  TRATAMENTO DE ERROS
+    // ============================================================
+
+    function _onError(err) {
+      UIModule.hideLoading();
+      var msg = err && err.message ? err.message : String(err);
+      UIModule.showToast("Erro: " + msg, "error", 6000);
+      console.error("[App] Erro:", err);
+    }
+
+    // ============================================================
+    //  PREVIEW DE RELATÓRIO
+    // ============================================================
+
+    /**
+     * Atualiza o painel de preview do modo de relatório na seção de configuração.
+     * Chamado quando o modo muda, o motorista muda, ou novos dados são carregados.
+     */
+    function _atualizarPreviewRelatorio() {
+      var previewEl = document.getElementById('relPreview');
+      if (!previewEl) return;
+
+      // Sem viagem carregada → esconde preview
+      if (!_enrichedTrip || !_enrichedTrip.length) {
+        previewEl.style.display = 'none';
+        return;
+      }
+
+      var tipoEl = document.querySelector('input[name="tipoRelatorio"]:checked');
+      var tipo = tipoEl ? tipoEl.value : 'MOTORISTA';
+      var html = '';
+
+      if (tipo === 'MOTORISTA') {
+        var selIdx = document.getElementById('relSelectMotorista');
+        var idx = selIdx ? parseInt(selIdx.value, 10) : NaN;
+        if (!isNaN(idx) && idx >= 0 && _vinculos[idx]) {
+          var v = _vinculos[idx];
+          var inicioNome = _nomePontoPorId(v.ponto_inicio);
+          var fimNome    = _nomePontoPorId(v.ponto_fim);
+          // Conta pontos do trecho
+          var pontosNoTrecho = _enrichedTrip.filter(function(p) {
+            var seq = p.seq;
+            var seqInicio = _seqPorPonto(v.ponto_inicio);
+            var seqFim    = _seqPorPonto(v.ponto_fim);
+            return seqInicio === null || seqFim === null || (seq >= Math.min(seqInicio, seqFim) && seq <= Math.max(seqInicio, seqFim));
+          }).length;
+          html = '<div class="rel-preview-grid">' +
+            '<span class="rel-preview-label">Motorista</span>' +
+            '<span class="rel-preview-value">' + _escHtml(v.nome) + (v.matricula && v.matricula !== '—' ? ' <span style="color:var(--text3);">(' + _escHtml(String(v.matricula)) + ')</span>' : '') + '</span>' +
+            '<span class="rel-preview-label">Trecho</span>' +
+            '<span class="rel-preview-value laranja">' + _escHtml(inicioNome) + ' → ' + _escHtml(fimNome) + '</span>' +
+            '</div>';
+        } else if (_vinculos.length === 0) {
+          html = '<div class="rel-preview-hint">Nenhum motorista vinculado. Clique em "+" para adicionar.</div>';
+        } else {
+          html = '<div class="rel-preview-hint">Selecione um motorista vinculado acima.</div>';
+        }
+
+      } else if (tipo === 'TRECHO') {
+        var selA = document.getElementById('relPontoA');
+        var selB = document.getElementById('relPontoB');
+        var idA  = selA ? selA.value : '';
+        var idB  = selB ? selB.value : '';
+        if (idA && idB) {
+          var nomA = _nomePontoPorId(idA);
+          var nomB = _nomePontoPorId(idB);
+          html = '<div class="rel-preview-grid">' +
+            '<span class="rel-preview-label">Ponto A</span>' +
+            '<span class="rel-preview-value">' + _escHtml(nomA) + '</span>' +
+            '<span class="rel-preview-label">Ponto B</span>' +
+            '<span class="rel-preview-value">' + _escHtml(nomB) + '</span>' +
+            '</div>';
+        } else if (!_esquemaPontos.length) {
+          html = '<div class="rel-preview-hint">Selecione um esquema de linha no cabeçalho para definir o trecho.</div>';
+        } else {
+          html = '<div class="rel-preview-hint">Selecione os pontos A e B do trecho acima.</div>';
+        }
+
+      } else if (tipo === 'COMPLETO') {
+        var totalPt  = _enrichedTrip.length;
+        var matchPt  = _enrichedTrip.filter(function(p) { return p.matched; }).length;
+        var naoMatch = totalPt - matchPt;
+        var alertCnt = _analysis ? (_analysis.alerts || []).length : 0;
+        html = '<div class="rel-preview-grid">' +
+          '<span class="rel-preview-label">Pontos</span>' +
+          '<span class="rel-preview-value">' + totalPt + '</span>' +
+          '<span class="rel-preview-label">Identificados</span>' +
+          '<span class="rel-preview-value verde">' + matchPt + '</span>' +
+          (naoMatch > 0 ? '<span class="rel-preview-label">Não id.</span><span class="rel-preview-value vermelho">' + naoMatch + '</span>' : '') +
+          (alertCnt > 0 ? '<span class="rel-preview-label">Alertas</span><span class="rel-preview-value laranja">' + alertCnt + '</span>' : '') +
+          '</div>';
+      }
+
+      if (html) {
+        previewEl.innerHTML = html;
+        previewEl.style.display = 'block';
+      } else {
+        previewEl.style.display = 'none';
+      }
+    }
+
+    /** Helper: retorna seq do primeiro ponto do _enrichedTrip com código ou nome == idPonto */
+    function _seqPorPonto(idPonto) {
+      if (!idPonto || !_enrichedTrip.length) return null;
+      var key = String(idPonto).trim();
+      var found = _enrichedTrip.find(function(p) {
+        return String(p.codigo || '').trim() === key ||
+               String(p.ponto  || '').trim() === key;
+      });
+      return found ? found.seq : null;
+    }
+
+    /** Filtra esquema ao intervalo entre dois pontos (por id_ponto ou nome_ponto). */
+    function _filtrarEsquemaPorTrechoLocal(esquemaPontos, pontoA, pontoB) {
+      if (!pontoA || !pontoB || !esquemaPontos.length) return esquemaPontos;
+      var kA = String(pontoA).trim(), kB = String(pontoB).trim();
+      var oA = null, oB = null;
+      esquemaPontos.forEach(function(ep) {
+        var id   = String(ep.id_ponto   || '').trim();
+        var nome = String(ep.nome_ponto || '').trim();
+        if (id === kA || nome === kA) oA = ep.ordem;
+        if (id === kB || nome === kB) oB = ep.ordem;
+      });
+      if (oA === null || oB === null) return null;
+      var lo = Math.min(oA, oB), hi = Math.max(oA, oB);
+      return esquemaPontos.filter(function(ep) { return ep.ordem >= lo && ep.ordem <= hi; });
+    }
+
+    /**
+     * Altera o modo de visualização ativo e re-aplica os filtros.
+     */
+    function _setModo(modo) {
+      _modoAtivo = modo;
+
+      // Atualiza botões da barra de modo
+      ['COMPLETO', 'MOTORISTA', 'TRECHO'].forEach(function(m) {
+        var btn = document.getElementById('modoBtn_' + m);
+        if (btn) {
+          if (m === modo) btn.classList.add('active');
+          else btn.classList.remove('active');
+        }
+      });
+
+      // Mostra/oculta campos extras da barra
+      var motF = document.getElementById('modoMotoristaFields');
+      var trcF = document.getElementById('modoTrechoFields');
+      if (motF) motF.style.display = modo === 'MOTORISTA' ? 'flex' : 'none';
+      if (trcF) trcF.style.display = modo === 'TRECHO'    ? 'flex' : 'none';
+
+      // Atualiza motorista ativo
+      if (modo === 'MOTORISTA') {
+        if (!_vinculos.length) {
+          UIModule.showToast('Nenhum motorista vinculado. Use o botão 👤 Motorista.', 'warning');
+        }
+        var sel = document.getElementById('modoSelectMotorista');
+        var idx = sel ? parseInt(sel.value, 10) : NaN;
+        _motoristaAtivo = (!isNaN(idx) && _vinculos[idx]) ? _vinculos[idx] : null;
+      } else {
+        _motoristaAtivo = null;
+      }
+
+      _aplicarFiltroModo();
+    }
+
+    /**
+     * Aplica o filtro do modo ativo (COMPLETO/MOTORISTA/TRECHO) à visualização
+     * na tela: mapa, tabela de pontos e alertas.
+     */
+    function _aplicarFiltroModo() {
+      if (!_enrichedTrip.length || !_analysis) return;
+
+      var tripView = _enrichedTrip;
+      var esquemaView = _esquemaPontos;
+      var seqA = null, seqB = null;
+      var pontoInicioKey = null, pontoFimKey = null;
+
+      if (_modoAtivo === 'MOTORISTA' && _motoristaAtivo) {
+        pontoInicioKey = _motoristaAtivo.ponto_inicio;
+        pontoFimKey    = _motoristaAtivo.ponto_fim;
+        seqA = _seqPorPonto(pontoInicioKey);
+        seqB = _seqPorPonto(pontoFimKey);
+        // Fallback: se o lookup por nome retornou o mesmo ponto (ou nenhum),
+        // usa o intervalo de seq armazenado no momento do vínculo
+        if ((seqA === null || seqB === null || seqA === seqB) &&
+            _motoristaAtivo.seqMin != null && _motoristaAtivo.seqMax != null &&
+            _motoristaAtivo.seqMin !== _motoristaAtivo.seqMax) {
+          seqA = _motoristaAtivo.seqMin;
+          seqB = _motoristaAtivo.seqMax;
+        }
+      } else if (_modoAtivo === 'TRECHO') {
+        var pA = document.getElementById('modoPontoA');
+        var pB = document.getElementById('modoPontoB');
+        pontoInicioKey = pA ? pA.value : '';
+        pontoFimKey    = pB ? pB.value : '';
+        seqA = _seqPorPonto(pontoInicioKey);
+        seqB = _seqPorPonto(pontoFimKey);
+      }
+
+      if (seqA !== null && seqB !== null) {
+        var minS = Math.min(seqA, seqB), maxS = Math.max(seqA, seqB);
+        var filtered = _enrichedTrip.filter(function(p) { return p.seq >= minS && p.seq <= maxS; });
+        if (filtered.length >= 2) {
+          tripView = filtered;
+
+          // Codigos visitados no trecho (via seq range)
+          var codigosNoTrecho = new Set(
+            filtered.filter(function(p) { return p.matched && p.codigo; })
+                    .map(function(p) { return String(p.codigo); })
+          );
+
+          // Tenta filtro por nome/id (inclui não-visitados do trecho)
+          var schemaFiltered = _filtrarEsquemaPorTrechoLocal(_esquemaPontos, pontoInicioKey, pontoFimKey);
+
+          if (schemaFiltered !== null) {
+            esquemaView = schemaFiltered;
+          } else {
+            // Fallback: infere intervalo de ordem pelos pontos visitados no trecho
+            var ordens = _esquemaPontos
+              .filter(function(ep) { return codigosNoTrecho.has(String(ep.id_ponto)); })
+              .map(function(ep) { return ep.ordem; });
+
+            if (ordens.length >= 2) {
+              var loOrdem = Math.min.apply(null, ordens);
+              var hiOrdem = Math.max.apply(null, ordens);
+              // Inclui TODOS os pontos do esquema no range — visitados e não-visitados
+              esquemaView = _esquemaPontos.filter(function(ep) {
+                return ep.ordem >= loOrdem && ep.ordem <= hiOrdem;
+              });
+            } else {
+              // Último recurso: só visitados
+              esquemaView = _esquemaPontos.filter(function(ep) {
+                return codigosNoTrecho.has(String(ep.id_ponto));
+              });
+            }
+          }
+        }
+      }
+
+      _agendarMapa(tripView, null, _locaisCache);
+
+      // Comparação filtrada ao modo
+      var comparacaoView = null;
+      if (esquemaView.length > 0) {
+        var realizadosSet = new Set(
+          tripView.filter(function(p) { return p.matched && p.codigo; })
+                  .map(function(p) { return String(p.codigo); })
+        );
+        comparacaoView = esquemaView.map(function(ep) {
+          var chave = String(ep.id_ponto);
+          var visitado = realizadosSet.has(chave);
+          return Object.assign({}, ep, {
+            visitado:        visitado,
+            ponto_realizado: visitado ? (tripView.find(function(p) { return p.matched && String(p.codigo) === chave; }) || null) : null,
+            status:          visitado ? 'Realizado' : 'Não visitado'
+          });
+        });
+      }
+
+      AnalysisModule.renderPontosTable(tripView, comparacaoView);
+      if (comparacaoView) AnalysisModule.atualizarContadoresComparacao(comparacaoView);
+
+      // Alertas filtrados ao modo
+      if (_analysis.alerts) {
+        var alertsBase = _analysis.alerts.filter(function(a) {
+          return a.tipo !== 'PONTO_NAO_VISITADO';
+        });
+        // Filtra alertas de velocidade ao seq range
+        if (tripView !== _enrichedTrip) {
+          var minSeq = tripView[0].seq, maxSeq = tripView[tripView.length - 1].seq;
+          alertsBase = alertsBase.filter(function(a) {
+            return a.seq == null || (a.seq >= minSeq && a.seq <= maxSeq);
+          });
+        }
+        // Reinsere pontos não visitados filtrados
+        if (comparacaoView) {
+          comparacaoView.forEach(function(c) {
+            if (!c.visitado) {
+              alertsBase.push({
+                tipo: 'PONTO_NAO_VISITADO',
+                descricao: 'Ponto "' + c.nome_ponto + '" não foi visitado nesta viagem',
+                nivel: 'nao-visitado',
+                trecho: c.nome_ponto
+              });
+            }
+          });
+        }
+        AnalysisModule.renderAlertas(alertsBase);
+      }
+    }
+
+    // ============================================================
+    //  FUZZY MATCHING DE MOTORISTAS (Levenshtein)
+    // ============================================================
+
+    /**
+     * Distância de edição entre duas strings (Levenshtein).
+     * Usado para sugerir motoristas com base no nome do CSV.
+     */
+    function _levenshtein(a, b) {
+      a = (a || '').toUpperCase();
+      b = (b || '').toUpperCase();
+      var m = a.length, n = b.length;
+      if (!m) return n;
+      if (!n) return m;
+      var dp = [];
+      for (var i = 0; i <= m; i++) {
+        dp[i] = [i];
+        for (var j = 1; j <= n; j++) {
+          dp[i][j] = i === 0 ? j
+            : a[i-1] === b[j-1] ? dp[i-1][j-1]
+            : 1 + Math.min(dp[i-1][j], dp[i][j-1], dp[i-1][j-1]);
+        }
+      }
+      return dp[m][n];
+    }
+
+    function _similaridade(a, b) {
+      if (!a || !b) return 0;
+      var dist = _levenshtein(a, b);
+      return 1 - dist / Math.max(a.length, b.length, 1);
+    }
+
+    /**
+     * Similaridade orientada a nomes próprios.
+     * Primeiro tenta match palavra-a-palavra (ignora artigos/preposições curtas).
+     * Se todas as palavras significativas do nome menor aparecem no maior → 90%.
+     * Se ≥ 67% das palavras batem → 75%.
+     * Caso contrário cai no Levenshtein.
+     */
+    function _similaridadeNome(a, b) {
+      if (!a || !b) return 0;
+      var norm = function(s) {
+        return s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+      };
+      var wordsA = norm(a).split(/\s+/).filter(function(w) { return w.length > 2; });
+      var wordsB = norm(b).split(/\s+/).filter(function(w) { return w.length > 2; });
+      if (!wordsA.length || !wordsB.length) return _similaridade(a, b);
+
+      var shorter = wordsA.length <= wordsB.length ? wordsA : wordsB;
+      var longer  = wordsA.length <= wordsB.length ? wordsB : wordsA;
+      var matches = shorter.filter(function(w) { return longer.indexOf(w) !== -1; });
+
+      if (matches.length === shorter.length) return 0.90;
+      if (matches.length >= Math.ceil(shorter.length * 0.67)) return 0.75;
+      return _similaridade(a, b);
+    }
+
+    // ============================================================
+    //  AUTO-VÍNCULO DE MOTORISTA
+    // ============================================================
+
+    /**
+     * Executa logo após processar o CSV.
+     * Ordena enrichedTrip cronologicamente, extrai trecho e detecta motorista.
+     */
+    function _tentarAutoVinculo() {
+      if (_vinculos.length > 0) return;
+
+      var freq = {};
+      _enrichedTrip.forEach(function(p) {
+        var f = (p.funcionario || '').trim();
+        if (f && f.toLowerCase() !== 'não informado' && f.toLowerCase() !== 'nao informado') {
+          freq[f] = (freq[f] || 0) + 1;
+        }
+      });
+
+      var nomes = Object.keys(freq).sort(function(a, b) { return freq[b] - freq[a]; });
+
+      _autoVinculoDataList = nomes.map(function(nomeCsv) {
+        var pontos = _enrichedTrip
+          .filter(function(p) { return (p.funcionario || '').trim() === nomeCsv; })
+          .sort(function(a, b) {
+            var ta = a.entrada ? new Date(String(a.entrada).replace(' ', 'T')) : 0;
+            var tb = b.entrada ? new Date(String(b.entrada).replace(' ', 'T')) : 0;
+            return ta - tb;
+          });
+
+        // Intervalo real de seq do motorista (base para filtro de fallback)
+        var seqs = pontos.map(function(p) { return p.seq; });
+        var seqMin = seqs.length ? Math.min.apply(null, seqs) : null;
+        var seqMax = seqs.length ? Math.max.apply(null, seqs) : null;
+
+        // Usa TODOS os pontos do enrichedTrip no intervalo de seq para
+        // determinar início e fim — os registros do próprio motorista podem
+        // ter repetição de nome (garagem, pátio, etc.)
+        var noTrecho = (seqMin !== null)
+          ? _enrichedTrip.filter(function(p) {
+              return p.seq >= seqMin && p.seq <= seqMax && (p.ponto || '').trim();
+            })
+          : pontos.filter(function(p) { return (p.ponto || '').trim(); });
+
+        var nomesTrecho = noTrecho.map(function(p) { return (p.ponto || '').trim(); }).filter(Boolean);
+        var pontoInicio = nomesTrecho[0] || '';
+        var pontoFim    = nomesTrecho[nomesTrecho.length - 1] || '';
+
+        var sugestao = _sugerirMotorista(nomeCsv);
+        return {
+          nomeCsv:     nomeCsv,
+          motorista:   sugestao ? sugestao.motorista : null,
+          score:       sugestao ? sugestao.score : 0,
+          pontoInicio: pontoInicio,
+          pontoFim:    pontoFim,
+          seqMin:      seqMin,
+          seqMax:      seqMax,
+          editando:    false
+        };
+      });
+    }
+
+    /**
+     * Seleciona a opção de um <select> cujo value corresponda ao alvo
+     * (exato primeiro, depois trim+lowercase como fallback).
+     */
+    function _preencherSelectTrecho(sel, alvo) {
+      if (!sel || !alvo) return;
+      var alvoNorm = alvo.trim().toLowerCase();
+      // 1. Match exato por value
+      for (var i = 0; i < sel.options.length; i++) {
+        if (sel.options[i].value === alvo) { sel.selectedIndex = i; return; }
+      }
+      // 2. Match tolerante por value (trim + lowercase)
+      for (var j = 0; j < sel.options.length; j++) {
+        if (sel.options[j].value.trim().toLowerCase() === alvoNorm) {
+          sel.selectedIndex = j; return;
+        }
+      }
+      // 3. Match pelo texto/label da opção (quando o value é código mas o alvo é nome)
+      for (var k = 0; k < sel.options.length; k++) {
+        if (sel.options[k].text.trim().toLowerCase() === alvoNorm) {
+          sel.selectedIndex = k; return;
+        }
+      }
+    }
+
+    /**
+     * Busca o motorista mais similar ao nome/matrícula fornecido.
+     * Retorna { motorista, score } se score >= 55%, ou null.
+     */
+    function _sugerirMotorista(termo) {
+      if (!termo || !_motoristas || !_motoristas.length) return null;
+      var t = String(termo).trim().toUpperCase();
+
+      // 1. Match exato por iButton (código do CSV = ibutton cadastrado)
+      for (var i = 0; i < _motoristas.length; i++) {
+        var m = _motoristas[i];
+        if (m.ibutton && m.ibutton.trim().toUpperCase() === t) {
+          return { motorista: m, score: 100 };
+        }
+      }
+
+      // 2. Match por nome (palavra-a-palavra) ou matrícula (Levenshtein)
+      var melhor = null;
+      var melhorScore = 0.55;
+      _motoristas.forEach(function(m) {
+        var scoreNome = _similaridadeNome(t, (m.nome || '').toUpperCase());
+        var scoreMat  = _similaridade(t, String(m.matricula || '').toUpperCase());
+        var score = Math.max(scoreNome, scoreMat);
+        if (score > melhorScore) {
+          melhorScore = score;
+          melhor = m;
+        }
+      });
+      return melhor ? { motorista: melhor, score: Math.round(melhorScore * 100) } : null;
+    }
+
+    // ============================================================
+    //  HELPERS
+    // ============================================================
+
+    /**
+     * Popula os selects de trecho do sidebar (sidebarPontoInicio/Fim)
+     * com os pontos únicos do _enrichedTrip, excluindo os que estão em
+     * intervalos já ocupados por outros vínculos.
+     */
+    function _popularSidebarTrechoDeEnrichedTrip() {
+      var pontos = [];
+      var vistos = {};
+      _enrichedTrip.forEach(function(p) {
+        var nome = (p.ponto || '').trim();
+        if (nome && !vistos[nome]) {
+          vistos[nome] = true;
+          pontos.push({ valor: nome, label: nome });
+        }
+      });
+
+      var ocupados = _calcularPontosOcupados(pontos);
+      var disponiveis = pontos.filter(function(p) { return !ocupados.has(p.valor); });
+
+      ['sidebarPontoInicio', 'sidebarPontoFim'].forEach(function(id) {
+        var sel = document.getElementById(id);
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Selecione —</option>';
+        disponiveis.forEach(function(p) {
+          var opt = document.createElement('option');
+          opt.value = p.valor;
+          opt.textContent = p.label;
+          sel.appendChild(opt);
+        });
+      });
+    }
+
+    /**
+     * Gera relatório diretamente a partir das seleções inline da Coluna 3.
+     * Não abre o modal; usa enviarAPI=false.
+     */
+    function _onGerarRelatorioInline() {
+      if (!_enrichedTrip || !_enrichedTrip.length) {
+        UIModule.showToast('Processe uma viagem primeiro.', 'error');
+        return;
+      }
+
+      var tipoEl = document.querySelector('input[name="tipoRelatorio"]:checked');
+      var tipo = tipoEl ? tipoEl.value : 'MOTORISTA';
+
+      var selEsquema = document.getElementById('selectEsquema');
+      var idEsquema = selEsquema ? selEsquema.value : '';
+      var esqObj = _esquemas.find(function(e) { return e.id_esquema === idEsquema; });
+      var nomeLinha = esqObj ? esqObj.nome_linha : '';
+
+      var enviarAPI = true;
+
+      var params = {
+        tipo: tipo,
+        enviarAPI: enviarAPI,
+        idEsquema: idEsquema,
+        nomeLinha: nomeLinha,
+        horario: esqObj ? (esqObj.horario || '') : '',
+        enrichedTrip: _enrichedTrip,
+        esquemaPontos: _esquemaPontos,
+        segments: _analysis ? _analysis.segments : [],
+        summary:  _analysis ? _analysis.summary  : {},
+      };
+
+      if (tipo === 'MOTORISTA') {
+        var selMot = document.getElementById('relSelectMotorista');
+        var idx = selMot ? parseInt(selMot.value, 10) : NaN;
+        if (isNaN(idx) || idx < 0 || !_vinculos[idx]) {
+          UIModule.showToast('Selecione um motorista vinculado.', 'error');
+          return;
+        }
+        params.motorista = _vinculos[idx];
+      } else if (tipo === 'TRECHO') {
+        var pontoA = document.getElementById('relPontoA') ? document.getElementById('relPontoA').value : '';
+        var pontoB = document.getElementById('relPontoB') ? document.getElementById('relPontoB').value : '';
+        if (!pontoA || !pontoB) {
+          UIModule.showToast('Selecione os pontos A e B do trecho.', 'error');
+          return;
+        }
+        params.idPontoA = pontoA;
+        params.idPontoB = pontoB;
+      }
+      // tipo === 'COMPLETO': sem filtros adicionais
+
+      UIModule.showLoading('Capturando mapa e gerando relatório...');
+
+      _gerarComCaptura(params,
+        function (result) {
+          UIModule.hideLoading();
+          console.log('[App] Payload do relatório:', result.payload);
+          UIModule.showToast('Relatório gerado com sucesso!', 'success', 5000);
+          if (result.apiResponse) {
+            console.log('[App] Resposta da API:', result.apiResponse);
+            if (result.apiResponse.body && result.apiResponse.body.url) {
+              var fname2 = _buildPdfFilename(tipo, params.motorista);
+              _downloadPdf(result.apiResponse.body.url, fname2);
+            }
+            UIModule.showToast('PDF pronto para download.', 'success', 4000);
+          }
+        },
+        function (err) {
+          UIModule.hideLoading();
+          var msg = err && err.message ? err.message : String(err);
+          UIModule.showToast('Erro ao gerar relatório: ' + msg, 'error', 6000);
+          console.error('[App] Erro ao gerar relatório:', err);
+        }
+      );
+    }
+
+    /**
+     * Captura o mapa (se disponível), adiciona a base64 em params,
+     * e então chama google.script.run.gerarRelatorio.
+     */
+    function _gerarComCaptura(params, successFn, failureFn) {
+      // Calcula o intervalo de seq para que o servidor filtre o enrichedTrip corretamente.
+      // O mapa do PDF é gerado server-side via Google Maps Static API (mais confiável que html2canvas).
+      var tipo = params.tipo;
+      var seqA = null, seqB = null;
+
+      if (tipo === 'MOTORISTA' && params.motorista) {
+        seqA = _seqPorPonto(params.motorista.ponto_inicio);
+        seqB = _seqPorPonto(params.motorista.ponto_fim);
+      } else if (tipo === 'TRECHO' && params.idPontoA && params.idPontoB) {
+        seqA = _seqPorPonto(params.idPontoA);
+        seqB = _seqPorPonto(params.idPontoB);
+      }
+
+      if (seqA !== null && seqB !== null) {
+        params.seqInicio = Math.min(seqA, seqB);
+        params.seqFim    = Math.max(seqA, seqB);
+      }
+
+      google.script.run
+        .withSuccessHandler(successFn)
+        .withFailureHandler(failureFn)
+        .gerarRelatorio(params);
+    }
+
+    function _buildPdfFilename(tipo, motorista) {
+      var veiculo = (_analysis && _analysis.summary && _analysis.summary.veiculo)
+        ? String(_analysis.summary.veiculo).trim() : '';
+      var data = (_analysis && _analysis.summary && _analysis.summary.dataViagem)
+        ? _analysis.summary.dataViagem.replace(/\//g, '-') : '';
+      function slug(s) { return String(s).replace(/[^\w\u00C0-\u024F\-]/g, ' ').replace(/\s+/g, ' ').trim(); }
+      if (tipo === 'MOTORISTA' && motorista) {
+        var mat = motorista.matricula ? String(motorista.matricula).trim() : '';
+        var nome = motorista.nome ? slug(motorista.nome) : '';
+        return [mat, nome, veiculo, data].filter(Boolean).join(' - ') + '.pdf';
+      }
+      return [veiculo, 'ANALISE DE VIAGEM', data].filter(Boolean).join(' - ') + '.pdf';
+    }
+
+    /**
+     * Baixa um PDF a partir de uma URL remota (ex: signed URL do Supabase).
+     * Faz fetch → Blob → objectURL para contornar a limitação cross-origin
+     * do atributo `download`, abrindo o diálogo de "Salvar arquivo".
+     * Em caso de falha no fetch, abre em nova aba como fallback.
+     */
+    function _downloadPdf(url, filename) {
+      UIModule.showToast('Preparando download…', 'info', 2500);
+      fetch(url)
+        .then(function(res) {
+          if (!res.ok) throw new Error('HTTP ' + res.status);
+          return res.blob();
+        })
+        .then(function(blob) {
+          var blobUrl = URL.createObjectURL(blob);
+          var a = document.createElement('a');
+          a.href = blobUrl;
+          a.download = filename || 'relatorio.pdf';
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function() { URL.revokeObjectURL(blobUrl); }, 10000);
+        })
+        .catch(function() {
+          // Fallback: abre em nova aba se o fetch falhar (ex: CORS restritivo)
+          window.open(url, '_blank');
+        });
+    }
+
+    function _escHtml(str) {
+      return String(str || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+
+    // ============================================================
+    //  API PÚBLICA
+    // ============================================================
+
+    function getTrip() {
+      return _enrichedTrip;
+    }
+    function getAnalysis() {
+      return _analysis;
+    }
+    function getLocais() {
+      return _locaisCache;
+    }
+    function getComparacao() {
+      return _comparacao;
+    }
+    function getVinculos() {
+      return _vinculos;
+    }
+
+    // Armazena dados para renderização do mapa e exibe o botão "Visualizar Mapa"
+    function _agendarMapa(trip, comp, locais) {
+      _mapPending = { trip: trip, comp: comp, locais: locais };
+      var btn = document.getElementById('btnVerMapa');
+      var txt = document.getElementById('mapPlaceholderText');
+      if (btn) btn.style.display = 'inline-flex';
+      if (txt) txt.textContent = 'Rota processada — clique para visualizar o mapa';
+    }
+
+    // Chamado pelo botão "Visualizar Mapa" no placeholder
+    function abrirMapa() {
+      if (!_mapPending) return;
+      if (typeof MapModule === "undefined" || !MapModule) return;
+
+      // Inicializa o mapa Leaflet se ainda não foi feito
+      if (typeof MapModule.init === "function") {
+        try {
+          MapModule.init();
+          _mapsReady = _isMapUsable();
+        } catch (err) {
+          _mapsReady = false;
+          console.error("[App] Falha ao inicializar o mapa:", err);
+          return;
+        }
+      }
+
+      if (typeof MapModule.renderRoute === "function") {
+        MapModule.renderRoute(_mapPending.trip, _mapPending.comp, _mapPending.locais);
+      }
+    }
+
+    return {
+      init,
+      getTrip,
+      getAnalysis,
+      getLocais,
+      getComparacao,
+      getVinculos,
+      _removerVinculo,
+      _confirmarCard,
+      _toggleEditCard,
+      _toggleCadastroCard,
+      _buscarMotoristaCard,
+      _descartarCard,
+      _cadastrarConfirmarCard,
+      _onGerarRelatorioInline,
+      _novaAnalise: _onLimpar,
+      _setModo,
+      abrirMapa,
+    };
+  })();
+
+  // ---- Inicialização quando o DOM estiver pronto ----
+  document.addEventListener("DOMContentLoaded", function () {
+    AppModule.init();
+  });
+</script>

@@ -1,0 +1,22 @@
+# Local Apps Script project binding. Keep the real scriptId out of Git.
+.clasp.json
+
+# Local/editor metadata
+.claude/
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+
+# Dependency/cache folders, if tooling is added later
+node_modules/
+dist/
+build/
+.cache/

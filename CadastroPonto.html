@@ -1,0 +1,688 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8" />
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: 'Segoe UI', Arial, sans-serif;
+  font-size: 12px;
+  color: #1a1a2e;
+  background: #f5f6fa;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Header ── */
+.sidebar-header {
+  background: #1a1a2e;
+  color: #fff;
+  padding: 10px 14px 8px;
+  flex-shrink: 0;
+}
+.sidebar-header h2 {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+}
+.sidebar-header .subtitle {
+  font-size: 10px;
+  color: #aab;
+  margin-top: 2px;
+}
+
+/* ── Scrollable body ── */
+.sidebar-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+/* ── Footer ── */
+.sidebar-footer {
+  flex-shrink: 0;
+  padding: 10px 12px;
+  background: #fff;
+  border-top: 1px solid #e0e4f0;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* ── Section ── */
+.section-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #888;
+  margin-bottom: 5px;
+}
+
+/* ── Search combobox ── */
+.search-wrap { position: relative; }
+.search-input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid #d0d4e8;
+  border-radius: 5px;
+  font-size: 12px;
+  background: #fff;
+  outline: none;
+}
+.search-input:focus { border-color: #e8a000; }
+.search-input:disabled { background: #f0f0f0; color: #aaa; cursor: not-allowed; }
+
+.dropdown {
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 0; right: 0;
+  background: #fff;
+  border: 1px solid #d0d4e8;
+  border-radius: 5px;
+  max-height: 160px;
+  overflow-y: auto;
+  z-index: 999;
+  display: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+}
+.dropdown.open { display: block; }
+
+.opt {
+  padding: 7px 9px;
+  cursor: pointer;
+  border-bottom: 1px solid #f0f2f8;
+}
+.opt:last-child { border-bottom: none; }
+.opt:hover { background: #fef7e6; }
+.opt-main { font-weight: 600; font-size: 12px; color: #1a1a2e; }
+.opt-meta { font-size: 10px; color: #999; margin-top: 1px; }
+.opt-empty { padding: 9px; text-align: center; color: #bbb; font-style: italic; font-size: 11px; }
+.opt-disabled { opacity: 0.55; cursor: not-allowed; background: #fafafa; }
+.opt-disabled:hover { background: #fafafa !important; }
+.opt-ja-no-esquema {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  background: #e8f4fd;
+  color: #1976d2;
+  border: 1px solid #bee3f8;
+  border-radius: 3px;
+  padding: 0 5px;
+}
+
+mark { background: #ffe082; color: inherit; border-radius: 2px; }
+
+/* ── Esquema badge ── */
+.esquema-badge {
+  background: #fff8e1;
+  border: 1px solid #ffe082;
+  border-radius: 5px;
+  padding: 6px 10px;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 11px;
+}
+.esquema-badge .eid {
+  font-weight: 700;
+  font-size: 13px;
+  color: #e8a000;
+  white-space: nowrap;
+}
+.esquema-badge .einfo { line-height: 1.4; color: #5a5f7d; }
+
+/* ── Inserir select ── */
+.insert-select {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid #d0d4e8;
+  border-radius: 5px;
+  font-size: 12px;
+  background: #fff;
+  outline: none;
+}
+.insert-select:focus { border-color: #e8a000; }
+
+/* ── Add button ── */
+.btn-add {
+  width: 100%;
+  padding: 8px;
+  background: #e8a000;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+}
+.btn-add:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-add:hover:not(:disabled) { background: #d09000; }
+
+/* ── Sequence list ── */
+.seq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.seq-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 5px;
+  border: 1px solid #e0e4f0;
+  background: #fff;
+  min-height: 34px;
+}
+.seq-item.is-new {
+  border-color: #ffe082;
+  background: #fffdf0;
+}
+.seq-num {
+  font-weight: 700;
+  font-size: 10px;
+  color: #bbb;
+  min-width: 18px;
+  text-align: right;
+}
+.seq-name {
+  flex: 1;
+  font-size: 11px;
+  color: #1a1a2e;
+  line-height: 1.3;
+}
+.seq-name .seq-type {
+  font-size: 10px;
+  color: #888;
+  margin-top: 1px;
+}
+.seq-new-badge {
+  font-size: 9px;
+  font-weight: 700;
+  background: #e8a000;
+  color: #fff;
+  border-radius: 3px;
+  padding: 1px 5px;
+  white-space: nowrap;
+}
+.seq-rm {
+  background: none;
+  border: none;
+  color: #ccc;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  flex-shrink: 0;
+}
+.seq-rm:hover { color: #e53935; }
+
+.seq-empty {
+  text-align: center;
+  color: #bbb;
+  font-style: italic;
+  font-size: 11px;
+  padding: 12px 0;
+}
+
+.seq-insert-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 4px;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.seq-insert-btn:hover { opacity: 1 !important; }
+.seq-list:hover .seq-insert-btn { opacity: 0.35; }
+.seq-insert-btn .insert-line {
+  flex: 1;
+  height: 1px;
+  background: #e8a000;
+}
+.seq-insert-btn .insert-icon {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #e8a000;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* ── Divider ── */
+.divider { height: 1px; background: #e0e4f0; }
+
+/* ── Footer buttons ── */
+.btn-save {
+  flex: 1;
+  padding: 9px;
+  background: #1a1a2e;
+  color: #fff;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.btn-save:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-save:hover:not(:disabled) { background: #2c2c4a; }
+
+.btn-reset {
+  padding: 9px 12px;
+  background: #f0f2f8;
+  color: #5a5f7d;
+  border: none;
+  border-radius: 5px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-reset:hover { background: #e4e7f0; }
+
+/* ── Feedback ── */
+.feedback {
+  padding: 7px 10px;
+  border-radius: 5px;
+  font-size: 11px;
+  display: none;
+}
+.feedback.success { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; display: block; }
+.feedback.error   { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; display: block; }
+.feedback.info    { background: #e3f2fd; color: #1565c0; border: 1px solid #90caf9; display: block; }
+
+/* ── Unsaved pill ── */
+.unsaved-pill {
+  font-size: 10px;
+  background: #e8a000;
+  color: #fff;
+  border-radius: 10px;
+  padding: 2px 7px;
+  font-weight: 700;
+  display: none;
+}
+
+.section-box {
+  background: #fff;
+  border: 1px solid #e0e4f0;
+  border-radius: 6px;
+  padding: 10px;
+}
+</style>
+</head>
+<body>
+
+<div class="sidebar-header">
+  <h2>Cadastrar Ponto no Esquema</h2>
+  <div class="subtitle">Selecione o esquema e gerencie a sequência</div>
+</div>
+
+<div class="sidebar-body">
+
+  <!-- Esquema -->
+  <div class="section-box">
+    <div class="section-label">Esquema</div>
+    <div class="search-wrap">
+      <input type="text" id="esquemaSearch" class="search-input"
+        placeholder="Buscar por código, linha ou horário…" autocomplete="off" />
+      <div class="dropdown" id="esquemaDropdown"></div>
+    </div>
+    <div id="esquemaBadge" style="margin-top:7px; display:none;"></div>
+  </div>
+
+  <!-- Sequência atual -->
+  <div class="section-box" id="seqBox" style="display:none;">
+    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:6px;">
+      <div class="section-label" style="margin:0;">Sequência</div>
+      <span class="unsaved-pill" id="unsavedPill">alterado</span>
+    </div>
+    <div class="seq-list" id="seqList"></div>
+  </div>
+
+  <!-- Adicionar ponto -->
+  <div class="section-box" id="addBox" style="display:none;">
+    <div class="section-label">Adicionar Ponto</div>
+
+    <div style="margin-bottom:7px;">
+      <div style="font-size:10px; color:#888; margin-bottom:3px;">Inserir após</div>
+      <select class="insert-select" id="insertAfter">
+        <option value="-1">⬆ No início da sequência</option>
+      </select>
+    </div>
+
+    <div>
+      <div style="font-size:10px; color:#888; margin-bottom:3px;">Local</div>
+      <div class="search-wrap">
+        <input type="text" id="pontoSearch" class="search-input"
+          placeholder="Buscar por descrição ou tipo…" autocomplete="off" />
+        <div class="dropdown" id="pontoDropdown"></div>
+      </div>
+    </div>
+  </div>
+
+  <div id="feedbackEl" class="feedback"></div>
+
+</div>
+
+<div class="sidebar-footer">
+  <button class="btn-reset" id="btnReset" onclick="resetForm()">Limpar</button>
+  <button class="btn-save" id="btnSave" disabled>Salvar sequência</button>
+</div>
+
+<script>
+var _esquemas = [];
+var _locais   = [];
+var _selEsquema = null;
+var _sequencia  = []; // [{idPonto, nomePonto, isNew}]
+var _hasChanges = false;
+
+// ── Init ────────────────────────────────────────────────────
+window.onload = function() {
+  setFeedback('Carregando…', 'info');
+  google.script.run
+    .withSuccessHandler(function(d) {
+      _esquemas = d.esquemas || [];
+      _locais   = d.locais   || [];
+      setFeedback('', '');
+      document.getElementById('esquemaSearch').focus();
+    })
+    .withFailureHandler(function(e) { setFeedback('Erro: ' + e.message, 'error'); })
+    ._getDadosCadastroPonto();
+};
+
+// ── Helpers ─────────────────────────────────────────────────
+function norm(s) {
+  return (s||'').toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g,'')
+    .replace(/\s+/g,' ').trim();
+}
+function esc(s) {
+  return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function hl(text, q) {
+  if (!q) return esc(text);
+  var re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + ')', 'gi');
+  return esc(text).replace(re, '<mark>$1</mark>');
+}
+
+// ── Close dropdowns on outside click ────────────────────────
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#esquemaSearch') && !e.target.closest('#esquemaDropdown'))
+    document.getElementById('esquemaDropdown').classList.remove('open');
+  if (!e.target.closest('#pontoSearch') && !e.target.closest('#pontoDropdown'))
+    document.getElementById('pontoDropdown').classList.remove('open');
+});
+
+// ── Esquema search ───────────────────────────────────────────
+var esquemaInput = document.getElementById('esquemaSearch');
+var esquemaDrop  = document.getElementById('esquemaDropdown');
+
+esquemaInput.addEventListener('focus', function() { renderEsquemas(this.value); });
+esquemaInput.addEventListener('input', function() { renderEsquemas(this.value); });
+
+function renderEsquemas(q) {
+  var nq = norm(q);
+  var list = _esquemas.filter(function(e) {
+    return !nq
+      || norm(e.id_esquema).includes(nq)
+      || norm(e.nome_linha).includes(nq)
+      || norm(e.horario).includes(nq)
+      || norm(e.sentido).includes(nq);
+  }).slice(0, 50);
+
+  if (!list.length) {
+    esquemaDrop.innerHTML = '<div class="opt-empty">Nenhum resultado</div>';
+  } else {
+    esquemaDrop.innerHTML = list.map(function(e) {
+      return '<div class="opt" data-id="' + esc(e.id_esquema) + '">'
+        + '<div class="opt-main">' + hl(e.id_esquema, q) + ' — ' + hl(e.nome_linha, q) + '</div>'
+        + '<div class="opt-meta">'
+        + (e.horario ? '<span style="background:#fff8e1;color:#e8a000;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+        + esc(e.sentido || '')
+        + '</div></div>';
+    }).join('');
+  }
+  esquemaDrop.classList.add('open');
+  esquemaDrop.querySelectorAll('.opt').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      var id = el.getAttribute('data-id');
+      selecionarEsquema(_esquemas.find(function(e) { return e.id_esquema === id; }));
+    });
+  });
+}
+
+function selecionarEsquema(e) {
+  if (!e) return;
+  _selEsquema = e;
+  esquemaInput.value = e.id_esquema + ' — ' + e.nome_linha;
+  esquemaDrop.classList.remove('open');
+
+  document.getElementById('esquemaBadge').style.display = '';
+  document.getElementById('esquemaBadge').innerHTML =
+    '<div class="esquema-badge">'
+    + '<div class="eid">' + esc(e.id_esquema) + '</div>'
+    + '<div class="einfo"><strong>' + esc(e.nome_linha) + '</strong>'
+    + (e.horario ? '<br>' + esc(e.horario) : '')
+    + (e.sentido ? ' · ' + esc(e.sentido) : '')
+    + '</div></div>';
+
+  setFeedback('Carregando pontos…', 'info');
+  google.script.run
+    .withSuccessHandler(function(pontos) {
+      _sequencia = pontos.map(function(p) {
+        return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '', isNew: false };
+      });
+      _hasChanges = false;
+      renderSequencia();
+      preencherInsertAfter();
+      document.getElementById('seqBox').style.display = '';
+      document.getElementById('addBox').style.display = '';
+      document.getElementById('unsavedPill').style.display = 'none';
+      document.getElementById('btnSave').disabled = true;
+      setFeedback('', '');
+    })
+    .withFailureHandler(function(err) { setFeedback('Erro: ' + err.message, 'error'); })
+    .getPontosEsquemaParaFormulario(e.id_esquema);
+}
+
+// ── Sequence rendering ───────────────────────────────────────
+function _seqItemHtml(p, i) {
+  return '<div class="seq-item' + (p.isNew ? ' is-new' : '') + '">'
+    + '<div class="seq-num">' + (i+1) + '</div>'
+    + '<div class="seq-name">' + esc(p.nomePonto)
+    + (p.tipo ? '<div class="seq-type">' + esc(p.tipo) + '</div>' : '') + '</div>'
+    + (p.isNew ? '<span class="seq-new-badge">novo</span>' : '')
+    + '<button class="seq-rm" data-idx="' + i + '" title="Remover">✕</button>'
+    + '</div>';
+}
+
+function _insertBtnHtml(afterIdx) {
+  return '<div class="seq-insert-btn" data-after="' + afterIdx + '" title="Inserir ponto aqui">'
+    + '<div class="insert-line"></div>'
+    + '<div class="insert-icon">+</div>'
+    + '<div class="insert-line"></div>'
+    + '</div>';
+}
+
+function renderSequencia() {
+  var list = document.getElementById('seqList');
+  if (!_sequencia.length) {
+    list.innerHTML = '<div class="seq-empty">Nenhum ponto cadastrado</div>';
+    return;
+  }
+
+  // Interleave items with insert buttons
+  var html = _insertBtnHtml(-1); // before first
+  _sequencia.forEach(function(p, i) {
+    html += _seqItemHtml(p, i);
+    html += _insertBtnHtml(i); // after each item
+  });
+  list.innerHTML = html;
+
+  list.querySelectorAll('.seq-rm').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var idx = parseInt(btn.getAttribute('data-idx'));
+      _sequencia.splice(idx, 1);
+      markChanged();
+      renderSequencia();
+      preencherInsertAfter();
+    });
+  });
+
+  list.querySelectorAll('.seq-insert-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var after = parseInt(btn.getAttribute('data-after'));
+      document.getElementById('insertAfter').value = String(after);
+      document.getElementById('pontoSearch').focus();
+      // Scroll addBox into view
+      document.getElementById('addBox').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    });
+  });
+}
+
+function preencherInsertAfter() {
+  var sel = document.getElementById('insertAfter');
+  var prev = sel.value;
+  sel.innerHTML = '<option value="-1">⬆ No início da sequência</option>'
+    + _sequencia.map(function(p, i) {
+        return '<option value="' + i + '">Após ' + (i+1) + '. ' + esc(p.nomePonto) + '</option>';
+      }).join('');
+  // Restore position if still valid
+  if (prev !== '-1' && parseInt(prev) < _sequencia.length) sel.value = prev;
+  else sel.value = String(_sequencia.length - 1 >= 0 ? _sequencia.length - 1 : -1);
+}
+
+function markChanged() {
+  _hasChanges = true;
+  document.getElementById('unsavedPill').style.display = '';
+  document.getElementById('btnSave').disabled = false;
+}
+
+// ── Ponto search ─────────────────────────────────────────────
+var pontoInput = document.getElementById('pontoSearch');
+var pontoDrop  = document.getElementById('pontoDropdown');
+
+pontoInput.addEventListener('focus', function() { renderPontos(this.value); });
+pontoInput.addEventListener('input', function() { renderPontos(this.value); });
+
+function renderPontos(q) {
+  var nq = norm(q);
+  var list = _locais.filter(function(l) {
+    return !nq
+      || norm(l.descricao).includes(nq)
+      || norm(l.tipo).includes(nq)
+      || norm(l.codigo).includes(nq);
+  }).slice(0, 60);
+
+  if (!list.length) {
+    pontoDrop.innerHTML = '<div class="opt-empty">Nenhum resultado</div>';
+  } else {
+    pontoDrop.innerHTML = list.map(function(l) {
+      var pos = _sequencia.findIndex(function(p) { return p.idPonto === l.codigo; });
+      var jaNoEsquema = pos !== -1;
+      return '<div class="opt' + (jaNoEsquema ? ' opt-disabled' : '') + '" data-codigo="' + esc(l.codigo) + '">'
+        + '<div class="opt-main">' + hl(l.descricao, q) + '</div>'
+        + '<div class="opt-meta">'
+        + hl(l.codigo, q) + (l.tipo ? ' · ' + esc(l.tipo) : '')
+        + (jaNoEsquema ? ' &nbsp;<span class="opt-ja-no-esquema">já no esquema · pos. ' + (pos + 1) + '</span>' : '')
+        + '</div></div>';
+    }).join('');
+  }
+  pontoDrop.classList.add('open');
+  pontoDrop.querySelectorAll('.opt:not(.opt-disabled)').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      var cod = el.getAttribute('data-codigo');
+      var found = _locais.find(function(l) { return l.codigo === cod; });
+      if (found) selecionarPonto(found);
+    });
+  });
+}
+
+function selecionarPonto(l) {
+  pontoDrop.classList.remove('open');
+  var afterIdx = parseInt(document.getElementById('insertAfter').value);
+  var item = {
+    idPonto:   l.codigo,
+    nomePonto: l.descricao,
+    tipo:      l.tipo || '',
+    isNew: true
+  };
+  _sequencia.splice(afterIdx + 1, 0, item);
+  markChanged();
+  renderSequencia();
+  preencherInsertAfter();
+  pontoInput.value = '';
+  // Avança o "inserir após" para depois do ponto recém adicionado
+  document.getElementById('insertAfter').value = String(afterIdx + 1);
+}
+
+// ── Save ─────────────────────────────────────────────────────
+document.getElementById('btnSave').addEventListener('click', function() {
+  if (!_selEsquema || !_hasChanges) return;
+  var btn = document.getElementById('btnSave');
+  btn.disabled = true;
+  btn.textContent = 'Salvando…';
+
+  var payload = _sequencia.map(function(p) {
+    return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '' };
+  });
+
+  google.script.run
+    .withSuccessHandler(function() {
+      // Mark all as saved (not new)
+      _sequencia.forEach(function(p) { p.isNew = false; });
+      _hasChanges = false;
+      document.getElementById('unsavedPill').style.display = 'none';
+      btn.textContent = 'Salvar sequência';
+      btn.disabled = true;
+      renderSequencia();
+      setFeedback('Sequência salva com sucesso! (' + _sequencia.length + ' pontos)', 'success');
+    })
+    .withFailureHandler(function(err) {
+      setFeedback('Erro ao salvar: ' + err.message, 'error');
+      btn.disabled = false;
+      btn.textContent = 'Salvar sequência';
+    })
+    .salvarSequenciaPontos(_selEsquema.id_esquema, payload);
+});
+
+// ── Reset ────────────────────────────────────────────────────
+function resetForm() {
+  _selEsquema = null;
+  _sequencia  = [];
+  _hasChanges = false;
+  esquemaInput.value = '';
+  pontoInput.value   = '';
+  document.getElementById('esquemaBadge').style.display = 'none';
+  document.getElementById('seqBox').style.display = 'none';
+  document.getElementById('addBox').style.display = 'none';
+  document.getElementById('unsavedPill').style.display = 'none';
+  document.getElementById('btnSave').disabled = true;
+  document.getElementById('insertAfter').innerHTML = '<option value="-1">⬆ No início da sequência</option>';
+  setFeedback('', '');
+  esquemaInput.focus();
+}
+
+function setFeedback(msg, type) {
+  var el = document.getElementById('feedbackEl');
+  el.textContent = msg;
+  el.className = 'feedback' + (type ? ' ' + type : '');
+}
+</script>
+</body>
+</html>
