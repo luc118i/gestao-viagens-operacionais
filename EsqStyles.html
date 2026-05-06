@@ -100,19 +100,23 @@ body {
 /* ── Search dropdown ── */
 .sw { position: relative; }
 .sd {
-  position: absolute; top: calc(100% + 3px); left: 0; right: 0;
-  background: #fff; border: 1px solid #d4d8e8; border-radius: 7px;
-  max-height: 210px; overflow-y: auto; z-index: 600;
-  display: none; box-shadow: 0 6px 22px rgba(0,0,0,0.13);
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: #fff; border: 1px solid #d4d8e8; border-radius: 9px;
+  max-height: 260px; overflow-y: auto; z-index: 600;
+  display: none; box-shadow: 0 8px 28px rgba(0,0,0,0.14);
 }
 .sd.open { display: block; }
-.sdi { padding: 8px 11px; cursor: pointer; border-bottom: 1px solid #f0f2f8; }
+.sdi {
+  padding: 10px 14px; cursor: pointer;
+  border-bottom: 1px solid #eef0f6;
+  transition: background 0.12s;
+}
 .sdi:last-child { border-bottom: none; }
-.sdi:hover { background: #fff8f0; }
+.sdi:hover { background: #fff5ee; }
 .sdi.off { opacity: 0.48; cursor: not-allowed; pointer-events: none; }
-.sdi-main { font-size: 12px; font-weight: 600; color: #1a1d23; }
-.sdi-meta { font-size: 10px; color: #9aa0ad; margin-top: 2px; }
-.sd-empty { padding: 13px; text-align: center; color: #bbb; font-style: italic; font-size: 12px; }
+.sdi-main { font-size: 13px; font-weight: 600; color: #1a1d23; line-height: 1.35; }
+.sdi-meta { font-size: 11px; color: #6b7288; margin-top: 3px; }
+.sd-empty { padding: 18px; text-align: center; color: #b0b5c8; font-style: italic; font-size: 12px; }
 mark { background: #ffe082; border-radius: 2px; color: inherit; }
 
 /* ── Buttons ── */
