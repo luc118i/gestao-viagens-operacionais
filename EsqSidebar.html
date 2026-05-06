@@ -1,0 +1,32 @@
+<!-- ── Left panel — only points ── -->
+<div class="panel">
+  <div class="panel-body points-only">
+
+    <!-- Points card — full panel height -->
+    <div class="card full-panel" id="ptCard" style="display:none;">
+      <div class="card-head">
+        Pontos
+        <span class="count-badge" id="ptCount">0</span>
+        <span class="pill pill-orange" id="ptUnsaved" style="display:none; margin-left:4px;">alterado</span>
+      </div>
+      <div class="card-controls">
+        <div class="ins-row">
+          <span class="ins-lbl">Inserir após:</span>
+          <select class="fs" id="insAfter" style="flex:1; font-size:12px; padding:5px 8px;"></select>
+        </div>
+        <div class="sw" style="margin-top:8px;">
+          <input type="text" id="ptSearch" class="fi" placeholder="Buscar ponto por nome, código ou tipo…" autocomplete="off" />
+          <div class="sd" id="ptDrop"></div>
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="seq-list" id="seqList">
+          <div class="seq-empty">Nenhum ponto. Busque acima para adicionar.</div>
+        </div>
+      </div>
+      <!-- btnSalvSeq mantido oculto: usado programaticamente por salvarTudo() -->
+      <button id="btnSalvSeq" style="display:none;" disabled></button>
+    </div>
+
+  </div><!-- /panel-body -->
+</div><!-- /panel -->

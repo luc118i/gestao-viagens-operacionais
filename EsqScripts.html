@@ -1,0 +1,1834 @@
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+// ============================================================
+//  Estado
+// ============================================================
+var _esqs    = [];
+var _locais  = [];
+var _lMap    = {};
+var _sel     = null;
+var _seq     = [];
+var _isNovo  = false;
+var _seqDirt = false;
+
+var _map     = null;
+var _markers = [];
+var _poly    = null;
+
+// ============================================================
+//  Horário — estado persistente
+// ============================================================
+var _view            = 'mapa';
+var _comercialBase   = null;
+var _comercialAbsMap = {};
+var _lastCalc        = null;
+var _pendingSelectIdx = null;
+var _activeHorRow    = null;
+var _pdfCols     = { chegada:true, parada:true, saida:true, desl:true, comercial:true, dif:true };
+var _pdfTitle    = '';
+var _pdfSubtitle = '';
+var _osrmLegs        = undefined;
+var _osrmSeqKey      = '';
+var _osrmGeometry    = null;
+var _comercialTimes  = {};
+var _horStartIdx     = 0;
+var _customStopTimes = {};
+var _legVia          = {};
+var _osrmStatus      = 'pending';
+var _horSidebarHidden = (function(){ try { return localStorage.getItem('vc_hor_sidebar') === 'hidden'; } catch(e){ return false; } })();
+var _horOsmHidden     = (function(){ try { return localStorage.getItem('vc_hor_osm')     === 'hidden'; } catch(e){ return false; } })();
+
+// Tempo de parada (minutos) por tipo de ponto
+var STOP_TIMES = {
+  RODOVIARIA: 15, TERMINAL: 15, RODOVIARIO: 15,
+  GARAGEM: 20,
+  POSTO: 20, POSTO_COMBUSTIVEL: 20, ABASTECIMENTO: 20,
+  PEDAGIO: 2, PEDAGIO_PARADA: 2,
+  PONTO: 5, PARADA: 5
+};
+var STOP_DEFAULT = 5;
+var MIN_LEG_TV   = 30;
+
+function _stopTime(tipo) {
+  if (!tipo) return STOP_DEFAULT;
+  var t = tipo.trim().toUpperCase().replace(/\s+/g, '_').replace(/[^A-Z_]/g, '');
+  for (var k in STOP_TIMES) {
+    if (t.indexOf(k) !== -1) return STOP_TIMES[k];
+  }
+  return STOP_DEFAULT;
+}
+
+function _getStopTime(idx, tipo) {
+  var key = _seq[idx] ? _seq[idx].idPonto : idx;
+  return _customStopTimes[key] !== undefined ? _customStopTimes[key] : _stopTime(tipo);
+}
+
+// Haversine client-side (km) — mantido para uso eventual no mapa
+function _hvs(lat1, lng1, lat2, lng2) {
+  var R = 6371, tr = function(d){ return d * Math.PI / 180; };
+  var dLat = tr(lat2 - lat1), dLng = tr(lng2 - lng1);
+  var a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+          Math.cos(tr(lat1))*Math.cos(tr(lat2))*
+          Math.sin(dLng/2)*Math.sin(dLng/2);
+  return Math.round(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a)) * 10) / 10;
+}
+
+// Normaliza qualquer valor de horário para "HH:MM"
+function _normalizeHHMM(val) {
+  if (!val) return '';
+  var s = String(val).trim();
+  var m = s.match(/^(\d{1,2}):(\d{2})/);
+  if (m) return ('0' + m[1]).slice(-2) + ':' + m[2];
+  var dm = s.match(/\b(\d{1,2}):(\d{2}):\d{2}\b/);
+  if (dm) return ('0' + dm[1]).slice(-2) + ':' + dm[2];
+  return '';
+}
+
+// "HH:MM" → total minutos
+function _p(s) {
+  if (!s) return 0;
+  var p = s.split(':'); return (+p[0] || 0) * 60 + (+p[1] || 0);
+}
+// total minutos → "HH:MM"
+function _ms(m) {
+  m = Math.round(m);
+  var h = Math.floor(m / 60) % 24, mm = m % 60;
+  return ('0' + h).slice(-2) + ':' + ('0' + mm).slice(-2);
+}
+
+// Diferença entre horário comercial e chegada calculada.
+// Usa _comercialAbsMap quando disponível para rotas multi-dia.
+function _diffMin(comVal, chegadaMin, idPonto) {
+  if (idPonto !== undefined && _comercialAbsMap[idPonto] !== undefined) {
+    return _comercialAbsMap[idPonto] - chegadaMin;
+  }
+  if (_comercialBase !== null) {
+    var comElapsed = _p(comVal) - _comercialBase.comMin;
+    while (comElapsed < 0) comElapsed += 1440;
+    var calcElapsed = chegadaMin - _comercialBase.calcMin;
+    return comElapsed - calcElapsed;
+  }
+  var base = chegadaMin % 1440;
+  var diff = _p(comVal) - base;
+  if (diff < -720) diff += 1440;
+  if (diff >  720) diff -= 1440;
+  return diff;
+}
+
+// Reconstrói _comercialBase e _comercialAbsMap incrementalmente.
+function _recomputeComercialBase(c) {
+  _comercialBase   = null;
+  _comercialAbsMap = {};
+  if (!c) return;
+  var absMin    = null;
+  var prevClock = null;
+  for (var i = 0; i < c.pontos.length; i++) {
+    var p = c.pontos[i];
+    if (p.preDep || p.chegadaMin === null) continue;
+    var idPonto = _seq[i].idPonto;
+    var comVal  = _comercialTimes[idPonto] || '';
+    if (!comVal) continue;
+    var clock = _p(comVal);
+    if (absMin === null) {
+      absMin = clock;
+      _comercialBase = { comMin: clock, calcMin: p.chegadaMin };
+    } else {
+      var delta = clock - prevClock;
+      if (delta < 0) delta += 1440;
+      absMin = absMin + delta;
+    }
+    prevClock = clock;
+    _comercialAbsMap[idPonto] = absMin;
+  }
+}
+
+// minutos → "Xh YYmin"
+function _dur(m) {
+  m = Math.round(m);
+  if (!m || m < 1) return '—';
+  var h = Math.floor(m / 60), mm = m % 60;
+  if (h && mm) return h + 'h ' + ('0' + mm).slice(-2) + 'min';
+  if (h)        return h + 'h';
+  return mm + 'min';
+}
+// minutos → "HH:MM" (duração)
+function _hhmm(m) {
+  m = Math.round(m || 0);
+  var h = Math.floor(m / 60), mm = m % 60;
+  return ('0' + h).slice(-2) + ':' + ('0' + mm).slice(-2);
+}
+
+// ============================================================
+//  OSRM — distâncias reais de rota
+// ============================================================
+function _seqCoordsKey() {
+  return _seq
+    .filter(function(p){ return p.lat && p.lng; })
+    .map(function(p){ return (+p.lat).toFixed(5) + ',' + (+p.lng).toFixed(5); })
+    .join('|');
+}
+
+function _fetchOsrmDistances(callback) {
+  var pts = _seq.filter(function(p){ return p.lat && p.lng; });
+  if (pts.length < 2) { callback(null, null); return; }
+
+  function normKey(a, b) { return a <= b ? (a+':'+b) : (b+':'+a); }
+
+  var pairs = pts.slice(0, -1).map(function(pt, i) {
+    return { a: pt.idPonto, b: pts[i+1].idPonto };
+  });
+
+  function legsFromCache(cached) {
+    return pts.slice(0, -1).map(function(pt, i) {
+      var km = cached[normKey(pt.idPonto, pts[i+1].idPonto)];
+      return km > 0 ? { distKm: km, durationMin: 0 } : null;
+    });
+  }
+
+  function callOsrm(cached) {
+    var coords = pts.map(function(p){
+      return (+p.lng).toFixed(6) + ',' + (+p.lat).toFixed(6);
+    }).join(';');
+    var url = 'https://router.project-osrm.org/route/v1/driving/' + coords
+            + '?overview=full&geometries=geojson&annotations=false&continue_straight=false';
+
+    fetch(url)
+      .then(function(r){ return r.ok ? r.json() : Promise.reject('http'); })
+      .then(function(data) {
+        if (!data || data.code !== 'Ok' || !data.routes || !data.routes[0])
+          return Promise.reject('no-route');
+
+        var route = data.routes[0];
+        var legs  = route.legs.map(function(l) {
+          return {
+            distKm:      Math.round(l.distance / 100) / 10,
+            durationMin: Math.round(l.duration  / 6)  / 10
+          };
+        });
+
+        var toSave = [];
+        legs.forEach(function(leg, i) {
+          if (leg.distKm > 0) {
+            var key = normKey(pts[i].idPonto, pts[i+1].idPonto);
+            if (!(cached[key] > 0))
+              toSave.push({ a: pts[i].idPonto, b: pts[i+1].idPonto, km: leg.distKm });
+          }
+        });
+        if (toSave.length && typeof google !== 'undefined' && google.script)
+          google.script.run.saveDistanciasCached(toSave);
+
+        _osrmStatus = 'ok';
+        var geom = route.geometry && route.geometry.coordinates
+          ? route.geometry.coordinates.map(function(c){ return [c[1], c[0]]; })
+          : null;
+        callback(legs, geom);
+      })
+      .catch(function() {
+        var fallback = legsFromCache(cached || {});
+        var hasAny   = fallback.some(function(l){ return l !== null; });
+        _osrmStatus  = hasAny ? 'cache' : 'unavailable';
+        callback(hasAny ? fallback : null, null);
+      });
+  }
+
+  if (typeof google !== 'undefined' && google.script) {
+    google.script.run
+      .withSuccessHandler(function(cached) {
+        var allHit = pairs.every(function(p){ return cached[normKey(p.a, p.b)] > 0; });
+        if (allHit) {
+          _osrmStatus = 'cache';
+          callback(legsFromCache(cached), null);
+        } else {
+          callOsrm(cached);
+        }
+      })
+      .withFailureHandler(function(){ callOsrm({}); })
+      .getDistanciasCached(pairs);
+  } else {
+    callOsrm({});
+  }
+}
+
+// ============================================================
+//  Preset de velocidade
+// ============================================================
+function setPreset(btn, vel) {
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b){ b.classList.remove('active'); });
+  btn.classList.add('active');
+  document.getElementById('horVelMedia').value = vel;
+  renderHorario();
+}
+
+// ============================================================
+//  Toggle painéis do horário
+// ============================================================
+function toggleHorSidebar() {
+  _horSidebarHidden = !_horSidebarHidden;
+  try { localStorage.setItem('vc_hor_sidebar', _horSidebarHidden ? 'hidden' : 'visible'); } catch(e) {}
+  var el = document.getElementById('horSidebarWrap');
+  if (!el) return;
+  el.classList.toggle('hor-sidebar-collapsed', _horSidebarHidden);
+  el.querySelector('.hor-panel-close').title = _horSidebarHidden ? 'Mostrar' : 'Ocultar';
+}
+
+function toggleHorOsm() {
+  _horOsmHidden = !_horOsmHidden;
+  try { localStorage.setItem('vc_hor_osm', _horOsmHidden ? 'hidden' : 'visible'); } catch(e) {}
+  var el = document.getElementById('horOsmWrap');
+  if (el) el.style.display = _horOsmHidden ? 'none' : '';
+}
+
+// ============================================================
+//  Toggle Mapa / Horário
+// ============================================================
+function toggleView(v) {
+  _view = v;
+  try { localStorage.setItem('vc_view', v); } catch(e) {}
+  var mapEl  = document.getElementById('map');
+  var mapPh  = document.getElementById('mapPh');
+  var mapLeg = document.getElementById('mapLegend');
+  var horPan = document.getElementById('horPanel');
+  var btnM   = document.getElementById('btnViewMapa');
+  var btnH   = document.getElementById('btnViewHorario');
+
+  if (v === 'horario') {
+    mapEl.style.display  = 'none';
+    mapPh.style.display  = 'none';
+    mapLeg.classList.remove('show');
+    horPan.style.display = 'flex';
+    btnM.classList.remove('active'); btnH.classList.add('active');
+    var selHor = (_sel && _sel.horario) ? _sel.horario.trim() : '';
+    if (/^\d{2}:\d{2}$/.test(selHor)) document.getElementById('horHoraPartida').value = selHor;
+    renderHorario();
+  } else {
+    horPan.style.display = 'none';
+    btnM.classList.add('active'); btnH.classList.remove('active');
+    updateMap();
+  }
+}
+
+// ============================================================
+//  Cálculo de horário
+// ============================================================
+function _calcHorario(osrmLegs) {
+  var vel      = parseFloat(document.getElementById('horVelMedia').value) || 80;
+  var partida  = document.getElementById('horHoraPartida').value || '00:00';
+  var startIdx = Math.min(_horStartIdx, _seq.length - 1);
+  var cur      = _p(partida);
+  var res = [], distTotal = 0, tvTotal = 0, tpTotal = 0;
+  var osrmOk   = Array.isArray(osrmLegs) && osrmLegs.length > 0;
+
+  var coordRank = {};
+  if (osrmOk) {
+    var r = 0;
+    _seq.forEach(function(p, i){ if (p.lat && p.lng) coordRank[i] = r++; });
+  }
+
+  _seq.forEach(function(p, i) {
+    var preDep  = (i < startIdx);
+    var isStart = (i === startIdx);
+    var isLast  = (i === _seq.length - 1);
+
+    var dist = 0, tv = 0, distSource = 'none', timeSource = 'none';
+    if (!preDep && !isStart) {
+      var prev = _seq[i - 1];
+      var legViaType = _legVia[prev.idPonto];
+      var legVel = legViaType ? ({ BR:85, Est:75, Mun:60, Urb:45 }[legViaType] || vel) : vel;
+      var pRank = osrmOk ? coordRank[i - 1] : undefined;
+      var cRank = osrmOk ? coordRank[i]     : undefined;
+      var leg   = (osrmOk && pRank !== undefined && cRank !== undefined
+                   && cRank === pRank + 1) ? osrmLegs[pRank] : null;
+      if (leg) {
+        dist = leg.distKm; distSource = 'osrm';
+        tv   = Math.max(Math.round((leg.distKm / legVel) * 60), MIN_LEG_TV);
+        timeSource = 'vel';
+      } else {
+        dist = 0; distSource = 'none';
+        tv   = MIN_LEG_TV; timeSource = 'min';
+      }
+    }
+
+    var tp = (preDep || isStart || isLast) ? 0 : _getStopTime(i, p.tipo);
+
+    var chegada, saida;
+    if (preDep) {
+      chegada = null; saida = null;
+    } else if (isStart) {
+      chegada = cur; saida = cur;
+    } else {
+      chegada = cur + tv; saida = chegada + tp;
+    }
+
+    if (!preDep) {
+      distTotal += dist; tvTotal += tv; tpTotal += tp;
+      if (saida !== null) cur = isLast ? chegada : saida;
+    }
+
+    res.push({
+      idx: i, nomePonto: p.nomePonto, tipo: p.tipo || '',
+      preDep: preDep,
+      dist: Math.round(dist * 10) / 10,
+      tv: tv, tp: tp,
+      chegadaMin: chegada !== null ? Math.round(chegada) : null,
+      saidaMin:   (!preDep && !isLast && saida !== null) ? Math.round(saida) : null,
+      hasCoords:  !!(p.lat && p.lng),
+      distSource: distSource,
+      timeSource: timeSource
+    });
+  });
+
+  var anyOsrm  = res.some(function(p){ return p.distSource === 'osrm'; });
+  var lastCalc = res.slice().reverse().find(function(p){ return p.chegadaMin !== null; });
+  return {
+    pontos:       res,
+    distTotal:    Math.round(distTotal * 10) / 10,
+    tvTotal:      Math.round(tvTotal),
+    tpTotal:      Math.round(tpTotal),
+    totalMin:     Math.round(tvTotal + tpTotal),
+    chegadaFinal: lastCalc ? lastCalc.chegadaMin : _p(partida),
+    usedOsrm:     anyOsrm,
+    vel:          vel
+  };
+}
+
+// ============================================================
+//  Renderiza painel de horário
+// ============================================================
+function renderHorario() {
+  var body = document.getElementById('horBody');
+  if (!body) return;
+
+  if (!_sel || !_seq.length) {
+    body.innerHTML = '<div style="text-align:center;color:#9aa0ad;padding:40px 20px;">'
+      + (!_sel ? 'Selecione um esquema para calcular o horário.'
+               : 'Adicione pontos ao esquema para calcular o horário.')
+      + '</div>';
+    return;
+  }
+
+  var key = _seqCoordsKey();
+
+  if (_osrmSeqKey === key && _osrmLegs !== undefined) {
+    _renderHorarioWith(_osrmLegs);
+    return;
+  }
+
+  _osrmSeqKey  = key;
+  _osrmLegs    = undefined;
+  _osrmStatus  = 'pending';
+  _renderHorarioWith(null);
+
+  _fetchOsrmDistances(function(legs, geom) {
+    if (_osrmSeqKey !== key) return;
+    _osrmLegs     = legs;
+    _osrmGeometry = geom;
+    if (_view === 'horario') {
+      _renderHorarioWith(legs);
+    } else if (geom && _poly) {
+      _poly.setLatLngs(geom);
+    }
+  });
+}
+
+function _buildStatsHtml(c, osrmLegs) {
+  var _S = function(bg,co,bo,txt){ return '<span style="background:'+bg+';color:'+co+';border:1px solid '+bo+';border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;">'+txt+'</span>'; };
+  var distBadge = _osrmStatus === 'pending'
+    ? _S('#e3f2fd','#1565c0','#90caf9','⏳ Calculando…')
+    : _osrmStatus === 'ok'
+      ? _S('#e8f5e9','#2e7d32','#a5d6a7','📍 Traçado real (OSM)')
+      : _osrmStatus === 'cache'
+        ? _S('#e8eaf6','#283593','#9fa8da','📦 Cache de distâncias')
+        : _S('#fce4ec','#c62828','#ef9a9a','⚠️ OSRM indisponível — mín. 30 min');
+  var timeBadge = '<span style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;">⏱ ' + Math.round(c.vel || 85) + ' km/h</span>';
+  return '<div class="hor-src-bar">' + distBadge + timeBadge + '</div>'
+    + '<div class="hor-summary">'
+    + '<div class="hor-stat"><div class="hor-stat-val">' + c.distTotal + ' km</div><div class="hor-stat-lbl">Distância total</div></div>'
+    + '<div class="hor-stat"><div class="hor-stat-val">' + _hhmm(c.tvTotal) + '</div><div class="hor-stat-lbl">Em deslocamento</div></div>'
+    + '<div class="hor-stat"><div class="hor-stat-val">' + _hhmm(c.tpTotal) + '</div><div class="hor-stat-lbl">Em paradas</div></div>'
+    + '<div class="hor-stat" style="background:#fff8f0;border-color:#fddcb3;">'
+      + '<div class="hor-stat-val" style="color:#f47920;">' + _hhmm(c.totalMin) + '</div>'
+      + '<div class="hor-stat-lbl">Tempo total</div></div>'
+    + '</div>';
+}
+
+function _renderHorarioWith(osrmLegs) {
+  var body = document.getElementById('horBody');
+  if (!body) return;
+
+  _updateStartPtSelect();
+
+  var c       = _calcHorario(osrmLegs);
+  _lastCalc   = c;
+  _recomputeComercialBase(c);
+  var partida  = document.getElementById('horHoraPartida').value || '00:00';
+  var startIdx = Math.min(_horStartIdx, _seq.length - 1);
+
+  // ── Sidebar ────────────────────────────────────
+  var sideItems = c.pontos.map(function(p, i) {
+    var comVal   = _comercialTimes[_seq[i].idPonto] || '';
+    var preDep   = p.preDep;
+    var chegaStr = preDep ? '—' : (p.chegadaMin !== null ? _ms(p.chegadaMin) : partida);
+    var deltaHtml = '';
+    if (!preDep && comVal && p.chegadaMin !== null) {
+      var diff = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto);
+      var cls3, sign3;
+      if      (diff >  2) { cls3 = 'delta-ok';   sign3 = '+'; }
+      else if (diff < -2) { cls3 = 'delta-late';  sign3 = '−'; }
+      else                { cls3 = 'delta-warn';  sign3 = '≈'; }
+      deltaHtml = '<span class="hor-sidebar-delta ' + cls3 + '">'
+        + sign3 + (Math.abs(diff) > 1 ? _dur(Math.abs(diff)) : '') + '</span>';
+    }
+    var startMark = (i === startIdx)
+      ? '<span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;">✈</span>' : '';
+    return '<div class="hor-sidebar-item" id="horSbar' + i + '"'
+      + (preDep ? ' style="opacity:0.4;"' : '') + '>'
+      + '<div class="hor-sidebar-num">' + (i + 1) + startMark + '</div>'
+      + '<div class="hor-sidebar-name" title="' + esc(p.nomePonto) + '">' + esc(p.nomePonto) + '</div>'
+      + '<div class="hor-sidebar-time">' + chegaStr + deltaHtml + '</div>'
+      + '</div>';
+  }).join('');
+
+  var sidebarHidden = _horSidebarHidden;
+  var sidebar = '<div class="hor-sidebar' + (sidebarHidden ? ' hor-sidebar-collapsed' : '') + '" id="horSidebarWrap">'
+    + '<div class="hor-sidebar-head">Pontos <span class="count-badge">' + c.pontos.length + '</span>'
+    + '<button class="hor-panel-close" onclick="toggleHorSidebar()" title="' + (sidebarHidden ? 'Mostrar' : 'Ocultar') + ' painel">×</button>'
+    + '</div>'
+    + '<div class="hor-sidebar-list">' + sideItems + '</div>'
+    + '</div>';
+
+  var stats = '<div id="horStatsPanel">' + _buildStatsHtml(c, osrmLegs) + '</div>';
+
+  // ── Tabela por ponto ───────────────────────────
+  var rows = c.pontos.map(function(p, i) {
+    var isStart = (i === startIdx);
+    var isLast  = (i === c.pontos.length - 1);
+    var preDep  = p.preDep;
+
+    var cls = isStart ? ' class="row-first"' : isLast ? ' class="row-last"' : '';
+    if (preDep) cls = ' class="row-predep"';
+
+    if (preDep) {
+      return '<tr id="horRow' + i + '" class="row-predep">'
+        + '<td style="font-weight:600;">' + esc(p.nomePonto) + '</td>'
+        + '<td colspan="6" style="text-align:center;font-style:italic;color:#bbb;font-size:10px;">pré-partida</td>'
+        + '</tr>';
+    }
+
+    var tvCel = _buildLegViaCell(i, c);
+
+    var tpCel;
+    if (isStart || isLast) {
+      tpCel = '—';
+    } else {
+      var tpVals = [2,5,10,15,20,30,40];
+      var tpMatch = tpVals.indexOf(p.tp) !== -1 ? p.tp : null;
+      var tpOpts = (tpMatch === null ? '<option value="' + p.tp + '" selected>' + _hhmm(p.tp) + '</option>' : '')
+        + tpVals.map(function(v){
+            return '<option value="' + v + '"' + (p.tp === v ? ' selected' : '') + '>' + _hhmm(v) + '</option>';
+          }).join('');
+      tpCel = '<select class="hor-tp-input" onchange="onStopTimeChange(' + i + ',this.value)">' + tpOpts + '</select>';
+    }
+
+    var chegStr = p.chegadaMin !== null ? _ms(p.chegadaMin) : partida;
+    if (isStart) chegStr = partida;
+    var saidStr = p.saidaMin !== null
+                ? _ms(p.saidaMin)
+                : (p.chegadaMin !== null
+                    ? '<strong style="color:#f47920;">★ ' + _ms(p.chegadaMin) + '</strong>'
+                    : '—');
+
+    var cidadeCell = '<td style="font-weight:600;">'
+      + esc(p.nomePonto)
+      + (isStart ? ' <span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;">✈</span>' : '')
+      + '</td>';
+
+    var comVal  = _comercialTimes[_seq[i].idPonto] || '';
+    var comCell;
+    if (comVal) {
+      comCell = '<span class="hor-com-display" onclick="editComercial(' + i + ',this)">'
+              + esc(comVal) + '<span class="hor-com-edit-icon">✎</span></span>';
+    } else {
+      comCell = '<input type="text" class="hor-com-input" placeholder="HH:MM" '
+              + 'onfocus="highlightRow(' + i + ')" '
+              + 'oninput="_autoFormatTime(this)" '
+              + 'onblur="_confirmComercial(' + i + ',this)" '
+              + 'onkeydown="if(event.key===\'Enter\'){event.preventDefault();_confirmComercial(' + i + ',this)}'
+              + 'else if(event.key===\'Escape\'){this.value=\'\';unhighlightRow(' + i + ')}" />';
+    }
+    var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+
+    return '<tr id="horRow' + i + '"' + cls + ' onclick="selectHorRow(' + i + ')">'
+      + cidadeCell
+      + '<td style="text-align:center;font-weight:600;">' + chegStr + '</td>'
+      + '<td style="text-align:center;">' + tpCel + '</td>'
+      + '<td style="text-align:center;font-weight:600;">' + saidStr + '</td>'
+      + '<td class="hor-via-td">' + tvCel + '</td>'
+      + '<td style="text-align:center;">' + comCell + '</td>'
+      + '<td id="horDelta' + i + '" style="text-align:center;">' + deltaCell + '</td>'
+      + '</tr>';
+  }).join('');
+
+  var table = '<div class="hor-table-wrap"><table class="hor-table" style="min-width:560px;">'
+    + '<thead><tr>'
+    + '<th>Cidade</th>'
+    + '<th style="text-align:center;">Chegada</th>'
+    + '<th style="text-align:center;">Parada</th>'
+    + '<th style="text-align:center;">Saída</th>'
+    + '<th style="text-align:right;" title="Tempo até o próximo ponto — passe o mouse para configurar o tipo de via do trecho">Temp. Desl. ↓</th>'
+    + '<th style="text-align:center;">Comercial</th>'
+    + '<th style="text-align:center;" title="Diferença: Comercial − Calculado (+folga / −estouro)">Dif.</th>'
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '</table></div>';
+
+  var main = '<div class="hor-main">' + stats + table + _buildComAnalysis(c) + '</div>';
+  var _prevMain = body.querySelector('.hor-main');
+  var _savedScroll = _prevMain ? _prevMain.scrollTop : 0;
+  body.innerHTML = sidebar + main;
+  requestAnimationFrame(function() {
+    var nm = body.querySelector('.hor-main');
+    var focusIdx = _pendingSelectIdx !== null ? _pendingSelectIdx : _activeHorRow;
+    if (focusIdx !== null) {
+      if (_pendingSelectIdx !== null) _pendingSelectIdx = null;
+      selectHorRow(focusIdx);
+      var targetRow = document.getElementById('horRow' + focusIdx);
+      if (nm && targetRow) {
+        var offset = targetRow.offsetTop - Math.floor((nm.clientHeight - targetRow.offsetHeight) / 2);
+        nm.scrollTop = Math.max(0, offset);
+      }
+    } else if (nm && _savedScroll > 0) {
+      nm.scrollTop = _savedScroll;
+    }
+  });
+}
+
+// ============================================================
+//  Análise comparativa OSM vs. Horário Comercial por trecho
+// ============================================================
+function _buildComAnalysis(c) {
+  var segs = [];
+  for (var i = 1; i < c.pontos.length; i++) {
+    var p     = c.pontos[i];
+    var pPrev = c.pontos[i - 1];
+    if (p.preDep || pPrev.preDep || !p.hasCoords) continue;
+    var comVal  = _comercialTimes[_seq[i].idPonto]     || '';
+    var comPrev = _comercialTimes[_seq[i - 1].idPonto] || '';
+    if (!comVal || !comPrev) continue;
+
+    var comSeg = _p(comVal) - _p(comPrev);
+    if (comSeg < 0) comSeg += 1440;
+    segs.push({
+      from:   pPrev.nomePonto,
+      to:     p.nomePonto,
+      osrm:   p.tv,
+      com:    comSeg,
+      diff:   comSeg - p.tv,
+      isOsrm: p.distSource === 'osrm'
+    });
+  }
+  if (segs.length === 0) return '';
+
+  var totalOsrm = 0, totalCom = 0;
+  segs.forEach(function(s) { totalOsrm += s.osrm; totalCom += s.com; });
+  var totalDiff = totalCom - totalOsrm;
+
+  var rows = segs.map(function(s) {
+    var abs = Math.abs(s.diff);
+    var cls = s.diff > 2 ? 'delta-ok' : s.diff < -2 ? 'delta-late' : 'delta-warn';
+    var sgn = s.diff > 2 ? '+' : s.diff < -2 ? '−' : '≈';
+    var osrmStr = _hhmm(s.osrm) + (s.isOsrm ? '' : '<span style="color:#ccc;font-size:9px;"> ~</span>');
+    return '<tr>'
+      + '<td>' + esc(s.from) + '</td>'
+      + '<td>' + esc(s.to)   + '</td>'
+      + '<td style="text-align:center;">' + osrmStr + '</td>'
+      + '<td style="text-align:center;">' + _hhmm(s.com) + '</td>'
+      + '<td style="text-align:center;"><span class="' + cls + '">'
+        + sgn + (abs > 1 ? _dur(abs) : '') + '</span></td>'
+      + '</tr>';
+  }).join('');
+
+  var tAbs = Math.abs(totalDiff);
+  var tCls = totalDiff > 5 ? 'delta-ok' : totalDiff < -5 ? 'delta-late' : 'delta-warn';
+  var tSgn = totalDiff > 0 ? '+' : totalDiff < 0 ? '−' : '≈';
+
+  return '<div class="hor-osm-analysis" id="horOsmWrap"' + (_horOsmHidden ? ' style="display:none;"' : '') + '>'
+    + '<div class="hor-osm-title">📊 OSM vs. Comercial — Comparativo por trecho'
+    + '<button class="hor-panel-close" onclick="toggleHorOsm()" title="Ocultar">×</button>'
+    + '</div>'
+    + '<div class="hor-osm-legend">'
+    + '<span class="delta-ok">+ folga</span> = comercial concede mais tempo que o OSM &nbsp;·&nbsp; '
+    + '<span class="delta-late">− estouro</span> = comercial exige mais que o OSM permite'
+    + '</div>'
+    + '<table class="hor-table" style="min-width:480px;">'
+    + '<thead><tr><th>De</th><th>Até</th>'
+    + '<th style="text-align:center;">OSM</th>'
+    + '<th style="text-align:center;">Comercial</th>'
+    + '<th style="text-align:center;" title="Comercial − OSM">Dif.</th>'
+    + '</tr></thead>'
+    + '<tbody>' + rows + '</tbody>'
+    + '<tfoot><tr>'
+    + '<td colspan="2" style="font-weight:700;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;color:#7a8299;">Total</td>'
+    + '<td style="text-align:center;font-weight:700;">' + _hhmm(totalOsrm) + '</td>'
+    + '<td style="text-align:center;font-weight:700;">' + _hhmm(totalCom)  + '</td>'
+    + '<td style="text-align:center;"><span class="' + tCls + '" style="font-size:12px;">'
+      + tSgn + (tAbs > 1 ? _dur(tAbs) : '') + '</span></td>'
+    + '</tr></tfoot>'
+    + '</table></div>';
+}
+
+// ============================================================
+//  Célula Temp. Desl. com seletor de via por trecho
+// ============================================================
+var _LEG_VEL  = { BR:85, Est:75, Mun:60, Urb:45 };
+var _LEG_LABEL = { BR:'Rodovia federal — 85 km/h', Est:'Estadual — 75 km/h', Mun:'Municipal — 60 km/h', Urb:'Urbana — 45 km/h' };
+
+function _buildLegViaCell(i, c) {
+  var isLast = (i >= c.pontos.length - 1);
+  var next   = isLast ? null : c.pontos[i + 1];
+
+  if (!next || next.preDep || !next.hasCoords) {
+    return '<span style="color:#ccc;">—</span>';
+  }
+
+  var isApprox = (next.distSource !== 'osrm');
+  var distStr  = next.dist > 0
+    ? (isApprox ? '~' : '') + next.dist.toFixed(1) + ' km'
+    : '';
+  var approxMark = isApprox
+    ? '<span style="color:#bbb;font-size:9px;" title="Sem dados de rota — tempo mínimo aplicado"> ~</span>'
+    : '';
+
+  var tvHtml = '<span class="hor-via-time">' + _hhmm(next.tv) + approxMark + '</span>'
+    + (distStr ? '<span class="hor-via-dist">' + distStr + '</span>' : '');
+
+  var viaKey = _legVia[_seq[i].idPonto];
+  var badge  = viaKey
+    ? '<span class="hor-via-badge">' + viaKey + '</span>'
+    : '';
+
+  var btns = ['BR','Est','Mun','Urb'].map(function(t) {
+    return '<button class="hor-via-btn' + (viaKey === t ? ' active' : '') + '" '
+      + 'onclick="setLegVia(' + i + ',\'' + t + '\',event)" '
+      + 'title="' + _LEG_LABEL[t] + '">' + t + '</button>';
+  }).join('');
+
+  return '<div class="hor-via-wrap">'
+    + tvHtml + badge
+    + '<div class="hor-via-overlay">' + btns + '</div>'
+    + '</div>';
+}
+
+function setLegVia(i, type, evt) {
+  if (evt) { evt.stopPropagation(); evt.preventDefault(); }
+  var key = _seq[i].idPonto;
+  if (_legVia[key] === type) delete _legVia[key]; else _legVia[key] = type;
+  _markDirty();
+  _partialUpdateSchedule();
+  // Fecha o overlay após o clique para evitar re-clique acidental (o rebuild via CSS hover
+  // manteria o overlay aberto, causando toggle indesejado se o cursor ficasse sobre ele)
+  var row = document.getElementById('horRow' + i);
+  if (row) {
+    var td = row.querySelectorAll('td')[4];
+    if (td) {
+      td.classList.add('hor-via-done');
+      setTimeout(function() { td.classList.remove('hor-via-done'); }, 500);
+    }
+  }
+}
+
+function _deltaCellHtml(comVal, chegadaMin, idPonto) {
+  if (!comVal) return '<span style="color:#dde1ee;font-size:14px;">—</span>';
+  var diff    = _diffMin(comVal, chegadaMin, idPonto);
+  var diffAbs = Math.abs(diff);
+  var cls, sign;
+  if      (diff >  2) { cls = 'delta-ok';   sign = '+'; }
+  else if (diff < -2) { cls = 'delta-late';  sign = '−'; }
+  else                { cls = 'delta-warn';  sign = '≈'; }
+  return '<div class="' + cls + '">' + sign + (diffAbs > 1 ? _dur(diffAbs) : '') + '</div>';
+}
+
+function _autoFormatTime(input) {
+  var pos  = input.selectionStart;
+  var raw  = input.value.replace(/\D/g, '').slice(0, 4);
+  var fmt  = raw.length >= 3 ? raw.slice(0, 2) + ':' + raw.slice(2) : raw;
+  input.value = fmt;
+  // mantém cursor após o caractere recém digitado
+  var newPos = fmt.length >= 3 && pos >= 2 ? pos + 1 : pos;
+  try { input.setSelectionRange(newPos, newPos); } catch(e) {}
+}
+
+function _validateHHMM(s) {
+  var m = String(s || '').trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/);
+  if (!m) return null;
+  return ('0' + m[1]).slice(-2) + ':' + m[2];
+}
+
+function _confirmComercial(idx, inputEl, onEscapeRestore) {
+  var raw = inputEl.value.trim();
+  if (raw === '') {
+    inputEl.classList.remove('hor-com-error');
+    onComercialTimeChange(idx, '', inputEl);
+    return;
+  }
+  var val = _validateHHMM(raw);
+  if (!val) {
+    inputEl.classList.add('hor-com-error');
+    inputEl.focus();
+    return;
+  }
+  inputEl.classList.remove('hor-com-error');
+  onComercialTimeChange(idx, val, inputEl);
+}
+
+function onComercialTimeChange(idx, val, inputEl) {
+  var key = _seq[idx].idPonto;
+  if (val) { _comercialTimes[key] = val; } else { delete _comercialTimes[key]; }
+  _markDirty();
+
+  if (inputEl) {
+    var td = inputEl.parentNode;
+    if (val) {
+      td.innerHTML = '<span class="hor-com-display" onclick="editComercial(' + idx + ',this)">'
+        + esc(val) + '<span class="hor-com-edit-icon">✎</span></span>';
+    }
+  }
+
+  unhighlightRow(idx);
+  _partialUpdateComercial();
+}
+
+function editComercial(idx, el) {
+  var key    = _seq[idx].idPonto;
+  var curVal = _comercialTimes[key] || '';
+  var input  = document.createElement('input');
+  input.type = 'text';
+  input.className = 'hor-com-input';
+  input.placeholder = 'HH:MM';
+  input.value = curVal;
+  input.oninput = function() { _autoFormatTime(this); };
+  input.onkeydown = function(e) {
+    if (e.key === 'Enter')  { e.preventDefault(); _confirmComercial(idx, this); }
+    if (e.key === 'Escape') {
+      this.classList.remove('hor-com-error');
+      unhighlightRow(idx);
+      this.parentNode && this.parentNode.replaceChild(el, this);
+    }
+  };
+  input.onblur = function() { _confirmComercial(idx, this); };
+  highlightRow(idx);
+  el.parentNode.replaceChild(input, el);
+  input.focus();
+  input.select();
+}
+
+function selectHorRow(idx) {
+  _activeHorRow = idx;
+  document.querySelectorAll('#horBody tr').forEach(function(r) { r.classList.remove('row-editing'); });
+  var row = document.getElementById('horRow' + idx);
+  if (row) row.classList.add('row-editing');
+}
+function highlightRow(idx) {
+  var row = document.getElementById('horRow' + idx);
+  if (row) row.classList.add('row-editing');
+}
+function unhighlightRow(idx) {
+  var row = document.getElementById('horRow' + idx);
+  if (row) row.classList.remove('row-editing');
+}
+
+// Atualização parcial: recalcula deltas sem re-renderizar a tabela
+function _partialUpdateComercial() {
+  if (!_lastCalc) { _renderHorarioWith(Array.isArray(_osrmLegs) ? _osrmLegs : null); return; }
+  var c = _lastCalc;
+  _recomputeComercialBase(c);
+  var partida  = (document.getElementById('horHoraPartida') || {}).value || '00:00';
+  var startIdx = Math.min(_horStartIdx, _seq.length - 1);
+
+  for (var i = 0; i < c.pontos.length; i++) {
+    var p = c.pontos[i];
+    var deltaEl = document.getElementById('horDelta' + i);
+    if (!deltaEl) continue;
+    var comVal = _comercialTimes[_seq[i].idPonto] || '';
+    deltaEl.innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+  }
+
+  for (var i = 0; i < c.pontos.length; i++) {
+    var p = c.pontos[i];
+    var sbarEl = document.getElementById('horSbar' + i);
+    if (!sbarEl) continue;
+    var timeEl = sbarEl.querySelector('.hor-sidebar-time');
+    if (!timeEl) continue;
+    var comVal   = _comercialTimes[_seq[i].idPonto] || '';
+    var chegaStr = p.preDep ? '—' : (p.chegadaMin !== null ? _ms(p.chegadaMin) : partida);
+    if (i === startIdx) chegaStr = partida;
+    var deltaHtml = '';
+    if (!p.preDep && comVal && p.chegadaMin !== null) {
+      var diff = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto);
+      var cls3 = diff > 2 ? 'delta-ok' : diff < -2 ? 'delta-late' : 'delta-warn';
+      var sgn3 = diff > 2 ? '+' : diff < -2 ? '−' : '≈';
+      deltaHtml = '<span class="hor-sidebar-delta ' + cls3 + '">'
+        + sgn3 + (Math.abs(diff) > 1 ? _dur(Math.abs(diff)) : '') + '</span>';
+    }
+    timeEl.innerHTML = chegaStr + deltaHtml;
+  }
+
+  var horMain   = document.querySelector('#horBody .hor-main');
+  if (!horMain) return;
+  var analysisEl = horMain.querySelector('.hor-osm-analysis');
+  var newHtml    = _buildComAnalysis(c);
+  if (newHtml) {
+    if (analysisEl) { analysisEl.outerHTML = newHtml; }
+    else            { horMain.insertAdjacentHTML('beforeend', newHtml); }
+  } else if (analysisEl) {
+    analysisEl.remove();
+  }
+}
+
+function _updateStartPtSelect() {
+  var sel = document.getElementById('horStartPt');
+  if (!sel) return;
+  if (_horStartIdx >= _seq.length) _horStartIdx = 0;
+  sel.innerHTML = _seq.map(function(p, i) {
+    return '<option value="' + i + '">' + (i + 1) + ' — ' + esc(p.nomePonto) + '</option>';
+  }).join('') || '<option value="0">—</option>';
+  sel.value = String(_horStartIdx);
+}
+
+// Atualização parcial do schedule sem reconstruir a tabela
+function _partialUpdateSchedule() {
+  if (!_lastCalc) { _renderHorarioWith(Array.isArray(_osrmLegs) ? _osrmLegs : null); return; }
+  var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c        = _calcHorario(osrmLegs);
+  _lastCalc    = c;
+  _recomputeComercialBase(c);
+  var partida  = (document.getElementById('horHoraPartida') || {}).value || '00:00';
+  var startIdx = Math.min(_horStartIdx, _seq.length - 1);
+
+  var statsEl = document.getElementById('horStatsPanel');
+  if (statsEl) statsEl.innerHTML = _buildStatsHtml(c, osrmLegs);
+
+  for (var i = 0; i < c.pontos.length; i++) {
+    var p   = c.pontos[i];
+    var row = document.getElementById('horRow' + i);
+    if (!row || p.preDep) continue;
+    var isStart = (i === startIdx);
+    var tds     = row.querySelectorAll('td');
+    if (tds.length < 7) continue;
+
+    var chegStr = (isStart || p.chegadaMin === null) ? partida : _ms(p.chegadaMin);
+    tds[1].textContent = chegStr;
+
+    if (p.saidaMin !== null) {
+      tds[3].textContent = _ms(p.saidaMin);
+    } else if (p.chegadaMin !== null) {
+      tds[3].innerHTML = '<strong style="color:#f47920;">★ ' + _ms(p.chegadaMin) + '</strong>';
+    } else {
+      tds[3].textContent = '—';
+    }
+
+    tds[4].className = 'hor-via-td';
+    tds[4].innerHTML = _buildLegViaCell(i, c);
+
+    var comVal = _comercialTimes[_seq[i].idPonto] || '';
+    tds[6].innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+  }
+
+  for (var i = 0; i < c.pontos.length; i++) {
+    var p      = c.pontos[i];
+    var sbarEl = document.getElementById('horSbar' + i);
+    if (!sbarEl) continue;
+    var timeEl = sbarEl.querySelector('.hor-sidebar-time');
+    if (!timeEl) continue;
+    var comVal    = _comercialTimes[_seq[i].idPonto] || '';
+    var chegaStr  = p.preDep ? '—' : (p.chegadaMin !== null ? _ms(p.chegadaMin) : partida);
+    if (i === startIdx) chegaStr = partida;
+    var dHtml = '';
+    if (!p.preDep && comVal && p.chegadaMin !== null) {
+      var diff = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto);
+      var dc   = diff > 2 ? 'delta-ok' : diff < -2 ? 'delta-late' : 'delta-warn';
+      var ds   = diff > 2 ? '+' : diff < -2 ? '−' : '≈';
+      dHtml = '<span class="hor-sidebar-delta ' + dc + '">'
+        + ds + (Math.abs(diff) > 1 ? _dur(Math.abs(diff)) : '') + '</span>';
+    }
+    timeEl.innerHTML = chegaStr + dHtml;
+  }
+
+  var horMain    = document.querySelector('#horBody .hor-main');
+  if (!horMain) return;
+  var analysisEl = horMain.querySelector('.hor-osm-analysis');
+  var newHtml    = _buildComAnalysis(c);
+  if (newHtml) {
+    if (analysisEl) { analysisEl.outerHTML = newHtml; }
+    else            { horMain.insertAdjacentHTML('beforeend', newHtml); }
+  } else if (analysisEl) {
+    analysisEl.remove();
+  }
+}
+
+function onStopTimeChange(idx, val) {
+  _customStopTimes[_seq[idx].idPonto] = Math.max(0, Math.round(+val || 0));
+  _markDirty();
+  highlightRow(idx);
+  _partialUpdateSchedule();
+  setTimeout(function() { unhighlightRow(idx); }, 600);
+}
+
+// ============================================================
+//  Modal de configuração do PDF
+// ============================================================
+function abrirModalPdf() {
+  if (!_sel || !_seq.length) { toast('Adicione pontos ao esquema antes de gerar o PDF.', 'error'); return; }
+  var ex = document.getElementById('pdfModalOverlay');
+  if (ex) ex.remove();
+
+  var title    = _pdfTitle    || (_sel.id_esquema + ' — ' + _sel.nome_linha);
+  var subtitle = _pdfSubtitle || '';
+
+  var colDefs = [
+    { key:'chegada',   label:'Chegada'           },
+    { key:'parada',    label:'Parada'             },
+    { key:'saida',     label:'Saída'              },
+    { key:'desl',      label:'Temp. Deslocamento' },
+    { key:'comercial', label:'Comercial'          },
+    { key:'dif',       label:'Dif.'               }
+  ];
+  var checks = colDefs.map(function(c) {
+    return '<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;">'
+      + '<input type="checkbox" id="pdfCol_' + c.key + '"'
+      + (_pdfCols[c.key] ? ' checked' : '')
+      + ' style="width:14px;height:14px;accent-color:#f47920;cursor:pointer;">'
+      + c.label + '</label>';
+  }).join('');
+
+  var modal =
+    '<div id="pdfModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:440px;max-width:94vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;">Exportar PDF</div>'
+        + '<button onclick="fecharModalPdf()" style="background:none;border:none;color:#9aa0ad;font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>'
+      + '</div>'
+      + '<div style="padding:20px 22px;">'
+        + '<div style="margin-bottom:12px;">'
+          + '<label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:4px;">Título</label>'
+          + '<input id="pdfTitleInput" type="text" value="' + esc(title) + '" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d4d8e8;border-radius:6px;font-size:12px;font-family:inherit;">'
+        + '</div>'
+        + '<div style="margin-bottom:16px;">'
+          + '<label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:4px;">Subtítulo <span style="font-weight:400;text-transform:none;">(opcional)</span></label>'
+          + '<input id="pdfSubtitleInput" type="text" value="' + esc(subtitle) + '" placeholder="Ex: SUGESTÃO DE MUDANÇA" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d4d8e8;border-radius:6px;font-size:12px;font-family:inherit;">'
+        + '</div>'
+        + '<div>'
+          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
+        + '</div>'
+      + '</div>'
+      + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
+        + '<button onclick="fecharModalPdf()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="gerarPdfComOpcoes()" style="padding:8px 20px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">↓ Gerar PDF</button>'
+      + '</div>'
+    + '</div></div>';
+
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('pdfModalOverlay').addEventListener('click', function(e) {
+    if (e.target === this) fecharModalPdf();
+  });
+  setTimeout(function() { var t = document.getElementById('pdfTitleInput'); if (t) { t.focus(); t.select(); } }, 50);
+}
+
+function fecharModalPdf() {
+  var m = document.getElementById('pdfModalOverlay');
+  if (m) m.remove();
+}
+
+function gerarPdfComOpcoes() {
+  ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
+    var el = document.getElementById('pdfCol_' + k);
+    if (el) _pdfCols[k] = el.checked;
+  });
+  var tEl = document.getElementById('pdfTitleInput');
+  var sEl = document.getElementById('pdfSubtitleInput');
+  _pdfTitle    = tEl ? tEl.value.trim() : '';
+  _pdfSubtitle = sEl ? sEl.value.trim() : '';
+  fecharModalPdf();
+  imprimirHorario();
+}
+
+// ============================================================
+//  Gera PDF em nova janela
+// ============================================================
+function imprimirHorario() {
+  if (!_sel || !_seq.length) return;
+  var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c        = _calcHorario(osrmLegs);
+  _recomputeComercialBase(c);
+  var partida  = document.getElementById('horHoraPartida').value || '00:00';
+  var vel      = document.getElementById('horVelMedia').value || '85';
+  var tipoVia  = '';
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b){ if (b.classList.contains('active')) tipoVia = b.textContent; });
+  var fonteDist = _osrmStatus === 'ok' ? 'Traçado real (OSM)' : _osrmStatus === 'cache' ? 'Cache de distâncias' : 'Mín. 30 min (sem rota)';
+  var startIdx  = Math.min(_horStartIdx, c.pontos.length - 1);
+  var cols      = _pdfCols;
+  var title     = _pdfTitle    || (_sel.id_esquema + ' — ' + _sel.nome_linha);
+  var subtitle  = _pdfSubtitle || '';
+
+  function pe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+  function hhmm(m){ m=Math.round(m||0); var h=Math.floor(m/60),mm=m%60; return ('0'+h).slice(-2)+':'+('0'+mm).slice(-2); }
+  function ms(m){ m=Math.round(m); return ('0'+Math.floor(m/60)%24).slice(-2)+':'+('0'+(m%60)).slice(-2); }
+  // Arredonda minutos para múltiplo de 5 — somente para exibição no PDF
+  function r5(m){ return Math.round(m / 5) * 5; }
+  function msR(m){ return ms(r5(m)); }
+  function partidaR(s){ var p=(s||'00:00').split(':'); return ms(r5(+p[0]*60+(+p[1]||0))); }
+  function comR(s){ if(!s) return s; var p=s.split(':'); return p.length<2 ? s : ms(r5(+p[0]*60+(+p[1]||0))); }
+
+  var activeCols = [{ key:'cidade', label:'Cidade', align:'left' }];
+  if (cols.chegada)   activeCols.push({ key:'chegada',   label:'Chegada',      align:'center' });
+  if (cols.parada)    activeCols.push({ key:'parada',    label:'Parada',       align:'center' });
+  if (cols.saida)     activeCols.push({ key:'saida',     label:'Saída',        align:'center' });
+  if (cols.desl)      activeCols.push({ key:'desl',      label:'Desl.',        align:'left'   });
+  if (cols.comercial) activeCols.push({ key:'comercial', label:'Comercial',    align:'center' });
+  if (cols.dif)       activeCols.push({ key:'dif',       label:'Dif.',         align:'center' });
+
+  var thead = activeCols.map(function(col) {
+    return '<th style="text-align:' + col.align + ';">' + col.label + '</th>';
+  }).join('');
+
+  var tbody = '';
+  c.pontos.forEach(function(p, i) {
+    var isStart = (i === startIdx);
+    var isLast  = (i === c.pontos.length - 1);
+    if (p.preDep) {
+      tbody += '<tr style="opacity:0.32;">'
+        + '<td><strong>' + pe(p.nomePonto) + '</strong></td>'
+        + '<td colspan="' + (activeCols.length - 1) + '" style="text-align:center;color:#aaa;font-style:italic;font-size:10px;">pré-partida</td>'
+        + '</tr>';
+      return;
+    }
+    var comVal = _comercialTimes[_seq[i].idPonto] || '';
+    var cells  = {};
+
+    cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>'
+      + (isStart ? ' <span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">✈</span>' : '');
+
+    cells.chegada = isStart
+      ? '<span style="color:#bbb;">—</span>'
+      : '<strong>' + (p.chegadaMin === null ? '—' : msR(p.chegadaMin)) + '</strong>';
+    cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? hhmm(p.tp) : '—';
+    cells.saida   = p.saidaMin !== null
+      ? '<strong>' + msR(p.saidaMin) + '</strong>'
+      : (p.chegadaMin !== null ? '<strong style="color:#f47920;">★ ' + msR(p.chegadaMin) + '</strong>' : '—');
+
+    if (isStart || !p.hasCoords) {
+      cells.desl = '—';
+    } else {
+      var tvStr   = hhmm(p.tv)   + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+      var distStr = p.dist.toFixed(1) + ' km' + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+      cells.desl  = tvStr + ' <span style="color:#d4d8e8;margin:0 2px;">|</span> ' + distStr;
+    }
+
+    cells.comercial = comVal
+      ? '<strong style="color:#1565c0;">' + pe(comR(comVal)) + '</strong>'
+      : '<span style="color:#ccc;">—</span>';
+
+    cells.dif = '—';
+    if (comVal && p.chegadaMin !== null) {
+      var d2 = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto), a2 = Math.abs(d2);
+      var c2 = d2 > 2 ? '#22c97a' : d2 < -2 ? '#e53935' : '#f47920';
+      var s2 = d2 > 2 ? '+' : d2 < -2 ? '−' : '≈';
+      cells.dif = '<strong style="color:' + c2 + ';">' + s2 + (a2 > 1 ? hhmm(a2) : '') + '</strong>';
+    }
+
+    var rowBg = isStart ? 'background:#f0fff8;' : isLast ? 'background:#fff8f0;' : '';
+    tbody += '<tr style="' + rowBg + '">';
+    activeCols.forEach(function(col) {
+      tbody += '<td style="text-align:' + col.align + ';">' + (cells[col.key] || '—') + '</td>';
+    });
+    tbody += '</tr>';
+  });
+
+  var html = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">'
+    + '<title>' + pe(title) + '</title><style>'
+    + '@page{margin:10mm 12mm 22mm 12mm;}'
+    + '*{box-sizing:border-box;margin:0;padding:0;}'
+    + 'body{font-family:Arial,sans-serif;font-size:12px;color:#1a1d23;}'
+    + '.hdr{background:#1a1d23;color:#fff;padding:22px 28px 18px;}'
+    + '.hdr-title{font-size:22px;font-weight:900;letter-spacing:.01em;line-height:1.1;}'
+    + '.hdr-sub{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.12em;color:#f47920;margin-top:5px;}'
+    + '.hdr-meta{font-size:10px;color:#9aa0ad;margin-top:7px;}'
+    + '.body{padding:18px 28px 24mm 28px;}'
+    + '.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px;}'
+    + '.stat{border:1px solid #dde1ee;border-radius:6px;padding:10px 12px;text-align:center;}'
+    + '.sv{font-size:16px;font-weight:800;color:#1a1d23;}'
+    + '.sl{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-top:2px;}'
+    + '.stat.hi{background:#fff8f0;border-color:#fddcb3;}.stat.hi .sv{color:#f47920;}'
+    + 'table{width:100%;border-collapse:collapse;font-size:11px;border:1px solid #cdd2e5;}'
+    + 'th{background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;}'
+    + 'td{padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;}'
+    + '.pfooter{position:fixed;bottom:0;left:0;right:0;height:18mm;background:#fff;border-top:2px solid #f47920;padding:5px 28px 3px;font-size:9px;color:#555;display:flex;justify-content:space-between;align-items:center;line-height:1.5;}'
+    + '.pfooter-left{display:flex;flex-direction:column;}'
+    + '.pfooter-company{font-weight:700;color:#1a1d23;font-size:9.5px;}'
+    + '.pfooter-cnpj{color:#888;}'
+    + '.pfooter-right{text-align:right;color:#888;font-size:9px;}'
+    + '@media print{'
+    +   '*{-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+    +   'tr{page-break-inside:avoid;}'
+    +   '.pfooter{display:flex !important;}'
+    + '}'
+    + '</style></head><body>';
+
+  html += '<div class="hdr"><div class="hdr-title">' + pe(title) + '</div>';
+  if (subtitle) html += '<div class="hdr-sub">' + pe(subtitle) + '</div>';
+  html += '<div class="hdr-meta">'
+    + [_sel.sentido, 'Partida ' + partidaR(partida), (tipoVia || 'BR'), vel + ' km/h', fonteDist]
+      .filter(Boolean).map(pe).join(' &nbsp;·&nbsp; ')
+    + '</div></div>';
+
+  html += '<div class="body">'
+    + '<div class="stats">'
+    + '<div class="stat"><div class="sv">' + c.distTotal + ' km</div><div class="sl">Distância</div></div>'
+    + '<div class="stat"><div class="sv">' + hhmm(c.tvTotal) + '</div><div class="sl">Deslocamento</div></div>'
+    + '<div class="stat"><div class="sv">' + hhmm(c.tpTotal) + '</div><div class="sl">Paradas</div></div>'
+    + '<div class="stat hi"><div class="sv">' + hhmm(c.totalMin) + '</div><div class="sl">Tempo total</div></div>'
+    + '</div>'
+    + '<table><thead><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>'
+    + '</div>';
+
+  var genDate = new Date().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  html += '<div class="pfooter">'
+    + '<div class="pfooter-left">'
+    +   '<span class="pfooter-company">KANDANGO TRANSPORTE E TURISMO LTDA</span>'
+    +   '<span class="pfooter-cnpj">CNPJ: 03.233.439/0001-52</span>'
+    + '</div>'
+    + '<div class="pfooter-right" id="pfPageInfo">Gerado em ' + pe(genDate) + '</div>'
+    + '</div>';
+  html += '<script>'
+    + 'window.onload = function() {'
+    +   'try {'
+    +     'var bodyH = document.querySelector(".body").scrollHeight;'
+    +     'var pageH = 1056;'  // A4 a 96dpi menos margens (22mm bottom)
+    +     'var pages = Math.max(1, Math.ceil(bodyH / pageH));'
+    +     'var el = document.getElementById("pfPageInfo");'
+    +     'if (el) el.innerHTML = "Pág. <span id=\\"pn\\">1</span> / " + pages;'
+    +   '} catch(e) {}'
+    +   'window.print();'
+    + '};'
+    + '<\/script>';
+  html += '</body></html>';
+
+  var w = window.open('', '_blank', 'width=1000,height=760');
+  if (!w) { toast('Popup bloqueado. Permita popups para este site.', 'error'); return; }
+  w.document.write(html);
+  w.document.close();
+}
+
+// ============================================================
+//  Back button
+// ============================================================
+(function() {
+  var base = window.location.href.split('?')[0];
+  document.getElementById('btnVoltar').href = base;
+})();
+
+// ============================================================
+//  Boot
+// ============================================================
+window.onload = function() {
+  loading('Carregando esquemas e locais…');
+  google.script.run
+    .withSuccessHandler(function(d) {
+      _esqs   = d.esquemas || [];
+      _locais = d.locais   || [];
+      _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
+      doneLoading();
+      initMap();
+      setupEsqSearch();
+      setupPtSearch();
+      abrirModalEsquema();
+      toast('Pronto — ' + _esqs.length + ' esquemas carregados', 'success', 3000);
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao carregar: ' + (e.message || e), 'error');
+    })
+    .getDadosManager();
+};
+
+// ============================================================
+//  Map
+// ============================================================
+function initMap() {
+  _map = L.map('map', { zoomControl: true }).setView([-14.235, -51.9253], 4);
+  L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+    { attribution: '&copy; Esri', maxZoom: 19, crossOrigin: true }
+  ).addTo(_map);
+  L.tileLayer(
+    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
+    { subdomains: 'abcd', maxZoom: 19, opacity: 0.85, crossOrigin: true }
+  ).addTo(_map);
+}
+
+function updateMap() {
+  if (_view === 'horario') { renderHorario(); return; }
+  if (!_map) return;
+  _markers.forEach(function(m) { m.remove(); });
+  _markers = [];
+  if (_poly) { _poly.remove(); _poly = null; }
+
+  var pts = _seq.filter(function(p) { return p.lat && p.lng; });
+  if (!pts.length) {
+    document.getElementById('map').style.display = 'none';
+    document.getElementById('mapPh').style.display = '';
+    document.getElementById('mapLegend').classList.remove('show');
+    return;
+  }
+
+  document.getElementById('map').style.display = 'block';
+  document.getElementById('mapPh').style.display = 'none';
+  document.getElementById('mapLegend').classList.add('show');
+
+  var seqCoordIdxs = [];
+  _seq.forEach(function(p, i) { if (p.lat && p.lng) seqCoordIdxs.push(i); });
+  var firstCoordIdx = seqCoordIdxs[0];
+  var lastCoordIdx  = seqCoordIdxs[seqCoordIdxs.length - 1];
+  var lls = pts.map(function(p) { return [+p.lat, +p.lng]; });
+
+  var mapSeqKey = _seqCoordsKey();
+  setTimeout(function() {
+    _map.invalidateSize();
+    _poly = L.polyline(lls, { color: '#f47920', weight: 5, opacity: 0.9 }).addTo(_map);
+
+    if (_osrmGeometry && _osrmSeqKey === mapSeqKey) {
+      _poly.setLatLngs(_osrmGeometry);
+    } else if (!_osrmGeometry || _osrmSeqKey !== mapSeqKey) {
+      _fetchOsrmDistances(function(legs, geom) {
+        if (_seqCoordsKey() !== mapSeqKey) return;
+        _osrmLegs     = _osrmLegs !== undefined ? _osrmLegs : legs;
+        _osrmSeqKey   = mapSeqKey;
+        _osrmGeometry = geom;
+        if (_poly && geom) _poly.setLatLngs(geom);
+      });
+    }
+
+    _seq.forEach(function(p, i) {
+      if (!p.lat || !p.lng) return;
+      var first = (i === firstCoordIdx), last = (i === lastCoordIdx);
+      var bg  = first ? '#22c97a' : last ? '#e05050' : '#f47920';
+      var sz  = (first || last) ? 28 : 22;
+      var lbl = first ? 'I' : last ? 'F' : String(i + 1);
+      var icon = L.divIcon({
+        className: '',
+        html: '<div style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
+              'background:' + bg + ';border:2.5px solid rgba(255,255,255,0.85);' +
+              'display:flex;align-items:center;justify-content:center;' +
+              'font-size:' + (sz > 24 ? '11px' : '10px') + ';font-weight:800;color:#fff;' +
+              'box-shadow:0 2px 8px rgba(0,0,0,0.55);">' + lbl + '</div>',
+        iconSize: [sz, sz], iconAnchor: [sz/2, sz/2]
+      });
+      var m = L.marker([+p.lat, +p.lng], { icon: icon });
+      m.bindTooltip(
+        '<strong>' + esc(p.nomePonto) + '</strong>' +
+        '<br><span style="font-size:10px;color:#888;">#' + (i+1) + (p.tipo ? ' · ' + esc(p.tipo) : '') + '</span>',
+        { direction: 'top', offset: [0, -(sz/2) - 4] }
+      );
+      m.addTo(_map);
+      _markers.push(m);
+    });
+
+    _map.fitBounds(lls, { padding: [44, 44], maxZoom: 13 });
+  }, 80);
+}
+
+// ============================================================
+//  Esquema search
+// ============================================================
+function setupEsqSearch() {
+  var inp  = document.getElementById('esqSearch');
+  var drop = document.getElementById('esqDrop');
+  inp.addEventListener('focus', function() { renderEsqs(this.value); });
+  inp.addEventListener('input', function() { renderEsqs(this.value); });
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('#esqSearch') && !e.target.closest('#esqDrop'))
+      drop.classList.remove('open');
+  });
+  document.getElementById('btnNovo').addEventListener('click', novoEsquema);
+  document.getElementById('btnSalvEsq').addEventListener('click', salvarEsquema);
+}
+
+function renderEsqs(q) {
+  var drop = document.getElementById('esqDrop');
+  var nq   = norm(q);
+  var list = _esqs.filter(function(e) {
+    return !nq
+      || norm(e.id_esquema).includes(nq)
+      || norm(e.nome_linha).includes(nq)
+      || norm(e.horario || '').includes(nq)
+      || norm(e.sentido || '').includes(nq);
+  }).slice(0, 60);
+
+  drop.innerHTML = list.length
+    ? list.map(function(e) {
+        return '<div class="sdi" data-id="' + esc(e.id_esquema) + '">'
+          + '<div class="sdi-main">' + hl(e.id_esquema + ' — ' + e.nome_linha, q) + '</div>'
+          + '<div class="sdi-meta">'
+          + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+          + esc(e.sentido || '')
+          + '</div></div>';
+      }).join('')
+    : '<div class="sd-empty">Nenhum resultado</div>';
+
+  drop.classList.add('open');
+  drop.querySelectorAll('.sdi').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      var id  = el.getAttribute('data-id');
+      var esq = _esqs.find(function(e) { return e.id_esquema === id; });
+      if (esq) selecionarEsq(esq);
+    });
+  });
+}
+
+function selecionarEsq(esq) {
+  _isNovo = false;
+  _sel    = esq;
+  document.getElementById('esqSearch').value = esq.id_esquema + ' — ' + esq.nome_linha;
+  document.getElementById('esqDrop').classList.remove('open');
+  renderBadge(esq);
+  document.getElementById('fNome').value  = esq.nome_linha || '';
+  document.getElementById('fHor').value   = esq.horario   || '';
+  document.getElementById('fSent').value  = esq.sentido   || 'Ida';
+  document.getElementById('esqForm').style.display = '';
+  document.getElementById('btnSalvEsq').textContent = 'Atualizar Esquema';
+  _updateHdrEsq(esq);
+  carregarPontos(esq.id_esquema);
+}
+
+function renderBadge(esq) {
+  var el = document.getElementById('esqBadge');
+  el.style.display = '';
+  el.innerHTML = '<div class="esq-badge">'
+    + '<div class="eid">' + esc(esq.id_esquema) + '</div>'
+    + '<div class="einfo"><strong>' + esc(esq.nome_linha) + '</strong>'
+    + (esq.horario ? '<br>' + esc(esq.horario) : '')
+    + (esq.sentido ? ' &middot; ' + esc(esq.sentido) : '')
+    + '</div></div>';
+}
+
+function _updateHdrEsq(esq) {
+  var btn   = document.getElementById('hdrEsqBtn');
+  var label = document.getElementById('hdrEsqLabel');
+  if (esq) {
+    label.textContent = '📋 ' + (esq.nome_linha || ('Esquema #' + esq.id_esquema));
+    btn.classList.add('has-schema');
+  } else {
+    label.textContent = '📋 Selecionar Esquema';
+    btn.classList.remove('has-schema');
+  }
+}
+
+function novoEsquema() {
+  _isNovo = true; _sel = null; _seq = []; _seqDirt = false;
+  _osrmLegs = undefined; _osrmSeqKey = ''; _osrmGeometry = null;
+  _comercialTimes = {}; _customStopTimes = {}; _legVia = {}; _horStartIdx = 0; _osrmStatus = 'pending';
+  document.getElementById('esqSearch').value = '';
+  document.getElementById('esqBadge').style.display = 'none';
+  document.getElementById('fNome').value = '';
+  document.getElementById('fHor').value  = '';
+  document.getElementById('fSent').value = 'Ida';
+  document.getElementById('esqForm').style.display = '';
+  document.getElementById('btnSalvEsq').textContent = 'Criar Esquema';
+  document.getElementById('ptCard').style.display = 'none';
+  document.getElementById('map').style.display = 'none';
+  document.getElementById('mapPh').style.display = '';
+  document.getElementById('mapLegend').classList.remove('show');
+  document.getElementById('hdrViewToggle').style.display = 'none';
+  document.getElementById('btnSalvar').style.display = 'none';
+  document.getElementById('horPanel').style.display = 'none';
+  document.getElementById('btnViewMapa').classList.add('active');
+  document.getElementById('btnViewHorario').classList.remove('active');
+  _view = 'mapa';
+  _updateHdrEsq(null);
+  document.getElementById('fNome').focus();
+}
+
+function salvarEsquema() {
+  var nome  = document.getElementById('fNome').value.trim();
+  var hor   = document.getElementById('fHor').value.trim();
+  var sent  = document.getElementById('fSent').value;
+  if (!nome) { toast('Nome da linha é obrigatório.', 'error'); return; }
+
+  var btn = document.getElementById('btnSalvEsq');
+  btn.disabled = true;
+  var dados = { nomeLinha: nome, horario: hor, sentido: sent };
+
+  if (_isNovo) {
+    loading('Criando esquema…');
+    google.script.run
+      .withSuccessHandler(function(r) {
+        doneLoading();
+        btn.disabled = false;
+        var novoEsq = { id_esquema: String(r.id), nome_linha: nome, horario: hor, sentido: sent };
+        _esqs.push(novoEsq);
+        _isNovo = false;
+        selecionarEsq(novoEsq);
+        toast('Esquema #' + r.id + ' criado!', 'success');
+      })
+      .withFailureHandler(function(e) {
+        doneLoading(); btn.disabled = false;
+        toast('Erro: ' + (e.message || e), 'error');
+      })
+      .criarEsquema(dados);
+  } else {
+    loading('Atualizando esquema…');
+    google.script.run
+      .withSuccessHandler(function() {
+        doneLoading();
+        btn.disabled = false;
+        _sel.nome_linha = nome; _sel.horario = hor; _sel.sentido = sent;
+        renderBadge(_sel);
+        _updateHdrEsq(_sel);
+        toast('Esquema atualizado!', 'success');
+      })
+      .withFailureHandler(function(e) {
+        doneLoading(); btn.disabled = false;
+        toast('Erro: ' + (e.message || e), 'error');
+      })
+      .atualizarEsquema(_sel.id_esquema, dados);
+  }
+}
+
+// ============================================================
+//  Load points
+// ============================================================
+function carregarPontos(idEsq) {
+  loading('Carregando pontos…');
+  google.script.run
+    .withSuccessHandler(function(pontos) {
+      doneLoading();
+      _seq = pontos.map(function(p) {
+        var l = _lMap[String(p.idPonto)] || {};
+        return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '', lat: l.lat || null, lng: l.lng || null, isNew: false };
+      });
+      _seqDirt        = false;
+      _osrmLegs       = undefined;
+      _osrmSeqKey     = '';
+      _osrmGeometry   = null;
+      _comercialTimes = {};
+      pontos.forEach(function(p) {
+        var t = _normalizeHHMM(p.horarioComercial);
+        if (t) _comercialTimes[p.idPonto] = t;
+      });
+      _customStopTimes = {};
+      pontos.forEach(function(p) {
+        if (p.tempoLocal) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+      });
+      _legVia = {};
+      pontos.forEach(function(p) {
+        if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho;
+      });
+      _horStartIdx    = 0;
+      renderSeq();
+      updateInsAfter();
+      updateMap();
+      document.getElementById('ptCard').style.display = '';
+      document.getElementById('ptUnsaved').style.display = 'none';
+      document.getElementById('btnSalvSeq').disabled = true;
+      document.getElementById('hdrViewToggle').style.display = 'flex';
+      document.getElementById('btnSalvar').style.display = '';
+      fecharModalEsquema();
+      var savedView = 'mapa';
+      try { savedView = localStorage.getItem('vc_view') || 'mapa'; } catch(e) {}
+      toggleView(savedView);
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao carregar pontos: ' + (e.message || e), 'error');
+    })
+    .getPontosEsquemaParaFormulario(idEsq);
+}
+
+// ============================================================
+//  Sequence
+// ============================================================
+function renderSeq() {
+  var list = document.getElementById('seqList');
+  var savedScroll = list ? list.scrollTop : 0;
+  document.getElementById('ptCount').textContent = _seq.length;
+
+  if (!_seq.length) {
+    list.innerHTML = '<div class="seq-empty">Nenhum ponto. Busque acima para adicionar.</div>';
+    return;
+  }
+
+  function dividerHtml(afterIdx) {
+    return '<div class="seq-insert" data-after="' + afterIdx + '">'
+      + '<div class="seq-insert-line"></div>'
+      + '<span class="seq-insert-btn">+ inserir</span>'
+      + '<div class="seq-insert-line"></div>'
+      + '</div>';
+  }
+
+  var parts = [dividerHtml(-1)];
+  _seq.forEach(function(p, i) {
+    parts.push(
+      '<div class="seq-item' + (p.isNew ? ' is-new' : '') + '" draggable="true" data-idx="' + i + '">'
+      + '<span class="seq-drag" title="Arrastar para reordenar">⠿</span>'
+      + '<span class="seq-num">' + (i + 1) + '</span>'
+      + '<div class="seq-info">'
+        + '<div class="seq-name" title="' + esc(p.nomePonto) + '">' + esc(p.nomePonto) + '</div>'
+        + (p.tipo ? '<div class="seq-tipo">' + esc(p.tipo) + '</div>' : '')
+      + '</div>'
+      + (p.isNew ? '<span class="seq-new">novo</span>' : '')
+      + '<button class="btn-icon rm" data-idx="' + i + '" title="Remover">✕</button>'
+      + '</div>'
+    );
+    parts.push(dividerHtml(i));
+  });
+  list.innerHTML = parts.join('');
+  list.scrollTop = savedScroll;
+
+  list.querySelectorAll('.seq-insert').forEach(function(el) {
+    el.addEventListener('click', function() {
+      document.getElementById('insAfter').value = el.getAttribute('data-after');
+      document.getElementById('ptSearch').focus();
+    });
+  });
+
+  list.querySelectorAll('.btn-icon.rm').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      _seq.splice(parseInt(btn.getAttribute('data-idx')), 1);
+      _activeHorRow = null;
+      dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+    });
+  });
+
+  var dragIdx = null;
+  list.querySelectorAll('.seq-item').forEach(function(item) {
+    item.addEventListener('dragstart', function(e) {
+      dragIdx = parseInt(item.getAttribute('data-idx'));
+      e.dataTransfer.effectAllowed = 'move';
+      setTimeout(function() { item.classList.add('dragging'); }, 0);
+    });
+    item.addEventListener('dragend', function() {
+      item.classList.remove('dragging');
+      list.querySelectorAll('.seq-item').forEach(function(el) { el.classList.remove('drag-over'); });
+      dragIdx = null;
+    });
+    item.addEventListener('dragover', function(e) {
+      e.preventDefault(); e.dataTransfer.dropEffect = 'move';
+      list.querySelectorAll('.seq-item').forEach(function(el) { el.classList.remove('drag-over'); });
+      item.classList.add('drag-over');
+    });
+    item.addEventListener('drop', function(e) {
+      e.preventDefault();
+      var toIdx = parseInt(item.getAttribute('data-idx'));
+      if (dragIdx === null || dragIdx === toIdx) return;
+      var moved = _seq.splice(dragIdx, 1)[0];
+      _seq.splice(toIdx, 0, moved);
+      _pendingSelectIdx = toIdx;
+      dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+    });
+  });
+}
+
+function updateInsAfter() {
+  var sel  = document.getElementById('insAfter');
+  var prev = sel.value;
+  sel.innerHTML = '<option value="-1">⬆ No início da sequência</option>'
+    + _seq.map(function(p, i) {
+        return '<option value="' + i + '">Após ' + (i + 1) + '. ' + esc(p.nomePonto) + '</option>';
+      }).join('');
+  if (prev !== '-1' && parseInt(prev) < _seq.length) sel.value = prev;
+  else sel.value = _seq.length > 0 ? String(_seq.length - 1) : '-1';
+}
+
+function _markDirty() {
+  _seqDirt = true;
+  document.getElementById('ptUnsaved').style.display = '';
+  document.getElementById('btnSalvSeq').disabled = false;
+  var s = document.getElementById('btnSalvar');
+  if (s) { s.style.display = ''; s.disabled = false; }
+}
+
+function dirtySeq() {
+  _seqDirt         = true;
+  _osrmLegs        = undefined;
+  _osrmSeqKey      = '';
+  _osrmGeometry    = null;
+  _horStartIdx     = 0;
+  document.getElementById('ptUnsaved').style.display = '';
+  document.getElementById('btnSalvSeq').disabled = false;
+  var s = document.getElementById('btnSalvar');
+  if (s) { s.style.display = ''; s.disabled = false; }
+}
+
+// ============================================================
+//  Modal de esquema
+// ============================================================
+function abrirModalEsquema() {
+  var overlay = document.getElementById('esqModalOverlay');
+  overlay.classList.remove('hidden');
+  document.getElementById('btnFecharModalEsq').style.display = _sel ? '' : 'none';
+  document.getElementById('esqSearch').focus();
+}
+
+function fecharModalEsquema() {
+  document.getElementById('esqModalOverlay').classList.add('hidden');
+}
+
+// ============================================================
+//  Salvar unificado
+// ============================================================
+function salvarTudo() {
+  var salvouEsq = false;
+  var nomeVal = (document.getElementById('fNome').value || '').trim();
+  var formVis = document.getElementById('esqForm').style.display !== 'none';
+  if (formVis && nomeVal) {
+    salvouEsq = true;
+    salvarEsquema();
+  }
+  if (_seqDirt) {
+    salvarSeq();
+  }
+  if (!salvouEsq && !_seqDirt) {
+    toast('Nenhuma alteração pendente.', 'info');
+  }
+}
+
+// ============================================================
+//  Point search
+// ============================================================
+function setupPtSearch() {
+  var inp  = document.getElementById('ptSearch');
+  var drop = document.getElementById('ptDrop');
+  inp.addEventListener('focus', function() { renderPts(this.value); });
+  inp.addEventListener('input', function() { renderPts(this.value); });
+  document.addEventListener('click', function(e) {
+    if (!e.target.closest('#ptSearch') && !e.target.closest('#ptDrop'))
+      drop.classList.remove('open');
+  });
+  document.getElementById('btnSalvSeq').addEventListener('click', salvarSeq);
+}
+
+function renderPts(q) {
+  var drop = document.getElementById('ptDrop');
+  var nq   = norm(q);
+  var list = _locais.filter(function(l) {
+    return !nq
+      || norm(l.descricao).includes(nq)
+      || norm(l.tipo || '').includes(nq)
+      || norm(l.codigo).includes(nq);
+  }).slice(0, 60);
+
+  if (!list.length) {
+    drop.innerHTML = '<div class="sd-empty">Nenhum resultado</div>';
+  } else {
+    var seqIdx = {};
+    _seq.forEach(function(p, i) { seqIdx[p.idPonto] = i + 1; });
+    drop.innerHTML = list.map(function(l) {
+      var pos   = seqIdx[l.codigo];
+      var jaNo  = pos !== undefined;
+      var coord = l.lat ? '📍' : '❌';
+      return '<div class="sdi' + (jaNo ? ' off' : '') + '" data-cod="' + esc(l.codigo) + '">'
+        + '<div class="sdi-main">' + hl(l.descricao, q)
+          + (jaNo ? ' <span style="font-size:9px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:0 5px;">pos. ' + pos + '</span>' : '')
+        + '</div>'
+        + '<div class="sdi-meta">' + hl(l.codigo, q) + (l.tipo ? ' · ' + esc(l.tipo) : '') + ' ' + coord + '</div>'
+        + '</div>';
+    }).join('');
+  }
+  drop.classList.add('open');
+  drop.querySelectorAll('.sdi:not(.off)').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      var cod   = el.getAttribute('data-cod');
+      var found = _locais.find(function(l) { return l.codigo === cod; });
+      if (found) addPonto(found);
+    });
+  });
+}
+
+function addPonto(local) {
+  document.getElementById('ptDrop').classList.remove('open');
+  document.getElementById('ptSearch').value = '';
+  var after = parseInt(document.getElementById('insAfter').value);
+  _seq.splice(after + 1, 0, {
+    idPonto: local.codigo, nomePonto: local.descricao,
+    tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+  });
+  _pendingSelectIdx = after + 1;
+  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+  document.getElementById('insAfter').value = String(after + 1);
+}
+
+// ============================================================
+//  Save sequence
+// ============================================================
+function salvarSeq() {
+  if (!_sel) { toast('Selecione um esquema.', 'error'); return; }
+  var btn = document.getElementById('btnSalvSeq');
+  btn.disabled = true; btn.textContent = 'Salvando…';
+
+  loading('Salvando sequência…');
+  google.script.run
+    .withSuccessHandler(function() {
+      doneLoading();
+      _seq.forEach(function(p) { p.isNew = false; });
+      _seqDirt = false;
+      document.getElementById('ptUnsaved').style.display = 'none';
+      btn.textContent = 'Salvar Sequência';
+      btn.disabled = true;
+      var formVis = document.getElementById('esqForm').style.display !== 'none';
+      var nomeVal = document.getElementById('fNome').value.trim();
+      if (!formVis || !nomeVal) {
+        var s = document.getElementById('btnSalvar');
+        if (s) s.disabled = true;
+      }
+      renderSeq();
+      toast('Sequência salva! (' + _seq.length + ' pontos)', 'success');
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      btn.disabled = false; btn.textContent = 'Salvar Sequência';
+      toast('Erro ao salvar: ' + (e.message || e), 'error');
+    })
+    .salvarSequenciaPontos(_sel.id_esquema, _seq.map(function(p) {
+      return {
+        idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
+        horarioComercial: _comercialTimes[p.idPonto] || '',
+        tempoLocal: _customStopTimes[p.idPonto] != null ? _customStopTimes[p.idPonto] : '',
+        tipoTrecho: _legVia[p.idPonto] || ''
+      };
+    }));
+}
+
+// ============================================================
+//  Utils
+// ============================================================
+function norm(s) {
+  return (s || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+function esc(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+function hl(text, q) {
+  if (!q) return esc(text);
+  var re = new RegExp('(' + q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + ')', 'gi');
+  return esc(text).replace(re, '<mark>$1</mark>');
+}
+function loading(msg) {
+  document.getElementById('ovlMsg').textContent = msg || 'Aguarde…';
+  document.getElementById('ovl').classList.add('on');
+}
+function doneLoading() { document.getElementById('ovl').classList.remove('on'); }
+function toast(msg, type, dur) {
+  var w = document.getElementById('toastWrap');
+  var t = document.createElement('div');
+  t.className = 'toast ' + (type || 'info');
+  t.textContent = msg;
+  w.appendChild(t);
+  setTimeout(function() {
+    t.style.opacity = '0'; t.style.transition = 'opacity 0.3s';
+    setTimeout(function() { t.remove(); }, 360);
+  }, dur || 4000);
+}
+</script>

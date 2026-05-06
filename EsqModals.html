@@ -1,0 +1,53 @@
+<!-- Modal: selecionar / criar esquema -->
+<div class="esq-modal-overlay" id="esqModalOverlay">
+  <div class="esq-modal">
+    <div class="esq-modal-head">
+      <div class="esq-modal-title">Selecionar Esquema</div>
+      <button class="esq-modal-close" id="btnFecharModalEsq" style="display:none;" onclick="fecharModalEsquema()">✕</button>
+    </div>
+    <div class="esq-modal-body">
+      <div class="sw">
+        <input type="text" id="esqSearch" class="fi" placeholder="Código, linha ou horário…" autocomplete="off" />
+        <div class="sd" id="esqDrop"></div>
+      </div>
+      <div id="esqBadge" style="display:none; margin-top:10px;"></div>
+    </div>
+    <div class="esq-modal-divider"></div>
+    <div class="esq-modal-form" id="esqForm" style="display:none;">
+      <div class="field" style="margin-top:10px;">
+        <label class="fl">Nome da linha</label>
+        <input type="text" id="fNome" class="fi" placeholder="Ex: NATAL (RN) - SAO PAULO (SP)" />
+      </div>
+      <div class="row-fields">
+        <div class="field">
+          <label class="fl">Horário</label>
+          <input type="text" id="fHor" class="fi" placeholder="08:00" />
+        </div>
+        <div class="field">
+          <label class="fl">Sentido</label>
+          <select id="fSent" class="fs">
+            <option value="Ida">Ida</option>
+            <option value="Volta">Volta</option>
+            <option value="Circular">Circular</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn btn-dark btn-full" id="btnSalvEsq">Criar Esquema</button>
+    </div>
+    <div class="esq-modal-footer">
+      <button class="btn btn-ghost btn-sm" id="btnNovo" onclick="novoEsquema()">+ Novo Esquema</button>
+      <span style="font-size:10px;color:#bbb;">Selecione ou crie um esquema para continuar</span>
+    </div>
+  </div>
+</div>
+
+<!-- Loading overlay -->
+<div class="ovl" id="ovl">
+  <div class="ovl-box">
+    <div class="spin"></div>
+    <div id="ovlMsg">Carregando…</div>
+  </div>
+</div>
+
+<!-- Toasts -->
+<div class="toast-wrap" id="toastWrap"></div>

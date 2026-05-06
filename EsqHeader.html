@@ -1,0 +1,23 @@
+<header class="hdr">
+  <div class="hdr-logo">VC</div>
+  <div>
+    <div class="hdr-title">Gestão de Esquemas</div>
+    <div class="hdr-sub">Viação Catedral · BI Operacional</div>
+  </div>
+
+  <button class="hdr-esq-btn" id="hdrEsqBtn" onclick="abrirModalEsquema()">
+    <span id="hdrEsqLabel">📋 Selecionar Esquema</span>
+    <span class="hdr-esq-arrow">▾</span>
+  </button>
+
+  <div class="hdr-view-toggle" id="hdrViewToggle" style="display:none;">
+    <button class="hdr-toggle-btn active" id="btnViewMapa"    onclick="toggleView('mapa')">🗺 Mapa</button>
+    <button class="hdr-toggle-btn"        id="btnViewHorario" onclick="toggleView('horario')">🕐 Horário</button>
+  </div>
+
+  <div class="hdr-space"></div>
+
+  <button class="hdr-save" id="btnSalvar" style="display:none;" onclick="salvarTudo()">💾 Salvar Alterações</button>
+
+  <a id="btnVoltar" href="#" class="hdr-btn">← Análise de Viagem</a>
+</header>

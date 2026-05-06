@@ -145,11 +145,14 @@ var EsquemasService = (() => {
 
     var headerRow = data[0].map(function(h) { return _norm(String(h)); });
     var colMap = _mapHeader(headerRow, {
-      id_esquema: ['id_esquema', 'id', 'esquema', 'cod_esquema', 'codigo_esquema'],
-      ordem:      ['ordem', 'order', 'sequencia', 'seq'],
-      id_ponto:   ['id_ponto', 'ponto', 'codigo_ponto', 'cod_ponto', 'codigo'],
-      nome_ponto: ['nome_ponto', 'nome', 'descricao', 'ponto_nome'],
-      tipo:       ['tipo', 'type', 'tipo_parada', 'tipo_ponto']
+      id_esquema:        ['id_esquema', 'id', 'esquema', 'cod_esquema', 'codigo_esquema'],
+      ordem:             ['ordem', 'order', 'sequencia', 'seq'],
+      id_ponto:          ['id_ponto', 'ponto', 'codigo_ponto', 'cod_ponto', 'codigo'],
+      nome_ponto:        ['nome_ponto', 'nome', 'descricao', 'ponto_nome'],
+      tipo:              ['tipo', 'type', 'tipo_parada', 'tipo_ponto'],
+      horario_comercial: ['horario_comercial', 'comercial', 'hor_comercial'],
+      tempo_local:       ['tempo_local', 'parada', 'tempo_parada', 'stop_time'],
+      tipo_trecho:       ['tipo_trecho', 'via', 'tipo_via', 'trecho']
     });
 
     var pontos = [];
@@ -164,11 +167,14 @@ var EsquemasService = (() => {
       if (!idEsquema || !idPonto) continue;
 
       pontos.push({
-        id_esquema: idEsquema,
-        ordem:      isNaN(Number(ordem)) ? 0 : Number(ordem),
-        id_ponto:   idPonto,
-        nome_ponto: nomePonto || idPonto,
-        tipo:       tipo
+        id_esquema:        idEsquema,
+        ordem:             isNaN(Number(ordem)) ? 0 : Number(ordem),
+        id_ponto:          idPonto,
+        nome_ponto:        nomePonto || idPonto,
+        tipo:              tipo,
+        horario_comercial: colMap.horario_comercial !== undefined ? _formatHorario(row[colMap.horario_comercial]) : '',
+        tempo_local:       colMap.tempo_local  !== undefined ? (_getCell(row, colMap.tempo_local)  || '') : '',
+        tipo_trecho:       colMap.tipo_trecho  !== undefined ? (_getCell(row, colMap.tipo_trecho)  || '') : ''
       });
     }
 
@@ -218,9 +224,7 @@ var EsquemasService = (() => {
   function _formatHorario(val) {
     if (!val && val !== 0) return '';
     if (val instanceof Date) {
-      var h = ('0' + val.getHours()).slice(-2);
-      var m = ('0' + val.getMinutes()).slice(-2);
-      return h + ':' + m;
+      return Utilities.formatDate(val, Session.getScriptTimeZone(), 'HH:mm');
     }
     return String(val).trim();
   }

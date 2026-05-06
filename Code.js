@@ -110,7 +110,7 @@ function getPontosEsquemaParaFormulario(idEsquema) {
   try {
     var pontos = EsquemasService.getPontosDoEsquema(idEsquema);
     return pontos.map(function(p) {
-      return { idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '' };
+      return { idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '', horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '' };
     });
   } catch (e) {
     return [];
@@ -130,6 +130,14 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
     if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
 
+    // Garante cabeçalhos das colunas F, G e H
+    var h6 = String(sheet.getLastColumn() >= 6 ? sheet.getRange(1, 6).getValue() : '').trim();
+    var h7 = String(sheet.getLastColumn() >= 7 ? sheet.getRange(1, 7).getValue() : '').trim();
+    var h8 = String(sheet.getLastColumn() >= 8 ? sheet.getRange(1, 8).getValue() : '').trim();
+    if (h6 !== 'horario_comercial') sheet.getRange(1, 6).setValue('horario_comercial');
+    if (h7 !== 'tempo_local')       sheet.getRange(1, 7).setValue('tempo_local');
+    if (h8 !== 'tipo_trecho')       sheet.getRange(1, 8).setValue('tipo_trecho');
+
     var idStr = String(idEsquema).trim();
     var lastRow = sheet.getLastRow();
 
@@ -145,7 +153,7 @@ function salvarSequenciaPontos(idEsquema, pontos) {
 
     // Reinsere com ORDEM sequencial
     pontos.forEach(function(p, idx) {
-      sheet.appendRow([idEsquema, idx + 1, p.idPonto, p.nomePonto, p.tipo || '']);
+      sheet.appendRow([idEsquema, idx + 1, p.idPonto, p.nomePonto, p.tipo || '', p.horarioComercial || '', p.tempoLocal !== '' ? p.tempoLocal : '', p.tipoTrecho || '']);
     });
 
     EsquemasService.invalidateCache();
@@ -185,12 +193,85 @@ function salvarPontoEsquema(dados) {
   }
 }
 
+/**
+ * Busca distâncias em cache na aba DISTANCIAS.
+ * @param {Array<{a:string,b:string}>} pairs
+ * @returns {Object} { "normA:normB": km }
+ */
+function getDistanciasCached(pairs) {
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet || sheet.getLastRow() < 2) return {};
+
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+    var map  = {};
+    data.forEach(function(row) {
+      var a = String(row[0]).trim(), b = String(row[1]).trim();
+      var km = parseFloat(row[2]);
+      if (a && b && km > 0) map[a + ':' + b] = km;
+    });
+
+    var result = {};
+    (pairs || []).forEach(function(pair) {
+      var norm = _normPair_(pair.a, pair.b);
+      var key  = norm[0] + ':' + norm[1];
+      if (map[key] !== undefined) result[key] = map[key];
+    });
+    return result;
+  } catch (e) {
+    return {};
+  }
+}
+
+/**
+ * Salva novas distâncias na aba DISTANCIAS (ignora duplicatas).
+ * @param {Array<{a:string,b:string,km:number}>} pairKms
+ */
+function saveDistanciasCached(pairKms) {
+  try {
+    if (!pairKms || !pairKms.length) return;
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet) {
+      sheet = ss.insertSheet('DISTANCIAS');
+      sheet.getRange(1, 1, 1, 3).setValues([['ponto_a', 'ponto_b', 'km']]);
+    }
+
+    var existing = {};
+    if (sheet.getLastRow() >= 2) {
+      sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function(row) {
+        existing[String(row[0]).trim() + ':' + String(row[1]).trim()] = true;
+      });
+    }
+
+    pairKms.forEach(function(pair) {
+      var km = Math.round(parseFloat(pair.km) * 100) / 100;
+      if (!pair.a || !pair.b || !(km > 0)) return;
+      var norm = _normPair_(pair.a, pair.b);
+      var key  = norm[0] + ':' + norm[1];
+      if (!existing[key]) {
+        sheet.appendRow([norm[0], norm[1], km]);
+        existing[key] = true;
+      }
+    });
+  } catch (e) {
+    Logger.log('[saveDistanciasCached] ' + e.message);
+  }
+}
+
+function _normPair_(a, b) {
+  var sa = String(a).trim(), sb = String(b).trim();
+  return sa <= sb ? [sa, sb] : [sb, sa];
+}
+
 function doGet(e) {
   var page = (e && e.parameter && e.parameter.page) || 'index';
 
   if (page === 'manager') {
     try {
-      return HtmlService.createHtmlOutputFromFile('EsquemasManager')
+      return HtmlService.createTemplateFromFile('EsquemasManager')
+        .evaluate()
         .setTitle('Gestão de Esquemas · Viação Catedral')
         .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
         .addMetaTag('viewport', 'width=device-width, initial-scale=1');

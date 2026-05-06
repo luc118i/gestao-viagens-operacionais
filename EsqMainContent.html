@@ -1,0 +1,60 @@
+<!-- ── Map / Horário wrap ── -->
+<div class="map-wrap">
+
+  <!-- Horário panel -->
+  <div class="hor-panel" id="horPanel">
+
+    <!-- Static config (never re-rendered) -->
+    <div class="hor-config">
+      <div class="hor-config-group">
+        <div class="hor-config-label">Hora de partida</div>
+        <input type="time" id="horHoraPartida" class="fi" style="width:120px;" value="00:00"
+               oninput="_lastCalc?_partialUpdateSchedule():renderHorario()" />
+      </div>
+      <div class="hor-config-group">
+        <div class="hor-config-label">Tipo de via</div>
+        <div class="hor-presets" id="horPresets">
+          <button class="hor-preset-btn active" onclick="setPreset(this,85)">BR</button>
+          <button class="hor-preset-btn"        onclick="setPreset(this,75)">Estadual</button>
+          <button class="hor-preset-btn"        onclick="setPreset(this,60)">Municipal</button>
+          <button class="hor-preset-btn"        onclick="setPreset(this,45)">Urbana</button>
+        </div>
+      </div>
+      <div class="hor-config-group">
+        <div class="hor-config-label">Vel. média (km/h)</div>
+        <input type="number" id="horVelMedia" class="fi" style="width:82px;" value="85" min="10" max="150"
+               oninput="_lastCalc?_partialUpdateSchedule():renderHorario()" />
+      </div>
+      <div class="hor-config-group">
+        <div class="hor-config-label">Ponto de partida</div>
+        <select id="horStartPt" class="fs" style="width:190px;font-size:12px;padding:6px 8px;"
+                onchange="_horStartIdx=+this.value; renderHorario();">
+          <option value="0">—</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Dynamic body (re-rendered by renderHorario) -->
+    <div class="hor-body" id="horBody">
+      <div style="text-align:center;color:#9aa0ad;padding:40px;">Selecione um esquema e adicione pontos para calcular o horário.</div>
+    </div>
+
+    <!-- Footer -->
+    <div class="hor-footer">
+      <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()">↓ Baixar PDF</button>
+    </div>
+  </div><!-- /hor-panel -->
+
+  <div class="map-ph" id="mapPh">
+    <div class="ph-icon">🗺️</div>
+    <p>Selecione ou crie um esquema para visualizar o traçado</p>
+  </div>
+  <div id="map"></div>
+  <div class="map-legend" id="mapLegend">
+    <div class="leg-item"><div class="leg-dot" style="background:#22c97a;"></div> Início</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#e05050;"></div> Fim</div>
+    <div class="leg-item"><div class="leg-dot" style="background:#f47920;"></div> Ponto</div>
+    <div class="leg-item" style="gap:6px;"><div style="width:22px;height:3px;background:#f47920;border-radius:2px;opacity:0.8;"></div> Rota</div>
+  </div>
+
+</div><!-- /map-wrap -->
