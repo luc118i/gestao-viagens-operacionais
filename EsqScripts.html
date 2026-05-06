@@ -1136,7 +1136,7 @@ function imprimirHorario() {
       cells.dif = '<strong style="color:' + c2 + ';">' + s2 + (a2 > 1 ? hhmm(a2) : '') + '</strong>';
     }
 
-    var rowBg = isStart ? 'background:#f0fff8;' : isLast ? 'background:#fff8f0;' : '';
+    var rowBg = isStart ? 'background:#f0fff8;' : isLast ? 'background:#fff8f0;' : (!comVal ? 'background:#fff8f2;' : '');
     tbody += '<tr style="' + rowBg + '">';
     activeCols.forEach(function(col) {
       tbody += '<td style="text-align:' + col.align + ';">' + (cells[col.key] || '—') + '</td>';

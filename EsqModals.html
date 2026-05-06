@@ -6,8 +6,12 @@
       <button class="esq-modal-close" id="btnFecharModalEsq" style="display:none;" onclick="fecharModalEsquema()">✕</button>
     </div>
     <div class="esq-modal-body">
-      <div class="sw">
-        <input type="text" id="esqSearch" class="fi" placeholder="Código, linha ou horário…" autocomplete="off" />
+      <div class="sw esq-search-wrap">
+        <svg class="esq-search-ico" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.6"/>
+          <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+        </svg>
+        <input type="text" id="esqSearch" class="fi esq-search-fi" placeholder="Buscar por código, linha ou horário…" autocomplete="off" />
         <div class="sd" id="esqDrop"></div>
       </div>
       <div id="esqBadge" style="display:none; margin-top:10px;"></div>

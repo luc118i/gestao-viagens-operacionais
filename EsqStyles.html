@@ -471,6 +471,18 @@ td.hor-via-td.hor-via-done .hor-via-overlay { display: none !important; }
 }
 .esq-modal-close:hover { background: #dde1ee; color: #1a1d23; }
 .esq-modal-body { padding: 12px 24px 0; }
+.esq-search-wrap { position: relative; }
+.esq-search-ico {
+  position: absolute; left: 12px; top: 50%; transform: translateY(-50%);
+  width: 16px; height: 16px; color: #b0b5c8; pointer-events: none; flex-shrink: 0;
+}
+.esq-search-fi {
+  padding-left: 38px !important; height: 44px;
+  font-size: 14px !important; border-radius: 8px !important;
+  border-color: #e0e3f0 !important; color: #1a1d23;
+}
+.esq-search-fi::placeholder { color: #b8bccf; font-weight: 400; }
+.esq-search-fi:focus { border-color: #f47920 !important; box-shadow: 0 0 0 3px rgba(244,121,32,0.10); }
 .esq-modal-divider { height: 1px; background: #f0f2f8; margin: 12px 0 0; }
 .esq-modal-form { padding: 12px 24px 4px; }
 .esq-modal-footer {
