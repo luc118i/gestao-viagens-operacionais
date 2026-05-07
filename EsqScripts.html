@@ -34,6 +34,7 @@ var _comercialTimes  = {};
 var _horStartIdx     = 0;
 var _customStopTimes = {};
 var _legVia          = {};
+var _tipoViaVel      = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
 var _osrmStatus      = 'pending';
 var _horSidebarHidden = (function(){ try { return localStorage.getItem('vc_hor_sidebar') === 'hidden'; } catch(e){ return false; } })();
 var _horOsmHidden     = (function(){ try { return localStorage.getItem('vc_hor_osm')     === 'hidden'; } catch(e){ return false; } })();
@@ -252,11 +253,51 @@ function _fetchOsrmDistances(callback) {
 // ============================================================
 //  Preset de velocidade
 // ============================================================
-function setPreset(btn, vel) {
+function setPreset(btn, defaultVel) {
   document.querySelectorAll('.hor-preset-btn').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
-  document.getElementById('horVelMedia').value = vel;
+  var tipo = btn.textContent.trim();
+  document.getElementById('horVelMedia').value = (_tipoViaVel[tipo] || defaultVel);
+  saveHorConfig();
   renderHorario();
+}
+
+function saveHorConfig() {
+  if (!_sel) return;
+  var partida = document.getElementById('horHoraPartida').value || '';
+  var via     = '';
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
+    if (b.classList.contains('active')) via = b.textContent.trim();
+  });
+  try { localStorage.setItem('vc_horcfg_' + _sel.id_esquema, JSON.stringify({ partida: partida, via: via })); } catch(e) {}
+}
+
+function _restoreHorConfig(esq) {
+  var cfg = null;
+  try { cfg = JSON.parse(localStorage.getItem('vc_horcfg_' + esq.id_esquema) || 'null'); } catch(e) {}
+  var partida = (cfg && cfg.partida) ? cfg.partida : (esq.horario || '00:00');
+  var via     = (cfg && cfg.via)     ? cfg.via     : 'BR';
+  document.getElementById('horHoraPartida').value = partida;
+  document.getElementById('horVelMedia').value = _tipoViaVel[via] || 85;
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
+    b.classList.toggle('active', b.textContent.trim() === via);
+  });
+}
+
+function _salvarVelAtiva() {
+  if (!_sel) return;
+  var vel = parseFloat(document.getElementById('horVelMedia').value);
+  if (isNaN(vel) || vel <= 0) return;
+  var tipo = '';
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
+    if (b.classList.contains('active')) tipo = b.textContent.trim();
+  });
+  if (!tipo) return;
+  _tipoViaVel[tipo] = vel;
+  google.script.run
+    .withSuccessHandler(function() { toast(tipo + ' → ' + vel + ' km/h salvo', 'success'); })
+    .withFailureHandler(function(e) { toast('Erro: ' + (e.message || e), 'error'); })
+    .salvarTipoViaVelocidade(_sel.id_esquema, tipo, vel);
 }
 
 // ============================================================
@@ -297,8 +338,6 @@ function toggleView(v) {
     mapLeg.classList.remove('show');
     horPan.style.display = 'flex';
     btnM.classList.remove('active'); btnH.classList.add('active');
-    var selHor = (_sel && _sel.horario) ? _sel.horario.trim() : '';
-    if (/^\d{2}:\d{2}$/.test(selHor)) document.getElementById('horHoraPartida').value = selHor;
     renderHorario();
   } else {
     horPan.style.display = 'none';
@@ -333,7 +372,7 @@ function _calcHorario(osrmLegs) {
     if (!preDep && !isStart) {
       var prev = _seq[i - 1];
       var legViaType = _legVia[prev.idPonto];
-      var legVel = legViaType ? ({ BR:85, Est:75, Mun:60, Urb:45 }[legViaType] || vel) : vel;
+      var legVel = legViaType ? (_tipoViaVel[legViaType] || vel) : vel;
       var pRank = osrmOk ? coordRank[i - 1] : undefined;
       var cRank = osrmOk ? coordRank[i]     : undefined;
       var leg   = (osrmOk && pRank !== undefined && cRank !== undefined
@@ -348,7 +387,7 @@ function _calcHorario(osrmLegs) {
       }
     }
 
-    var tp = (preDep || isStart || isLast) ? 0 : _getStopTime(i, p.tipo);
+    var tp = (preDep || isStart) ? 0 : _getStopTime(i, p.tipo);
 
     var chegada, saida;
     if (preDep) {
@@ -516,18 +555,13 @@ function _renderHorarioWith(osrmLegs) {
 
     var tvCel = _buildLegViaCell(i, c);
 
-    var tpCel;
-    if (isStart || isLast) {
-      tpCel = '—';
-    } else {
-      var tpVals = [2,5,10,15,20,30,40];
-      var tpMatch = tpVals.indexOf(p.tp) !== -1 ? p.tp : null;
-      var tpOpts = (tpMatch === null ? '<option value="' + p.tp + '" selected>' + _hhmm(p.tp) + '</option>' : '')
-        + tpVals.map(function(v){
-            return '<option value="' + v + '"' + (p.tp === v ? ' selected' : '') + '>' + _hhmm(v) + '</option>';
-          }).join('');
-      tpCel = '<select class="hor-tp-input" onchange="onStopTimeChange(' + i + ',this.value)">' + tpOpts + '</select>';
-    }
+    var tpVals = [2,5,10,15,20,30,40];
+    var tpMatch = tpVals.indexOf(p.tp) !== -1 ? p.tp : null;
+    var tpOpts = (tpMatch === null ? '<option value="' + p.tp + '" selected>' + _hhmm(p.tp) + '</option>' : '')
+      + tpVals.map(function(v){
+          return '<option value="' + v + '"' + (p.tp === v ? ' selected' : '') + '>' + _hhmm(v) + '</option>';
+        }).join('');
+    var tpCel = '<select class="hor-tp-input" onchange="onStopTimeChange(' + i + ',this.value)">' + tpOpts + '</select>';
 
     var chegStr = p.chegadaMin !== null ? _ms(p.chegadaMin) : partida;
     if (isStart) chegStr = partida;
@@ -551,8 +585,8 @@ function _renderHorarioWith(osrmLegs) {
       comCell = '<input type="text" class="hor-com-input" placeholder="HH:MM" '
               + 'onfocus="highlightRow(' + i + ')" '
               + 'oninput="_autoFormatTime(this)" '
-              + 'onblur="_confirmComercial(' + i + ',this)" '
-              + 'onkeydown="if(event.key===\'Enter\'){event.preventDefault();_confirmComercial(' + i + ',this)}'
+              + 'onblur="_confirmComercial(' + i + ',this,false)" '
+              + 'onkeydown="if(event.key===\'Enter\'){event.preventDefault();_confirmComercial(' + i + ',this,true)}'
               + 'else if(event.key===\'Escape\'){this.value=\'\';unhighlightRow(' + i + ')}" />';
     }
     var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
@@ -593,7 +627,10 @@ function _renderHorarioWith(osrmLegs) {
       selectHorRow(focusIdx);
       var targetRow = document.getElementById('horRow' + focusIdx);
       if (nm && targetRow) {
-        var offset = targetRow.offsetTop - Math.floor((nm.clientHeight - targetRow.offsetHeight) / 2);
+        var nmRect  = nm.getBoundingClientRect();
+        var rowRect = targetRow.getBoundingClientRect();
+        var offset  = nm.scrollTop + rowRect.top - nmRect.top
+                    - Math.floor((nm.clientHeight - rowRect.height) / 2);
         nm.scrollTop = Math.max(0, offset);
       }
     } else if (nm && _savedScroll > 0) {
@@ -679,8 +716,7 @@ function _buildComAnalysis(c) {
 // ============================================================
 //  Célula Temp. Desl. com seletor de via por trecho
 // ============================================================
-var _LEG_VEL  = { BR:85, Est:75, Mun:60, Urb:45 };
-var _LEG_LABEL = { BR:'Rodovia federal — 85 km/h', Est:'Estadual — 75 km/h', Mun:'Municipal — 60 km/h', Urb:'Urbana — 45 km/h' };
+var _LEG_LABEL = { BR:'Rodovia federal', Est:'Estadual', Mun:'Municipal', Urb:'Urbana' };
 
 function _buildLegViaCell(i, c) {
   var isLast = (i >= c.pontos.length - 1);
@@ -703,11 +739,12 @@ function _buildLegViaCell(i, c) {
 
   var viaKey = _legVia[_seq[i].idPonto];
   var badge  = viaKey
-    ? '<span class="hor-via-badge">' + viaKey + '</span>'
+    ? '<span class="hor-via-badge" data-via="' + viaKey + '">' + viaKey + '</span>'
     : '';
 
   var btns = ['BR','Est','Mun','Urb'].map(function(t) {
     return '<button class="hor-via-btn' + (viaKey === t ? ' active' : '') + '" '
+      + 'data-via="' + t + '" '
       + 'onclick="setLegVia(' + i + ',\'' + t + '\',event)" '
       + 'title="' + _LEG_LABEL[t] + '">' + t + '</button>';
   }).join('');
@@ -722,6 +759,7 @@ function setLegVia(i, type, evt) {
   if (evt) { evt.stopPropagation(); evt.preventDefault(); }
   var key = _seq[i].idPonto;
   if (_legVia[key] === type) delete _legVia[key]; else _legVia[key] = type;
+  try { if (_sel) localStorage.setItem('vc_legVia_' + _sel.id_esquema, JSON.stringify(_legVia)); } catch(e) {}
   _markDirty();
   _partialUpdateSchedule();
   // Fecha o overlay após o clique para evitar re-clique acidental (o rebuild via CSS hover
@@ -763,11 +801,11 @@ function _validateHHMM(s) {
   return ('0' + m[1]).slice(-2) + ':' + m[2];
 }
 
-function _confirmComercial(idx, inputEl, onEscapeRestore) {
+function _confirmComercial(idx, inputEl, moveNext) {
   var raw = inputEl.value.trim();
   if (raw === '') {
     inputEl.classList.remove('hor-com-error');
-    onComercialTimeChange(idx, '', inputEl);
+    onComercialTimeChange(idx, '', inputEl, moveNext);
     return;
   }
   var val = _validateHHMM(raw);
@@ -777,10 +815,10 @@ function _confirmComercial(idx, inputEl, onEscapeRestore) {
     return;
   }
   inputEl.classList.remove('hor-com-error');
-  onComercialTimeChange(idx, val, inputEl);
+  onComercialTimeChange(idx, val, inputEl, moveNext);
 }
 
-function onComercialTimeChange(idx, val, inputEl) {
+function onComercialTimeChange(idx, val, inputEl, moveNext) {
   var key = _seq[idx].idPonto;
   if (val) { _comercialTimes[key] = val; } else { delete _comercialTimes[key]; }
   _markDirty();
@@ -795,6 +833,16 @@ function onComercialTimeChange(idx, val, inputEl) {
 
   unhighlightRow(idx);
   _partialUpdateComercial();
+  if (moveNext) _focusNextComercial(idx);
+}
+
+function _focusNextComercial(fromIdx) {
+  var nextRow = document.getElementById('horRow' + (fromIdx + 1));
+  if (!nextRow) return;
+  var input = nextRow.querySelector('.hor-com-input');
+  if (input) { input.focus(); return; }
+  var display = nextRow.querySelector('.hor-com-display');
+  if (display) { editComercial(fromIdx + 1, display); }
 }
 
 function editComercial(idx, el) {
@@ -807,7 +855,7 @@ function editComercial(idx, el) {
   input.value = curVal;
   input.oninput = function() { _autoFormatTime(this); };
   input.onkeydown = function(e) {
-    if (e.key === 'Enter')  { e.preventDefault(); _confirmComercial(idx, this); }
+    if (e.key === 'Enter')  { e.preventDefault(); _confirmComercial(idx, this, true); }
     if (e.key === 'Escape') {
       this.classList.remove('hor-com-error');
       unhighlightRow(idx);
@@ -1146,7 +1194,7 @@ function imprimirHorario() {
 
   var html = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">'
     + '<title>' + pe(title) + '</title><style>'
-    + '@page{margin:10mm 12mm 22mm 12mm;}'
+    + '@page{margin:10mm 12mm 28mm 12mm;}'
     + '*{box-sizing:border-box;margin:0;padding:0;}'
     + 'body{font-family:Arial,sans-serif;font-size:12px;color:#1a1d23;}'
     + '.hdr{background:#1a1d23;color:#fff;padding:22px 28px 18px;}'
@@ -1202,8 +1250,25 @@ function imprimirHorario() {
   html += '<script>'
     + 'window.onload = function() {'
     +   'try {'
+    +     'var PX    = 96 / 25.4;'                                   // px por mm a 96 DPI
+    +     'var pageH = Math.round((297 - 10 - 28) * PX);'           // A4 - margens top+bottom = 259mm ≈ 979px
+    +     'var safe  = Math.round(22 * PX);'                        // zona segura = 22mm ≈ 83px (footer é 18mm)
+    +     'var tbody = document.querySelector("tbody");'
+    +     'if (tbody) {'
+    +       'var curY = tbody.getBoundingClientRect().top % pageH;'  // posição do tbody dentro da primeira página
+    +       'Array.from(tbody.querySelectorAll("tr")).forEach(function(row) {'
+    +         'var rh = row.getBoundingClientRect().height;'
+    +         'if (curY + rh > pageH - safe) {'                      // linha cairia na zona do footer
+    +           'row.style.breakBefore = "page";'
+    +           'row.style.pageBreakBefore = "always";'
+    +           'curY = rh;'                                          // reinicia no topo da nova página
+    +         '} else {'
+    +           'curY += rh;'
+    +           'if (curY >= pageH) curY %= pageH;'                  // cruzou virada de página natural
+    +         '}'
+    +       '});'
+    +     '}'
     +     'var bodyH = document.querySelector(".body").scrollHeight;'
-    +     'var pageH = 1056;'  // A4 a 96dpi menos margens (22mm bottom)
     +     'var pages = Math.max(1, Math.ceil(bodyH / pageH));'
     +     'var el = document.getElementById("pfPageInfo");'
     +     'if (el) el.innerHTML = "Pág. <span id=\\"pn\\">1</span> / " + pages;'
@@ -1524,6 +1589,10 @@ function carregarPontos(idEsq) {
       pontos.forEach(function(p) {
         if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho;
       });
+      try {
+        var lsVia = JSON.parse(localStorage.getItem('vc_legVia_' + _sel.id_esquema) || '{}');
+        Object.keys(lsVia).forEach(function(k) { if (!_legVia[k]) _legVia[k] = lsVia[k]; });
+      } catch(e) {}
       _horStartIdx    = 0;
       renderSeq();
       updateInsAfter();
@@ -1534,9 +1603,28 @@ function carregarPontos(idEsq) {
       document.getElementById('hdrViewToggle').style.display = 'flex';
       document.getElementById('btnSalvar').style.display = '';
       fecharModalEsquema();
+      // Restaura config imediatamente (com _tipoViaVel padrão) para renderHorario ter os valores certos
+      _restoreHorConfig(_sel);
       var savedView = 'mapa';
       try { savedView = localStorage.getItem('vc_view') || 'mapa'; } catch(e) {}
       toggleView(savedView);
+      // Após carregar velocidades da planilha, atualiza e re-renderiza se necessário
+      var _selSnap = _sel;
+      google.script.run
+        .withSuccessHandler(function(v) {
+          if (!v || _sel !== _selSnap) return;
+          _tipoViaVel = v;
+          // Atualiza o campo de velocidade para o tipo ativo
+          var via = '';
+          document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
+            if (b.classList.contains('active')) via = b.textContent.trim();
+          });
+          if (via && _tipoViaVel[via]) {
+            document.getElementById('horVelMedia').value = _tipoViaVel[via];
+          }
+          if (_view === 'horario') _lastCalc ? _partialUpdateSchedule() : renderHorario();
+        })
+        .getTipoViaVelocidades(_selSnap.id_esquema);
     })
     .withFailureHandler(function(e) {
       doneLoading();

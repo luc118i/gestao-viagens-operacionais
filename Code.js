@@ -109,9 +109,18 @@ function _getDadosCadastroPonto() {
 function getPontosEsquemaParaFormulario(idEsquema) {
   try {
     var pontos = EsquemasService.getPontosDoEsquema(idEsquema);
-    return pontos.map(function(p) {
+    var result = pontos.map(function(p) {
       return { idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '', horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '' };
     });
+    // Para trechos sem tipo definido, busca o tipo_via salvo em DISTANCIAS
+    var distVia = _lerTipoViaDistancias_();
+    for (var i = 0; i < result.length - 1; i++) {
+      if (!result[i].tipoTrecho) {
+        var norm = _normPair_(result[i].idPonto, result[i + 1].idPonto);
+        result[i].tipoTrecho = distVia[norm[0] + ':' + norm[1]] || '';
+      }
+    }
+    return result;
   } catch (e) {
     return [];
   }
@@ -157,6 +166,15 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     });
 
     EsquemasService.invalidateCache();
+
+    // Deriva os trechos (legs) da sequência e salva tipo_via em DISTANCIAS
+    var legs = [];
+    for (var j = 0; j < pontos.length - 1; j++) {
+      legs.push({ pontoA: pontos[j].idPonto, pontoB: pontos[j + 1].idPonto, tipoVia: pontos[j].tipoTrecho || 'BR' });
+    }
+    _atualizarTipoViaDistancias_(legs);
+    _colorirEsquemaPontos_(sheet);
+
     return true;
   } catch (e) {
     throw new Error('Erro ao salvar sequência: ' + e.message);
@@ -263,6 +281,224 @@ function saveDistanciasCached(pairKms) {
 function _normPair_(a, b) {
   var sa = String(a).trim(), sb = String(b).trim();
   return sa <= sb ? [sa, sb] : [sb, sa];
+}
+
+/**
+ * Lê o mapa tipo_via da aba DISTANCIAS.
+ * @returns {Object} { "normA:normB": tipoVia }
+ */
+function _lerTipoViaDistancias_() {
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet || sheet.getLastRow() < 2) return {};
+    var lastCol = sheet.getLastColumn();
+    if (lastCol < 4) return {};
+    var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    var tvIdx = -1;
+    for (var i = 0; i < headers.length; i++) {
+      if (String(headers[i]).trim().toLowerCase() === 'tipo_via') { tvIdx = i; break; }
+    }
+    if (tvIdx === -1) return {};
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, lastCol).getValues();
+    var map  = {};
+    data.forEach(function(row) {
+      var a  = String(row[0]).trim(), b = String(row[1]).trim();
+      var tv = String(row[tvIdx]).trim();
+      if (a && b && tv) map[a + ':' + b] = tv;
+    });
+    return map;
+  } catch(e) { return {}; }
+}
+
+/**
+ * Atualiza a coluna tipo_via em DISTANCIAS para cada trecho salvo.
+ * Cria a coluna se ainda não existir.
+ * @param {Array<{pontoA, pontoB, tipoVia}>} legs
+ */
+function _atualizarTipoViaDistancias_(legs) {
+  if (!legs || !legs.length) return;
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet) return;
+
+    // Localiza ou cria coluna tipo_via
+    var lastCol  = sheet.getLastColumn();
+    var tvCol    = -1;
+    if (lastCol >= 1) {
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      for (var j = 0; j < headers.length; j++) {
+        if (String(headers[j]).trim().toLowerCase() === 'tipo_via') { tvCol = j + 1; break; }
+      }
+    }
+    if (tvCol === -1) {
+      tvCol = lastCol + 1;
+      sheet.getRange(1, tvCol).setValue('tipo_via');
+    }
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var pairs = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+
+    legs.forEach(function(leg) {
+      if (!leg.pontoA || !leg.pontoB) return;
+      var norm = _normPair_(leg.pontoA, leg.pontoB);
+      for (var i = 0; i < pairs.length; i++) {
+        if (String(pairs[i][0]).trim() === norm[0] && String(pairs[i][1]).trim() === norm[1]) {
+          sheet.getRange(i + 2, tvCol).setValue(leg.tipoVia || 'BR');
+          break;
+        }
+      }
+    });
+  } catch(e) {
+    Logger.log('[_atualizarTipoViaDistancias_] ' + e.message);
+  }
+}
+
+/**
+ * Salva ou atualiza a velocidade de um tipo de via para uma linha na aba TIPO_VIA.
+ * @param {string} idEsquema
+ * @param {string} tipo  — BR | Est | Mun | Urb
+ * @param {number} vel   — velocidade em km/h
+ */
+function salvarTipoViaVelocidade(idEsquema, tipo, vel) {
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('TIPO_VIA');
+    if (!sheet) {
+      sheet = ss.insertSheet('TIPO_VIA');
+      sheet.getRange(1, 1, 1, 3).setValues([['cod_linha', 'tipo', 'km']]);
+    }
+    var idStr   = String(idEsquema).trim();
+    var tipoStr = String(tipo).trim();
+    var velNum  = Math.round(parseFloat(vel) * 10) / 10;
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      for (var i = 0; i < data.length; i++) {
+        if (String(data[i][0]).trim() === idStr && String(data[i][1]).trim() === tipoStr) {
+          sheet.getRange(i + 2, 3).setValue(velNum);
+          return true;
+        }
+      }
+    }
+    sheet.appendRow([idEsquema, tipoStr, velNum]);
+    return true;
+  } catch(e) {
+    throw new Error('Erro ao salvar velocidade: ' + e.message);
+  }
+}
+
+/**
+ * Retorna as velocidades por tipo de via para um esquema.
+ * Prioridade: 1) config da própria linha em TIPO_VIA
+ *             2) média das outras linhas configuradas
+ *             3) padrões globais (BR=85, Est=75, Mun=60, Urb=45)
+ * @param {string} idEsquema
+ * @returns {{ BR: number, Est: number, Mun: number, Urb: number }}
+ */
+function getTipoViaVelocidades(idEsquema) {
+  var DEFAULTS = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('TIPO_VIA');
+    if (!sheet || sheet.getLastRow() < 2) return DEFAULTS;
+
+    var data  = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+    var idStr = String(idEsquema).trim();
+
+    var lineVel  = {};
+    var otherVel = { BR: [], Est: [], Mun: [], Urb: [] };
+
+    data.forEach(function(row) {
+      var cod  = String(row[0]).trim();
+      var tipo = String(row[1]).trim();
+      var vel  = parseFloat(row[2]);
+      if (!tipo || isNaN(vel) || vel <= 0) return;
+      if (cod === idStr) {
+        lineVel[tipo] = vel;
+      } else if (otherVel[tipo] !== undefined) {
+        otherVel[tipo].push(vel);
+      }
+    });
+
+    var result = {};
+    ['BR', 'Est', 'Mun', 'Urb'].forEach(function(tipo) {
+      if (lineVel[tipo] !== undefined) {
+        result[tipo] = lineVel[tipo];
+      } else if (otherVel[tipo].length > 0) {
+        var sum = otherVel[tipo].reduce(function(a, b) { return a + b; }, 0);
+        result[tipo] = Math.round(sum / otherVel[tipo].length);
+      } else {
+        result[tipo] = DEFAULTS[tipo];
+      }
+    });
+
+    return result;
+  } catch(e) {
+    return DEFAULTS;
+  }
+}
+
+/**
+ * Colore as linhas de ESQUEMA_PONTOS por id_esquema.
+ * Cores vivas com luminosidade suficiente para texto preto.
+ * Relê a aba inteira — todos os esquemas ficam coloridos de forma consistente.
+ */
+function _colorirEsquemaPontos_(sheet) {
+  try {
+    var PALETTE = [
+      '#FF6B6B', // coral
+      '#FFD93D', // amarelo
+      '#6BCB77', // verde
+      '#4ECDC4', // teal
+      '#74B9FF', // azul
+      '#FD79A8', // rosa
+      '#FDCB6E', // dourado
+      '#A29BFE', // lavanda
+      '#FF9A3C', // laranja
+      '#00CEC9'  // ciano
+    ];
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 1) return;
+
+    var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+
+    // Mapeia cada id_esquema para uma cor (ordem de primeira aparição)
+    var colorMap = {};
+    var paletteIdx = 0;
+    ids.forEach(function(row) {
+      var id = String(row[0]).trim();
+      if (id && colorMap[id] === undefined) {
+        colorMap[id] = PALETTE[paletteIdx % PALETTE.length];
+        paletteIdx++;
+      }
+    });
+
+    // Agrupa linhas consecutivas de mesmo esquema em blocos para minimizar chamadas à API
+    var blocks = [];
+    var cur = null;
+    ids.forEach(function(row, i) {
+      var id    = String(row[0]).trim();
+      var color = id ? colorMap[id] : '#FFFFFF';
+      var sheetRow = i + 2;
+      if (cur && cur.color === color) {
+        cur.end = sheetRow;
+      } else {
+        cur = { start: sheetRow, end: sheetRow, color: color };
+        blocks.push(cur);
+      }
+    });
+
+    blocks.forEach(function(b) {
+      sheet.getRange(b.start, 1, b.end - b.start + 1, lastCol).setBackground(b.color);
+    });
+  } catch(e) {
+    Logger.log('[_colorirEsquemaPontos_] ' + e.message);
+  }
 }
 
 function doGet(e) {

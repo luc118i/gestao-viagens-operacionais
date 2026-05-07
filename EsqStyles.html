@@ -349,45 +349,62 @@ mark { background: #ffe082; border-radius: 2px; color: inherit; }
 }
 .hor-com-display:hover .hor-com-edit-icon { opacity: 1; }
 
+/* ── Parada — select estilizado ── */
+.hor-tp-input {
+  -webkit-appearance: none; -moz-appearance: none; appearance: none;
+  width: 78px; padding: 5px 22px 5px 11px;
+  border: 1.5px solid #dde1ef; border-radius: 20px;
+  font-size: 11px; font-weight: 600; color: #1a1d23;
+  background: #f8f9fc url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%23a0a8bc' stroke-width='1.6' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 8px center;
+  font-family: inherit; cursor: pointer;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.hor-tp-input:hover  { border-color: #f47920; background-color: #fff8f2; }
+.hor-tp-input:focus  { border-color: #f47920; outline: none; background-color: #fff; box-shadow: 0 0 0 3px rgba(244,121,32,0.15); }
+
 /* ── Célula Temp. Desl. com seletor de via por trecho ── */
 td.hor-via-td {
-  position: relative; text-align: right; padding-right: 8px;
+  position: relative; text-align: right; padding-right: 10px;
   white-space: nowrap;
 }
-.hor-via-wrap {
-  display: inline-flex; align-items: center; gap: 4px;
-}
-.hor-via-time { font-size: 12px; color: #5a6070; font-weight: 500; }
-.hor-via-dist { font-size: 9px; color: #a0a8bc; margin-left: 2px; }
+.hor-via-wrap { display: inline-flex; align-items: center; gap: 5px; }
+.hor-via-time { font-size: 12px; color: #5a6070; font-weight: 600; }
+.hor-via-dist { font-size: 9px; color: #a0a8bc; margin-left: 1px; }
+
+/* Badge cor por tipo de via */
 .hor-via-badge {
-  font-size: 9px; font-weight: 700; padding: 1px 5px;
-  border-radius: 3px; background: #fff3e0; color: #e65100;
-  border: 1px solid #ffcc80; letter-spacing: 0.3px;
+  font-size: 9px; font-weight: 700; padding: 2px 7px;
+  border-radius: 20px; letter-spacing: 0.5px; border: 1.5px solid;
 }
+.hor-via-badge[data-via="BR"]  { color: #1565c0; background: #e3f2fd; border-color: #90caf9; }
+.hor-via-badge[data-via="Est"] { color: #2e7d32; background: #e8f5e9; border-color: #a5d6a7; }
+.hor-via-badge[data-via="Mun"] { color: #b84f00; background: #fff3e0; border-color: #ffcc80; }
+.hor-via-badge[data-via="Urb"] { color: #6a1b9a; background: #f3e5f5; border-color: #ce93d8; }
+
+/* Overlay popup */
 .hor-via-overlay {
   display: none; position: absolute;
   right: 6px; top: 50%; transform: translateY(-50%);
-  background: #fff; border: 1px solid #dde1ef;
-  border-radius: 6px; padding: 3px 5px;
-  gap: 3px; box-shadow: 0 3px 12px rgba(0,0,0,0.13);
+  background: #fff; border: 1px solid #e4e8f4;
+  border-radius: 12px; padding: 5px 7px;
+  gap: 5px; box-shadow: 0 6px 24px rgba(0,0,0,0.14);
   z-index: 30; flex-direction: row; align-items: center;
 }
 td.hor-via-td:hover .hor-via-overlay { display: flex; }
 td.hor-via-td.hor-via-done .hor-via-overlay { display: none !important; }
+
+/* Botões de via — cor por tipo */
 .hor-via-btn {
-  border: 1px solid #d4d8e8; background: #f4f5f8;
-  border-radius: 3px; padding: 2px 6px;
-  font-size: 9px; font-weight: 700; cursor: pointer;
-  color: #6070a0; transition: background 0.1s, border-color 0.1s, color 0.1s;
-  font-family: inherit;
+  border: 1.5px solid #e0e4f0; background: #f8f9fc;
+  border-radius: 8px; padding: 4px 9px;
+  font-size: 10px; font-weight: 700; cursor: pointer; color: #9098b0;
+  transition: all 0.12s; font-family: inherit; letter-spacing: 0.3px;
+  line-height: 1;
 }
-.hor-via-btn:hover { background: #e8f0fe; border-color: #a0b4f0; color: #2c4ebe; }
-.hor-via-btn.active { background: #f47920; border-color: #d46010; color: #fff; }
-.hor-tp-input {
-  width: 68px; padding: 3px 4px; border: 1px solid #d4d8e8; border-radius: 4px;
-  font-size: 11px; color: #1a1d23; background: #fff; font-family: inherit; cursor: pointer;
-}
-.hor-tp-input:focus { border-color: #f47920; outline: none; }
+.hor-via-btn[data-via="BR"]:hover,  .hor-via-btn[data-via="BR"].active  { background: #1565c0; border-color: #1565c0; color: #fff; }
+.hor-via-btn[data-via="Est"]:hover, .hor-via-btn[data-via="Est"].active { background: #2e7d32; border-color: #2e7d32; color: #fff; }
+.hor-via-btn[data-via="Mun"]:hover, .hor-via-btn[data-via="Mun"].active { background: #b84f00; border-color: #b84f00; color: #fff; }
+.hor-via-btn[data-via="Urb"]:hover, .hor-via-btn[data-via="Urb"].active { background: #6a1b9a; border-color: #6a1b9a; color: #fff; }
 .row-predep td { opacity: 0.38; }
 .delta-ok   { color: #22c97a; font-size: 10px; font-weight: 700; white-space: nowrap; }
 .delta-warn { color: #f47920; font-size: 10px; font-weight: 700; white-space: nowrap; }
@@ -460,7 +477,7 @@ td.hor-via-td.hor-via-done .hor-via-overlay { display: none !important; }
 .esq-modal-overlay.hidden { display: none; }
 .esq-modal {
   background: #fff; border-radius: 14px; width: 480px; max-width: 95vw;
-  box-shadow: 0 24px 64px rgba(0,0,0,0.38); overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0,0,0,0.38);
   animation: modalIn 0.2s ease;
 }
 @keyframes modalIn { from { opacity:0; transform:scale(0.95) translateY(-10px); } to { opacity:1; transform:none; } }
@@ -475,6 +492,16 @@ td.hor-via-td.hor-via-done .hor-via-overlay { display: none !important; }
 }
 .esq-modal-close:hover { background: #dde1ee; color: #1a1d23; }
 .esq-modal-body { padding: 12px 24px 0; }
+/* Dropdown do modal de esquema: inline, não sobrepõe nem vaza */
+.esq-modal .sw { position: static; }
+.esq-modal .sd {
+  position: static; margin-top: 4px;
+  border: 1px solid #d4d8e8; border-radius: 10px;
+  box-shadow: none; max-height: 260px;
+}
+.esq-modal .sdi { padding: 11px 14px; }
+.esq-modal .sdi-main { font-size: 14px; font-weight: 700; color: #1a1d23; }
+.esq-modal .sdi-meta { font-size: 12px; color: #5a6070; margin-top: 3px; }
 .esq-search-wrap { position: relative; }
 .esq-search-ico {
   position: absolute; left: 12px; top: 50%; transform: translateY(-50%);

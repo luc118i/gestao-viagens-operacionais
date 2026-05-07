@@ -100,7 +100,8 @@ var EsquemasService = (() => {
       id_esquema: ['id_esquema', 'id', 'codigo', 'cod_esquema', 'esquema'],
       nome_linha: ['nome_linha', 'nome', 'linha', 'descricao'],
       horario:    ['horario', 'hora', 'hora_partida', 'horario_partida', 'time'],
-      sentido:    ['sentido', 'direcao', 'direction']
+      sentido:    ['sentido', 'direcao', 'direction'],
+      tipo_via:   ['tipo_via', 'tipovia', 'tipo_de_via', 'via_padrao', 'via']
     });
 
     var esquemas = [];
@@ -110,6 +111,7 @@ var EsquemasService = (() => {
       var nomeLinha = _getCell(row, colMap.nome_linha);
       var horario   = colMap.horario !== undefined ? _formatHorario(row[colMap.horario]) : '';
       var sentido   = _getCell(row, colMap.sentido);
+      var tipoVia   = _getCell(row, colMap.tipo_via);
 
       if (!idEsquema) continue;
 
@@ -117,7 +119,8 @@ var EsquemasService = (() => {
         id_esquema: idEsquema,
         nome_linha: nomeLinha,
         horario:    horario,
-        sentido:    sentido
+        sentido:    sentido,
+        tipo_via:   tipoVia
       });
     }
 
@@ -220,13 +223,18 @@ var EsquemasService = (() => {
   /**
    * Formata um valor de célula de horário.
    * Google Sheets retorna Date para células formatadas como Hora.
+   * Usa o fuso da planilha (não do script) para evitar defasagem de horário.
    */
   function _formatHorario(val) {
     if (!val && val !== 0) return '';
     if (val instanceof Date) {
-      return Utilities.formatDate(val, Session.getScriptTimeZone(), 'HH:mm');
+      var tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
+      return Utilities.formatDate(val, tz, 'HH:mm');
     }
-    return String(val).trim();
+    // Texto "HH:MM" ou "HH:MM:SS" — extrai só HH:MM
+    var s = String(val).trim();
+    var m = s.match(/^(\d{1,2}):(\d{2})/);
+    return m ? ('0' + m[1]).slice(-2) + ':' + m[2] : s;
   }
 
   /**

@@ -9,7 +9,7 @@
       <div class="hor-config-group">
         <div class="hor-config-label">Hora de partida</div>
         <input type="time" id="horHoraPartida" class="fi" style="width:120px;" value="00:00"
-               oninput="_lastCalc?_partialUpdateSchedule():renderHorario()" />
+               oninput="_lastCalc?_partialUpdateSchedule():renderHorario(); saveHorConfig();" />
       </div>
       <div class="hor-config-group">
         <div class="hor-config-label">Tipo de via</div>
@@ -23,7 +23,9 @@
       <div class="hor-config-group">
         <div class="hor-config-label">Vel. média (km/h)</div>
         <input type="number" id="horVelMedia" class="fi" style="width:82px;" value="85" min="10" max="150"
-               oninput="_lastCalc?_partialUpdateSchedule():renderHorario()" />
+               oninput="_lastCalc?_partialUpdateSchedule():renderHorario(); saveHorConfig();"
+               onkeydown="if(event.key==='Enter'){_salvarVelAtiva();event.preventDefault();}"
+               title="Edite e pressione Enter para salvar na planilha" />
       </div>
       <div class="hor-config-group">
         <div class="hor-config-label">Ponto de partida</div>
