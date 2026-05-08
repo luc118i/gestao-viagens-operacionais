@@ -48,10 +48,8 @@ var ReportService = (() => {
     }
 
     // Comparação dentro do trecho
-    var comparacao = ComparisonService.compararRota(
-      _filtrarEsquemaComFallback(esquemaPontos, motorista.ponto_inicio, motorista.ponto_fim, trechoTrip),
-      trechoTrip,
-    );
+    var esquemaTrecho = _filtrarEsquemaComFallback(esquemaPontos, motorista.ponto_inicio, motorista.ponto_fim, trechoTrip);
+    var comparacao = ComparisonService.compararRota(esquemaTrecho, trechoTrip);
 
     var pontosNaoVisitados =
       ComparisonService.getPontosNaoVisitados(comparacao);
@@ -80,6 +78,7 @@ var ReportService = (() => {
       },
       trecho: trechoInfo,
       tripForMap: trechoTrip,          // apenas pontos do trecho para o mapa
+      esquemaTrecho: esquemaTrecho,    // esquema filtrado ao trecho do motorista
       trechoStats: _computeTrechoStats(trechoTrip),
       pontos_nao_visitados: pontosNaoVisitados.map(function (p) {
         return {
@@ -152,6 +151,7 @@ var ReportService = (() => {
         total_pontos: trechoTrip.length,
       },
       tripForMap: trechoTrip,
+      esquemaTrecho: esquemaTrecho,    // esquema filtrado ao trecho
       trechoStats: _computeTrechoStats(trechoTrip),
       pontos_nao_visitados: pontosNaoVisitados.map(function (p) {
         return {
@@ -331,7 +331,9 @@ var ReportService = (() => {
    */
   function _calcularParadas(trechoTrip) {
     var paradas = [];
-    trechoTrip.forEach(function (pt) {
+    var lastIdx = trechoTrip.length - 1;
+    trechoTrip.forEach(function (pt, idx) {
+      if (idx === 0 || idx === lastIdx) return;
       if (!pt.parada_s || pt.parada_s <= 0) return;
       var tipoKey = String(pt.tipo || '').trim();
       var paradaMin = Math.round((pt.parada_s / 60) * 10) / 10;
@@ -508,6 +510,15 @@ var ReportService = (() => {
       showSectionViagem: true,
       showSectionIdentificacao: true,
       drivers: [], // Tripulação desabilitada — sem necessidade de UUID
+      // Campos exibidos em DADOS DA VIAGEM pela API
+      driverName:      (payload.motorista || {}).nome      || '',
+      driverMatricula: (payload.motorista || {}).matricula || '',
+      driverBase:      (payload.motorista || {}).base       || '',
+      trechoAnalisado: (function() {
+        var t = payload.trecho || {};
+        if (!t.ponto_inicio || !t.ponto_fim) return '';
+        return t.ponto_inicio + ' \u2192 ' + t.ponto_fim + ' (' + (t.total_pontos || 0) + ' pontos)';
+      })(),
     };
   }
 
@@ -702,6 +713,42 @@ var ReportService = (() => {
     var eventos = payload.eventos || [];
     var naoVisit = payload.pontos_nao_visitados || [];
 
+    // Para MOTORISTA/TRECHO usa o esquema filtrado ao trecho; para COMPLETO usa o esquema inteiro
+    var esquemaPontos = payload.esquemaTrecho || params.esquemaPontos || [];
+    var esquemaIdSet = {};
+    esquemaPontos.forEach(function(ep) {
+      if (ep.id_ponto) esquemaIdSet[String(ep.id_ponto).trim()] = true;
+    });
+
+    // Pontos extremos do esquema (início e fim da operação) não são penalizados por parada
+    var _esqOrd = esquemaPontos.slice().sort(function(a, b) { return (a.ordem || 0) - (b.ordem || 0); });
+    var _extremos = {};
+    if (_esqOrd.length > 0) {
+      var _cA = String(_esqOrd[0].id_ponto || '').trim();
+      var _cZ = String(_esqOrd[_esqOrd.length - 1].id_ponto || '').trim();
+      if (_cA) _extremos[_cA] = true;
+      if (_cZ) _extremos[_cZ] = true;
+    }
+    paradas = paradas.filter(function(p) { return !p.codigo || !_extremos[String(p.codigo).trim()]; });
+    excessos = excessos.filter(function(e) { return !e.codigo || !_extremos[String(e.codigo).trim()]; });
+
+    var tripForMap = payload.tripForMap || [];
+    var tripLastIdx = tripForMap.length - 1;
+    var paradasFora = [];
+    tripForMap.forEach(function(pt, idx) {
+      if (idx === 0 || idx === tripLastIdx) return;
+      if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
+      if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
+      paradasFora.push({
+        ponto:      pt.ponto,
+        codigo:     pt.codigo || null,
+        entrada:    pt.entrada,
+        saida:      pt.saida,
+        parada_min: Math.round((pt.parada_s / 60) * 10) / 10,
+        proibido:   !!(pt.proibido42),
+      });
+    });
+
     var h = "";
 
     // Cabeçalho de resumo — usa stats do trecho filtrado (não da viagem completa)
@@ -726,22 +773,65 @@ var ReportService = (() => {
       h += '<td style="padding:6px 10px;"><strong>Fim</strong><br/>' + stats.fim + "</td>";
     h += "</tr></table>";
 
-    if (motorista.nome) {
-      h +=
-        '<p style="font-size:12px;margin-bottom:12px;"><strong>Motorista:</strong> ' +
-        motorista.nome +
-        (motorista.matricula ? " (Mat. " + motorista.matricula + ")" : "") +
-        "</p>";
-    }
-    if (trecho.ponto_inicio && trecho.ponto_fim) {
-      h +=
-        '<p style="font-size:12px;margin-bottom:16px;"><strong>Trecho analisado:</strong> ' +
-        trecho.ponto_inicio +
-        " → " +
-        trecho.ponto_fim +
-        " (" +
-        (trecho.total_pontos || 0) +
-        " pontos)</p>";
+    // Tabela de registro do trecho — chegada / tempo no local / saída (MOTORISTA e TRECHO)
+    if (payload.tipo !== 'COMPLETO' && tripForMap.length > 0) {
+      var pontosRegistro = tripForMap.filter(function(pt) {
+        return pt.matched || (pt.parada_s && pt.parada_s > 0);
+      });
+      if (pontosRegistro.length > 0) {
+        var THR = 'background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;' +
+                  'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;text-align:center;';
+        var TDR = 'padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;font-size:11px;';
+        h += '<div style="margin-bottom:20px;">' +
+             '<h4 style="font-size:13px;margin:0 0 10px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
+             'Registro do Trecho</h4>' +
+             '<table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #cdd2e5;">' +
+             '<thead><tr>' +
+             '<th style="' + THR + 'width:32px;">#</th>' +
+             '<th style="' + THR + 'text-align:left;">Ponto</th>' +
+             '<th style="' + THR + '">Chegada</th>' +
+             '<th style="' + THR + '">Tempo no Local</th>' +
+             '<th style="' + THR + '">Saída</th>' +
+             '</tr></thead><tbody>';
+        pontosRegistro.forEach(function(pt, idx) {
+          var codigo = String(pt.codigo || '').trim();
+          var isExtremo = !!_extremos[codigo];
+          var paradaMin = pt.parada_s > 0 ? Math.round((pt.parada_s / 60) * 10) / 10 : 0;
+          var nome = String(pt.ponto || '').toUpperCase();
+          var esperadoMin = /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
+            : /GARAGEM/.test(nome) ? 20
+            : TEMPO_ESPERADO_PADRAO;
+          var excessoMin = isExtremo ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin - 5) * 10) / 10);
+          var rowBg = isExtremo   ? 'background:#f0fff8;'
+                    : excessoMin > 0 ? 'background:#fff8f8;'
+                    : (!pt.matched && paradaMin > 0) ? 'background:#fffbf0;'
+                    : '';
+          var nomeCel = pt.ponto || '—';
+          if (isExtremo) {
+            nomeCel = '<strong>' + nomeCel + '</strong>' +
+              (idx === 0
+                ? ' <span style="font-size:9px;background:#22a96a;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">Início</span>'
+                : ' <span style="font-size:9px;background:#e8820a;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">Fim</span>');
+          } else if (!pt.matched) {
+            nomeCel = '<em style="color:#888;">' + nomeCel + '</em>';
+          }
+          var paradaHtml = paradaMin > 0
+            ? (excessoMin > 0
+                ? '<span style="color:#d94040;font-weight:700;">' + paradaMin + ' min <span style="font-size:9px;">(+' + excessoMin + ' exc.)</span></span>'
+                : '<span>' + paradaMin + ' min</span>')
+            : '<span style="color:#bbb;">—</span>';
+          var chegada = _extractTime(pt.entrada) || '—';
+          var saida   = _extractTime(pt.saida || pt.entrada) || '—';
+          h += '<tr style="' + rowBg + '">' +
+               '<td style="' + TDR + 'text-align:center;color:#888;">' + (pt.seq || (idx + 1)) + '</td>' +
+               '<td style="' + TDR + '">' + nomeCel + '</td>' +
+               '<td style="' + TDR + 'text-align:center;font-family:monospace;">' + chegada + '</td>' +
+               '<td style="' + TDR + 'text-align:center;">' + paradaHtml + '</td>' +
+               '<td style="' + TDR + 'text-align:center;font-family:monospace;">' + saida + '</td>' +
+               '</tr>';
+        });
+        h += '</tbody></table></div>';
+      }
     }
 
     // Paradas com excesso
@@ -783,6 +873,38 @@ var ReportService = (() => {
           "</tr>";
       });
       h += "</tbody></table>";
+    }
+
+    // Paradas fora do esquema
+    if (paradasFora.length > 0) {
+      h +=
+        '<h4 style="font-size:13px;margin:0 0 8px;color:#d00000;">Paradas Fora do Esquema (' +
+        paradasFora.length + ')</h4>';
+      h +=
+        '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;">';
+      h +=
+        '<thead><tr style="background:#f5f5f5;">' +
+        '<th style="padding:6px 8px;text-align:left;">Ponto</th>' +
+        '<th style="padding:6px 8px;text-align:right;">Parada</th>' +
+        '<th style="padding:6px 8px;">Entrada</th>' +
+        '<th style="padding:6px 8px;">Saída</th>' +
+        '<th style="padding:6px 8px;text-align:center;">Status</th>' +
+        '</tr></thead><tbody>';
+      paradasFora.forEach(function(p) {
+        var statusHtml = p.proibido
+          ? '<span style="color:#d00000;font-weight:700;">⛔ Irregular</span>'
+          : '<span style="color:#e8a020;font-weight:600;">Não previsto</span>';
+        var rowBg = p.proibido ? 'background:#fff3f3;' : 'background:#fffbf0;';
+        h +=
+          '<tr style="border-bottom:1px solid #eee;' + rowBg + '">' +
+          '<td style="padding:5px 8px;font-style:italic;">' + (p.ponto || '—') + '</td>' +
+          '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:600;">' + p.parada_min + ' min</td>' +
+          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.entrada) + '</td>' +
+          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.saida) + '</td>' +
+          '<td style="padding:5px 8px;text-align:center;">' + statusHtml + '</td>' +
+          '</tr>';
+      });
+      h += '</tbody></table>';
     }
 
     // Pontos não visitados
@@ -855,11 +977,63 @@ var ReportService = (() => {
     // Sem ocorrências
     if (
       excessos.length === 0 &&
+      paradasFora.length === 0 &&
       naoVisit.length === 0 &&
       eventos.length === 0
     ) {
       h +=
         '<p style="color:#22a96a;font-size:12px;font-weight:600;">✓ Viagem sem ocorrências operacionais registradas.</p>';
+    }
+
+    // Esquema da viagem (referência da rota planejada)
+    var esquemaOrdenado = esquemaPontos.slice().sort(function(a, b) {
+      return (a.ordem || 0) - (b.ordem || 0);
+    });
+    if (esquemaOrdenado.length > 0) {
+      var temComercial = esquemaOrdenado.some(function(ep) { return ep.horario_comercial; });
+      var temParada    = esquemaOrdenado.some(function(ep) { return ep.tempo_local; });
+      var TH = 'background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;' +
+               'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;';
+      var TD = 'padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;';
+      h +=
+        '<div style="margin-top:28px;border-top:2px solid #f47920;padding-top:16px;">' +
+        '<h4 style="font-size:13px;margin:0 0 10px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
+        'Esquema da Viagem — ' + linhaStr +
+        (horarioEsquema ? ' &nbsp;·&nbsp; <span style="color:#f47920;">' + horarioEsquema + '</span>' : '') +
+        '</h4>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #cdd2e5;">';
+      h +=
+        '<thead><tr>' +
+        '<th style="' + TH + 'text-align:center;width:36px;">#</th>' +
+        '<th style="' + TH + 'text-align:left;">Cidade</th>' +
+        (temComercial ? '<th style="' + TH + 'text-align:center;">Horário</th>' : '') +
+        (temParada    ? '<th style="' + TH + 'text-align:center;">Parada</th>'  : '') +
+        '</tr></thead><tbody>';
+      esquemaOrdenado.forEach(function(ep, idx) {
+        var isFirst = idx === 0;
+        var isLast  = idx === esquemaOrdenado.length - 1;
+        var rowBg   = isFirst ? 'background:#f0fff8;'
+                    : isLast  ? 'background:#fff8f0;'
+                    : (!ep.horario_comercial && temComercial) ? 'background:#fff8f2;' : '';
+        var nomeCel = '<strong>' + (ep.nome_ponto || ep.id_ponto || '—') + '</strong>' +
+                      (isFirst
+                        ? ' <span style="font-size:9px;background:#f47920;color:#fff;' +
+                          'border-radius:3px;padding:1px 5px;margin-left:3px;">✈</span>'
+                        : '');
+        var horCel = ep.horario_comercial
+          ? '<strong style="color:#1565c0;">' + ep.horario_comercial + '</strong>'
+          : '<span style="color:#ccc;">—</span>';
+        var paradaCel = (isFirst || isLast) ? '—'
+                      : (ep.tempo_local ? ep.tempo_local : '—');
+        h +=
+          '<tr style="' + rowBg + '">' +
+          '<td style="' + TD + 'text-align:center;color:#888;">' + (ep.ordem || idx + 1) + '</td>' +
+          '<td style="' + TD + '">' + nomeCel + '</td>' +
+          (temComercial ? '<td style="' + TD + 'text-align:center;font-family:monospace;">' + horCel    + '</td>' : '') +
+          (temParada    ? '<td style="' + TD + 'text-align:center;">'                       + paradaCel + '</td>' : '') +
+          '</tr>';
+      });
+      h += '</tbody></table></div>';
     }
 
     return h;

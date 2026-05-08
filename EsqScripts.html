@@ -1408,12 +1408,18 @@ function updateMap() {
 function setupEsqSearch() {
   var inp  = document.getElementById('esqSearch');
   var drop = document.getElementById('esqDrop');
+
   inp.addEventListener('focus', function() { renderEsqs(this.value); });
   inp.addEventListener('input', function() { renderEsqs(this.value); });
-  document.addEventListener('click', function(e) {
-    if (!e.target.closest('#esqSearch') && !e.target.closest('#esqDrop'))
-      drop.classList.remove('open');
+
+  // blur fecha com delay — o mousedown no dropdown cancela o blur antes de fechar
+  inp.addEventListener('blur', function() {
+    setTimeout(function() { drop.classList.remove('open'); }, 160);
   });
+
+  // mousedown no dropdown previne o blur do input, mantendo a lista visível ao clicar num item
+  drop.addEventListener('mousedown', function(e) { e.preventDefault(); });
+
   document.getElementById('btnNovo').addEventListener('click', novoEsquema);
   document.getElementById('btnSalvEsq').addEventListener('click', salvarEsquema);
 }
@@ -1421,12 +1427,19 @@ function setupEsqSearch() {
 function renderEsqs(q) {
   var drop = document.getElementById('esqDrop');
   var nq   = norm(q);
+  // "1845" ou "845" → "18:45" / "08:45" para casar com horários
+  var timeQ = null;
+  var digits = (q || '').trim().replace(/\D/g, '');
+  if (digits.length === 4) timeQ = digits.slice(0, 2) + ':' + digits.slice(2);
+  else if (digits.length === 3) timeQ = '0' + digits[0] + ':' + digits.slice(1);
+
   var list = _esqs.filter(function(e) {
     return !nq
       || norm(e.id_esquema).includes(nq)
       || norm(e.nome_linha).includes(nq)
       || norm(e.horario || '').includes(nq)
-      || norm(e.sentido || '').includes(nq);
+      || norm(e.sentido || '').includes(nq)
+      || (timeQ && (e.horario || '').startsWith(timeQ));
   }).slice(0, 60);
 
   drop.innerHTML = list.length

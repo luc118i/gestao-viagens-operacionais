@@ -516,6 +516,33 @@ td.hor-via-td.hor-via-done .hor-via-overlay { display: none !important; }
 .esq-search-fi:focus { border-color: #f47920 !important; box-shadow: 0 0 0 3px rgba(244,121,32,0.10); }
 .esq-modal-divider { height: 1px; background: #f0f2f8; margin: 12px 0 0; }
 .esq-modal-form { padding: 12px 24px 4px; }
+.esq-modal-form .fl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: #9aa0ad; margin-bottom: 5px; }
+.esq-modal-form .fi,
+.esq-modal-form .fs {
+  padding: 10px 12px; border: 1.5px solid #e0e3f0; border-radius: 8px;
+  font-size: 13px; background: #f8f9fc; color: #1a1d23;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+  box-sizing: border-box;
+}
+.esq-modal-form .fi:focus,
+.esq-modal-form .fs:focus {
+  border-color: #f47920; background: #fff;
+  box-shadow: 0 0 0 3px rgba(244,121,32,0.12); outline: none;
+}
+.esq-modal-form .fs {
+  -webkit-appearance: none; appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1l5 5 5-5' stroke='%239aa0ad' stroke-width='1.6' stroke-linecap='round' fill='none'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 12px center;
+  background-color: #f8f9fc; padding-right: 32px; cursor: pointer;
+}
+.esq-modal-form .fs:focus { background-color: #fff; }
+/* Campo horário com ícone de relógio */
+.fi-time-wrap { position: relative; }
+.fi-time-ico {
+  position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+  width: 14px; height: 14px; color: #b0b5c8; pointer-events: none;
+}
+.fi-time-wrap .fi-time { padding-left: 32px !important; }
 .esq-modal-footer {
   padding: 12px 24px 20px; display: flex; align-items: center; justify-content: space-between;
 }
