@@ -503,21 +503,21 @@ var ReportService = (() => {
       tripTime: params.horario || startTime || null,
       reportTitle: titulo,
       relatoHtml: relatoHtml,
-      // Desabilita seções não aplicáveis a análise de viagem
-      showSectionTripulacao: false,
-      showSectionPassageiros: false,
-      showSectionDados: true,
-      showSectionViagem: true,
-      showSectionIdentificacao: true,
-      drivers: [], // Tripulação desabilitada — sem necessidade de UUID
-      // Campos exibidos em DADOS DA VIAGEM pela API
-      driverName:      (payload.motorista || {}).nome      || '',
-      driverMatricula: (payload.motorista || {}).matricula || '',
-      driverBase:      (payload.motorista || {}).base       || '',
-      trechoAnalisado: (function() {
+      // place = trecho analisado (exibido em DADOS DA VIAGEM para ANALISE_OP)
+      place: (function() {
         var t = payload.trecho || {};
         if (!t.ponto_inicio || !t.ponto_fim) return '';
         return t.ponto_inicio + ' \u2192 ' + t.ponto_fim + ' (' + (t.total_pontos || 0) + ' pontos)';
+      })(),
+      showSectionTripulacao: !!(payload.motorista && (payload.motorista.nome || payload.motorista.matricula)),
+      showSectionPassageiros: false,
+      showSectionDados: false,
+      showSectionViagem: true,
+      showSectionIdentificacao: false,
+      drivers: (function() {
+        var m = payload.motorista || {};
+        if (!m.nome && !m.matricula) return [];
+        return [{ position: 1, name: m.nome || '', registry: m.matricula || '', baseCode: m.base || '' }];
       })(),
     };
   }
