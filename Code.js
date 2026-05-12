@@ -808,3 +808,18 @@ function gerarRelatorio(params) {
     throw new Error("Erro ao gerar relatório: " + e.message);
   }
 }
+
+/**
+ * Cria ocorrências DESCUMP_OP_PARADA_FORA para cada parada fora do esquema.
+ * Aceita o mesmo `params` passado para gerarRelatorio.
+ *
+ * @param {Object} params
+ * @returns {Array}  [{ ponto, status, id?, httpCode?, message? }]
+ */
+function enviarParadasFora(params) {
+  try {
+    return ReportService.enviarParadasFora(params);
+  } catch (e) {
+    throw new Error("Erro ao enviar paradas fora: " + e.message);
+  }
+}

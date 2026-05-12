@@ -191,6 +191,7 @@
               <select class="form-input" id="relPontoB"></select>
             </div>
             <div id="relPreview"></div>
+            <input type="checkbox" id="chkParadasIrregularesInline" />
             <button class="btn btn-primary" id="btnGerarRelatorioInline" disabled>📋 Gerar Relatório</button>
           </div>
         </div>
@@ -586,6 +587,17 @@
             Consolida todos os pontos, velocidades e alertas da viagem em um único relatório.
           </div>
         </div>
+        <div style="border-top: 1px solid var(--border); margin: 4px 0 12px; padding-top: 12px;">
+          <label style="display: flex; align-items: center; gap: 8px; cursor: pointer; user-select: none;">
+            <input type="checkbox" id="chkParadasIrregulares" style="width:15px;height:15px;accent-color:var(--laranja);cursor:pointer;" />
+            <span style="font-size: 13px; color: var(--text2);">
+              Gerar ocorrências de parada irregular
+              <span style="font-size: 11px; color: var(--text3); display:block; margin-top:1px;">
+                Cria automaticamente em background após o relatório
+              </span>
+            </span>
+          </label>
+        </div>
         <div class="modal-footer">
           <button class="btn btn-ghost" id="btnCancelRelatorioModal">
             Cancelar
@@ -595,6 +607,13 @@
           </button>
         </div>
       </div>
+    </div>
+
+    <!-- Background progress card (paradas irregulares) -->
+    <div id="bgProgressCard" style="display:none;" class="bg-progress-card">
+      <div class="bg-progress-spinner"></div>
+      <span id="bgProgressText">Criando ocorrências...</span>
+      <button class="bg-progress-close" onclick="document.getElementById('bgProgressCard').style.display='none'">✕</button>
     </div>
 
     <!-- Loading overlay -->

@@ -1515,7 +1515,8 @@
       if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
       var dup = mat ? _vinculos.find(function(v) { return v.matricula === mat; }) : null;
       if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
-      _vinculos.push({ matricula: mat || '—', nome: nome, ponto_inicio: inicio, ponto_fim: fim });
+      var encontradoManual = mat ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; }) : null;
+      _vinculos.push({ matricula: mat || '—', nome: nome, base: (encontradoManual && encontradoManual.base) || '', ponto_inicio: inicio, ponto_fim: fim });
       _populaSelectMotoristaRelatorio();
       _atualizarPreviewRelatorio();
       UIModule.showToast('"' + nome + '" vinculado com sucesso.', 'success', 3000);
@@ -1624,23 +1625,19 @@
     }
 
     function _onConfirmRelatorio() {
-      // Lê tipo do modal (radio tipoRelatorioModal)
-      var tipoEl = document.querySelector(
-        'input[name="tipoRelatorioModal"]:checked',
-      );
+      var tipoEl = document.querySelector('input[name="tipoRelatorioModal"]:checked');
       var tipo = tipoEl ? tipoEl.value : "COMPLETO";
-      var enviarAPI = true;
+      var gerarParadas = !!(document.getElementById('chkParadasIrregulares') &&
+                            document.getElementById('chkParadasIrregulares').checked);
 
       var selEsquema = document.getElementById("selectEsquema");
       var idEsquema = selEsquema ? selEsquema.value : "";
-      var esqObj = _esquemas.find(function (e) {
-        return e.id_esquema === idEsquema;
-      });
+      var esqObj = _esquemas.find(function (e) { return e.id_esquema === idEsquema; });
       var nomeLinha = esqObj ? esqObj.nome_linha : "";
 
       var params = {
         tipo: tipo,
-        enviarAPI: enviarAPI,
+        enviarAPI: true,
         idEsquema: idEsquema,
         nomeLinha: nomeLinha,
         horario: esqObj ? (esqObj.horario || '') : '',
@@ -1659,12 +1656,8 @@
         }
         params.motorista = _vinculos[idx];
       } else if (tipo === "TRECHO") {
-        var pontoA = document.getElementById("relPontoAModal")
-          ? document.getElementById("relPontoAModal").value
-          : "";
-        var pontoB = document.getElementById("relPontoBModal")
-          ? document.getElementById("relPontoBModal").value
-          : "";
+        var pontoA = document.getElementById("relPontoAModal") ? document.getElementById("relPontoAModal").value : "";
+        var pontoB = document.getElementById("relPontoBModal") ? document.getElementById("relPontoBModal").value : "";
         if (!pontoA || !pontoB) {
           UIModule.showToast("Selecione os pontos A e B do trecho.", "error");
           return;
@@ -1672,13 +1665,27 @@
         params.idPontoA = pontoA;
         params.idPontoB = pontoB;
       }
-      // tipo === 'COMPLETO': sem filtros adicionais — envia tudo
 
+      // ── Estado de carregamento no botão ───────────────────────
+      var btnConfirm = document.getElementById('btnConfirmRelatorioModal');
+      var btnCancel  = document.getElementById('btnCancelRelatorioModal');
+      var _setBusy = function(busy) {
+        if (btnConfirm) {
+          btnConfirm.disabled = busy;
+          btnConfirm.innerHTML = busy
+            ? '<span class="btn-spin"></span> Gerando...'
+            : '📋 Gerar';
+        }
+        if (btnCancel) btnCancel.disabled = busy;
+      };
+
+      _setBusy(true);
       UIModule.showLoading("Capturando mapa e gerando relatório...");
 
       _gerarComCaptura(params,
         function (result) {
           UIModule.hideLoading();
+          _setBusy(false);
           document.getElementById("modalRelatorio").classList.remove("open");
           console.log("[App] Payload do relatório:", result.payload);
           UIModule.showToast("Relatório gerado com sucesso!", "success", 5000);
@@ -1687,17 +1694,85 @@
             if (result.apiResponse.body && result.apiResponse.body.url) {
               var fname = _buildPdfFilename(tipo, params.motorista);
               _downloadPdf(result.apiResponse.body.url, fname);
+              UIModule.showToast("PDF pronto para download.", "success", 4000);
             }
-            UIModule.showToast("PDF pronto para download.", "success", 4000);
+          }
+          if (gerarParadas) {
+            _launchParadasFora(params);
           }
         },
         function (err) {
           UIModule.hideLoading();
+          _setBusy(false);
           var msg = err && err.message ? err.message : String(err);
           UIModule.showToast("Erro ao gerar relatório: " + msg, "error", 6000);
           console.error("[App] Erro ao gerar relatório:", err);
         }
       );
+    }
+
+    /**
+     * Lança enviarParadasFora em background e gerencia o card de progresso.
+     */
+    function _launchParadasFora(params) {
+      // Conta previamente quantas paradas fora existem para exibir no card
+      var esquemaIdSet = {};
+      (params.esquemaPontos || []).forEach(function(ep) {
+        if (ep.id_ponto) esquemaIdSet[String(ep.id_ponto).trim()] = true;
+      });
+      var enriched = params.enrichedTrip || [];
+      var lastIdx  = enriched.length - 1;
+      var count = 0;
+      enriched.forEach(function(pt, idx) {
+        if (idx === 0 || idx === lastIdx) return;
+        if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
+        if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
+        count++;
+      });
+
+      if (count === 0) {
+        UIModule.showToast("Nenhuma parada irregular detectada.", "info", 3000);
+        return;
+      }
+
+      _showBgProgress('Criando ' + count + ' ocorrência' + (count > 1 ? 's' : '') + ' de parada irregular…');
+
+      google.script.run
+        .withSuccessHandler(function(results) {
+          var ok  = (results || []).filter(function(r) { return r.status === 'ok'; }).length;
+          var err = (results || []).length - ok;
+          if (err === 0) {
+            _updateBgProgress('success', '✓ ' + ok + ' ocorrência' + (ok !== 1 ? 's' : '') + ' criada' + (ok !== 1 ? 's' : ''));
+          } else {
+            _updateBgProgress('warning', ok + ' criada' + (ok !== 1 ? 's' : '') + ', ' + err + ' com erro');
+          }
+        })
+        .withFailureHandler(function(e) {
+          var msg = e && e.message ? e.message : String(e);
+          _updateBgProgress('error', 'Erro: ' + msg.slice(0, 80));
+          console.error('[App] enviarParadasFora falhou:', e);
+        })
+        .enviarParadasFora(params);
+    }
+
+    function _showBgProgress(text) {
+      var card   = document.getElementById('bgProgressCard');
+      var textEl = document.getElementById('bgProgressText');
+      if (!card) return;
+      if (textEl) textEl.textContent = text;
+      card.className = 'bg-progress-card running';
+      card.style.display = 'flex';
+    }
+
+    function _updateBgProgress(state, text) {
+      var card   = document.getElementById('bgProgressCard');
+      var textEl = document.getElementById('bgProgressText');
+      if (!card) return;
+      if (textEl) textEl.textContent = text;
+      card.className = 'bg-progress-card ' + state;
+      if (state !== 'error') {
+        setTimeout(function() { card.style.display = 'none'; }, 6000);
+      }
     }
 
     // ============================================================
@@ -2382,11 +2457,12 @@
       var esqObj = _esquemas.find(function(e) { return e.id_esquema === idEsquema; });
       var nomeLinha = esqObj ? esqObj.nome_linha : '';
 
-      var enviarAPI = true;
+      var gerarParadas = !!(document.getElementById('chkParadasIrregularesInline') &&
+                            document.getElementById('chkParadasIrregularesInline').checked);
 
       var params = {
         tipo: tipo,
-        enviarAPI: enviarAPI,
+        enviarAPI: true,
         idEsquema: idEsquema,
         nomeLinha: nomeLinha,
         horario: esqObj ? (esqObj.horario || '') : '',
@@ -2414,13 +2490,22 @@
         params.idPontoA = pontoA;
         params.idPontoB = pontoB;
       }
-      // tipo === 'COMPLETO': sem filtros adicionais
 
+      var btn = document.getElementById('btnGerarRelatorioInline');
+      var _setBusy = function(busy) {
+        if (btn) {
+          btn.disabled = busy;
+          btn.innerHTML = busy ? '<span class="btn-spin"></span> Gerando...' : '📋 Gerar Relatório';
+        }
+      };
+
+      _setBusy(true);
       UIModule.showLoading('Capturando mapa e gerando relatório...');
 
       _gerarComCaptura(params,
         function (result) {
           UIModule.hideLoading();
+          _setBusy(false);
           console.log('[App] Payload do relatório:', result.payload);
           UIModule.showToast('Relatório gerado com sucesso!', 'success', 5000);
           if (result.apiResponse) {
@@ -2428,12 +2513,16 @@
             if (result.apiResponse.body && result.apiResponse.body.url) {
               var fname2 = _buildPdfFilename(tipo, params.motorista);
               _downloadPdf(result.apiResponse.body.url, fname2);
+              UIModule.showToast('PDF pronto para download.', 'success', 4000);
             }
-            UIModule.showToast('PDF pronto para download.', 'success', 4000);
+          }
+          if (gerarParadas) {
+            _launchParadasFora(params);
           }
         },
         function (err) {
           UIModule.hideLoading();
+          _setBusy(false);
           var msg = err && err.message ? err.message : String(err);
           UIModule.showToast('Erro ao gerar relatório: ' + msg, 'error', 6000);
           console.error('[App] Erro ao gerar relatório:', err);
