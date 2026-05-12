@@ -1238,7 +1238,7 @@ var ReportService = (() => {
       if (idx === 0 || idx === lastIdx) return;
       if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
-      paradasFora.push({ ponto: pt.ponto, entrada: pt.entrada, saida: pt.saida });
+      paradasFora.push({ ponto: pt.ponto, codigo: pt.codigo || null, entrada: pt.entrada, saida: pt.saida });
     });
 
     if (paradasFora.length === 0) return [];
@@ -1296,6 +1296,7 @@ var ReportService = (() => {
         tripId:        tripId     || undefined,
         tripTime:      horario    || null,
         place:         pf.ponto   || "—",
+        placeCode:     pf.codigo  || undefined,
         relatoHtml:    esquemaHtml,
         showSectionTripulacao:     hasMot,
         showSectionViagem:         true,
