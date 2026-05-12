@@ -1293,7 +1293,7 @@ var ReportService = (() => {
         endTime:       endTime,
         vehicleNumber: vehicleNumber,
         lineLabel:     nomeLinha  || null,
-        tripId:        tripId     || null,
+        tripId:        tripId     || undefined,
         tripTime:      horario    || null,
         place:         pf.ponto   || "—",
         relatoHtml:    esquemaHtml,
