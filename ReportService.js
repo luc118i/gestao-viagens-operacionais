@@ -1258,6 +1258,7 @@ var ReportService = (() => {
       if (idx === 0 || idx === lastIdx) return;
       if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
+      if (!pt.proibido42) return;
       paradasFora.push({ ponto: pt.ponto, codigo: pt.codigo || null, entrada: pt.entrada, saida: pt.saida });
     });
 
