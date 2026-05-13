@@ -100,7 +100,7 @@ var EsquemasService = (() => {
       id_esquema: ['id_esquema', 'id', 'codigo', 'cod_esquema', 'esquema'],
       nome_linha: ['nome_linha', 'nome', 'linha', 'descricao'],
       horario:    ['horario', 'hora', 'hora_partida', 'horario_partida', 'time'],
-      sentido:    ['sentido', 'direcao', 'direction'],
+      sentido:    ['sentido', 'direcao', 'direction', 'destino', 'tipo_viagem', 'tipo', 'volta_ida', 'ida_volta', 'sentido_linha'],
       tipo_via:   ['tipo_via', 'tipovia', 'tipo_de_via', 'via_padrao', 'via']
     });
 
@@ -112,6 +112,12 @@ var EsquemasService = (() => {
       var horario   = colMap.horario !== undefined ? _formatHorario(row[colMap.horario]) : '';
       var sentido   = _getCell(row, colMap.sentido);
       var tipoVia   = _getCell(row, colMap.tipo_via);
+
+      // Fallback: extrai IDA/VOLTA do nome_linha quando coluna sentido está vazia
+      if (!sentido && nomeLinha) {
+        var m = nomeLinha.match(/\b(IDA|VOLTA|RETORNO|SUBIDA|DESCIDA)\b/i);
+        if (m) sentido = m[1].toUpperCase();
+      }
 
       if (!idEsquema) continue;
 
