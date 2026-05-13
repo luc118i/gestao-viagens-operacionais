@@ -503,6 +503,7 @@ function _colorirEsquemaPontos_(sheet) {
 
 /**
  * Busca o esquema de uma linha pelo nome e horário.
+ * Enriquece cada ponto com entrada, saída, distância e tempo de deslocamento.
  * Retorna { found: true, html } ou { found: false }.
  */
 function _getSchemaForLine_(lineName, departureTime) {
@@ -524,8 +525,71 @@ function _getSchemaForLine_(lineName, departureTime) {
   if (!match) return { found: false };
   var pontos = EsquemasService.getPontosDoEsquema(match.id_esquema);
   if (!pontos || !pontos.length) return { found: false };
-  var html = ReportService.buildEsquemaHtml(pontos, match.nome_linha, match.horario);
+
+  // Tipo de via e velocidades por segmento
+  var distVia = _lerTipoViaDistancias_();
+  var speeds  = getTipoViaVelocidades(match.id_esquema);
+
+  // Busca distâncias dos pares consecutivos em lote
+  var pairs = [];
+  for (var i = 0; i < pontos.length - 1; i++) {
+    pairs.push({ a: pontos[i].id_ponto, b: pontos[i + 1].id_ponto });
+  }
+  var distCache = pairs.length ? getDistanciasCached(pairs) : {};
+
+  var enriched = pontos.map(function(p, idx) {
+    var ep = {
+      ordem:             p.ordem,
+      id_ponto:          p.id_ponto,
+      nome_ponto:        p.nome_ponto,
+      tipo:              p.tipo,
+      horario_comercial: p.horario_comercial,
+      tempo_local:       p.tempo_local,
+      tipo_trecho:       p.tipo_trecho,
+    };
+
+    // tipo_trecho do próximo segmento (fallback via DISTANCIAS)
+    if (!ep.tipo_trecho && idx < pontos.length - 1) {
+      var normPair = _normPair_(p.id_ponto, pontos[idx + 1].id_ponto);
+      ep.tipo_trecho = distVia[normPair[0] + ':' + normPair[1]] || '';
+    }
+
+    // Distância e tempo de deslocamento até o próximo ponto
+    if (idx < pontos.length - 1) {
+      var normPair2 = _normPair_(p.id_ponto, pontos[idx + 1].id_ponto);
+      var km = distCache[normPair2[0] + ':' + normPair2[1]];
+      if (km !== undefined && km > 0) {
+        ep.distanciaProxKm = km;
+        var vel = (ep.tipo_trecho && speeds[ep.tipo_trecho]) ? speeds[ep.tipo_trecho] : (speeds['BR'] || 85);
+        ep.tempoDeslocMin = Math.round(km / vel * 60);
+      }
+    }
+
+    // Entrada = horario_comercial; Saída = entrada + tempo_local
+    if (ep.horario_comercial) {
+      ep.entrada = ep.horario_comercial;
+      var minLocal = parseInt(ep.tempo_local) || 0;
+      if (minLocal > 0) {
+        ep.saida = _addMinutes_(ep.horario_comercial, minLocal);
+      }
+    }
+
+    return ep;
+  });
+
+  var html = ReportService.buildEsquemaHtml(enriched, match.nome_linha, match.horario);
   return { found: true, html: html };
+}
+
+function _addMinutes_(timeStr, minutes) {
+  if (!timeStr || !minutes) return timeStr;
+  var parts = String(timeStr).split(':');
+  var h = parseInt(parts[0]) || 0;
+  var m = parseInt(parts[1]) || 0;
+  var total = h * 60 + m + minutes;
+  var nh = Math.floor(total / 60) % 24;
+  var nm = total % 60;
+  return String(nh).padStart(2, '0') + ':' + String(nm).padStart(2, '0');
 }
 
 function _normSchemaStr_(s) {
