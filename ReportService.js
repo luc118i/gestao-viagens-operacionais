@@ -767,6 +767,13 @@ var ReportService = (() => {
            '<text x="' + (x + 20) + '" y="' + y + '" font-size="8.5" fill="#444">' + label + '</text>';
   }
 
+  function _fmtMin(min) {
+    var total = Math.round(Number(min) || 0);
+    var hh = Math.floor(total / 60);
+    var mm = total % 60;
+    return ('0' + hh).slice(-2) + 'h' + ('0' + mm).slice(-2);
+  }
+
   /**
    * Gera o corpo HTML estruturado do relatório operacional.
    */
@@ -812,13 +819,6 @@ var ReportService = (() => {
         if (tl > 0) esqTLMap[String(ep.id_ponto).trim()] = tl;
       }
     });
-
-    function _fmtMin(min) {
-      var total = Math.round(Number(min) || 0);
-      var h = Math.floor(total / 60);
-      var m = total % 60;
-      return ('0' + h).slice(-2) + 'h' + ('0' + m).slice(-2);
-    }
 
     var tripForMap = payload.tripForMap || [];
     var tripLastIdx = tripForMap.length - 1;
