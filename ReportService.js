@@ -801,6 +801,25 @@ var ReportService = (() => {
     paradas = paradas.filter(function(p) { return !p.codigo || !_extremos[String(p.codigo).trim()]; });
     excessos = excessos.filter(function(e) { return !e.codigo || !_extremos[String(e.codigo).trim()]; });
 
+    // Tempo esperado por ponto (do esquema operacional)
+    var esqTLMap = {};
+    _esqOrd.forEach(function(ep) {
+      if (ep.id_ponto && ep.tempo_local) {
+        var parts = String(ep.tempo_local).trim().split(':');
+        var tl = parts.length === 2
+          ? (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0)
+          : parseFloat(ep.tempo_local) || 0;
+        if (tl > 0) esqTLMap[String(ep.id_ponto).trim()] = tl;
+      }
+    });
+
+    function _fmtMin(min) {
+      var total = Math.round(Number(min) || 0);
+      var h = Math.floor(total / 60);
+      var m = total % 60;
+      return ('0' + h).slice(-2) + 'h' + ('0' + m).slice(-2);
+    }
+
     var tripForMap = payload.tripForMap || [];
     var tripLastIdx = tripForMap.length - 1;
     var paradasFora = [];
@@ -878,10 +897,11 @@ var ReportService = (() => {
           var isLast  = idx === pontosRegistro.length - 1;
           // Ponto fora do esquema: tem parada, não é garagem e não consta no esquema
           var isForaEsquema = !isGaragem && paradaMin > 0 && !(codigo && esquemaIdSet[codigo]);
-          var esperadoMin = /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
+          var esperadoMin = esqTLMap[codigo] != null ? esqTLMap[codigo]
+            : /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
             : isGaragem ? 20
             : TEMPO_ESPERADO_PADRAO;
-          var excessoMin = (isExtremo || isGaragem) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin - 5) * 10) / 10);
+          var excessoMin = (isExtremo || isGaragem) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
           var showInicioTag = isFirst && !isGaragem;
           var showFimTag    = isLast  && !isGaragem && _showFim;
           var rowBg = showInicioTag  ? 'background:#f0fff8;'
@@ -904,10 +924,10 @@ var ReportService = (() => {
           var paradaHtml = ocultarTempoSaida || isGaragem || paradaMin <= 0
             ? '<span style="color:#bbb;">—</span>'
             : isForaEsquema
-              ? '<span style="color:#c0392b;font-weight:700;">' + paradaMin + ' min <span style="font-size:9px;background:#c0392b;color:#fff;border-radius:3px;padding:1px 4px;">Fora</span></span>'
+              ? '<span style="color:#c0392b;font-weight:700;">' + _fmtMin(paradaMin) + ' <span style="font-size:9px;background:#c0392b;color:#fff;border-radius:3px;padding:1px 4px;">Fora</span></span>'
               : excessoMin > 0
-                ? '<span style="color:#d94040;font-weight:700;">' + paradaMin + ' min <span style="font-size:9px;">(+' + excessoMin + ' exc.)</span></span>'
-                : '<span>' + paradaMin + ' min</span>';
+                ? '<span style="color:#d94040;font-weight:700;">' + _fmtMin(paradaMin) + ' <span style="font-size:9px;">(+' + _fmtMin(excessoMin) + ' exc.)</span></span>'
+                : '<span>' + _fmtMin(paradaMin) + '</span>';
           var chegada = _extractTime(pt.entrada) || '—';
           var saida   = ocultarTempoSaida ? '—' : (_extractTime(pt.saida || pt.entrada) || '—');
           h += '<tr style="' + rowBg + '">' +
@@ -944,14 +964,14 @@ var ReportService = (() => {
           (e.ponto || "—") +
           "</td>" +
           '<td style="padding:5px 8px;text-align:right;">' +
-          e.parada_min +
-          " min</td>" +
+          _fmtMin(e.parada_min) +
+          "</td>" +
           '<td style="padding:5px 8px;text-align:right;">' +
-          (e.esperado_min !== null ? e.esperado_min + ' min' : '—') +
+          (e.esperado_min !== null ? _fmtMin(e.esperado_min) : '—') +
           "</td>" +
           '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:700;">+' +
-          e.excesso_min +
-          " min</td>" +
+          _fmtMin(e.excesso_min) +
+          "</td>" +
           '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' +
           _formatDateTimeBr(e.entrada) +
           "</td>" +
@@ -986,7 +1006,7 @@ var ReportService = (() => {
         h +=
           '<tr style="border-bottom:1px solid #eee;' + rowBg + '">' +
           '<td style="padding:5px 8px;font-style:italic;">' + (p.ponto || '—') + '</td>' +
-          '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:600;">' + p.parada_min + ' min</td>' +
+          '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:600;">' + _fmtMin(p.parada_min) + '</td>' +
           '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.entrada) + '</td>' +
           '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.saida) + '</td>' +
           '<td style="padding:5px 8px;text-align:center;">' + statusHtml + '</td>' +
@@ -1052,10 +1072,10 @@ var ReportService = (() => {
           (p.ponto || "—") +
           "</td>" +
           '<td style="padding:5px 8px;text-align:right;">' +
-          p.parada_min +
-          " min</td>" +
+          _fmtMin(p.parada_min) +
+          "</td>" +
           '<td style="padding:5px 8px;text-align:right;">' +
-          (p.sem_limite ? '—' : (p.esperado_min !== null ? p.esperado_min + ' min' : '—')) +
+          (p.sem_limite ? '—' : (p.esperado_min !== null ? _fmtMin(p.esperado_min) : '—')) +
           "</td>" +
           "</tr>";
       });
