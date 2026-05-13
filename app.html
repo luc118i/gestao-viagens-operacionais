@@ -1737,14 +1737,24 @@
 
       _showBgProgress('Criando ' + count + ' ocorrência' + (count > 1 ? 's' : '') + ' de parada irregular…');
 
+      var semEsquema = !(params.esquemaPontos && params.esquemaPontos.length > 0);
+
       google.script.run
         .withSuccessHandler(function(results) {
           var ok  = (results || []).filter(function(r) { return r.status === 'ok'; }).length;
           var err = (results || []).length - ok;
+          var esquemaPdfErro = !semEsquema && (results || []).some(function(r) {
+            return r.status === 'ok' && r.esquemaPdfStatus === 'error';
+          });
+          var esquemaInfo = semEsquema
+            ? ' · ⚠ Sem esquema'
+            : esquemaPdfErro
+              ? ' · Esquema: erro'
+              : ' · Esquema anexado';
           if (err === 0) {
-            _updateBgProgress('success', '✓ ' + ok + ' ocorrência' + (ok !== 1 ? 's' : '') + ' criada' + (ok !== 1 ? 's' : ''));
+            _updateBgProgress('success', '✓ ' + ok + ' ocorrência' + (ok !== 1 ? 's' : '') + ' criada' + (ok !== 1 ? 's' : '') + esquemaInfo);
           } else {
-            _updateBgProgress('warning', ok + ' criada' + (ok !== 1 ? 's' : '') + ', ' + err + ' com erro');
+            _updateBgProgress('warning', ok + ' criada' + (ok !== 1 ? 's' : '') + ', ' + err + ' com erro' + esquemaInfo);
           }
         })
         .withFailureHandler(function(e) {

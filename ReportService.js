@@ -1325,7 +1325,27 @@ var ReportService = (() => {
         try { body = JSON.parse(resp.getContentText()); } catch (e) { body = {}; }
 
         if (code >= 200 && code < 300) {
-          results.push({ ponto: pf.ponto, status: "ok", id: body.id || null });
+          var occId = body.id || null;
+          var esquemaPdfStatus = "sem_esquema";
+          if (occId && esquemaHtml) {
+            try {
+              var evResp = UrlFetchApp.fetch(
+                baseUrl + "/occurrences/" + occId + "/esquema-pdf-evidence",
+                {
+                  method:      "post",
+                  contentType: "application/json",
+                  payload:     JSON.stringify({ esquemaHtml: esquemaHtml }),
+                  muteHttpExceptions: true,
+                }
+              );
+              esquemaPdfStatus = (evResp.getResponseCode() >= 200 && evResp.getResponseCode() < 300)
+                ? "ok"
+                : "error";
+            } catch (evErr) {
+              esquemaPdfStatus = "error";
+            }
+          }
+          results.push({ ponto: pf.ponto, status: "ok", id: occId, esquemaPdfStatus: esquemaPdfStatus });
         } else {
           results.push({ ponto: pf.ponto, status: "error", httpCode: code, message: body.message || resp.getContentText() });
         }
