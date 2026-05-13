@@ -158,10 +158,8 @@
           );
         })
         .withFailureHandler(function (err) {
-          console.warn(
-            "[App] Aviso: não foi possível carregar dados iniciais.",
-            err,
-          );
+          console.warn("[App] Aviso: não foi possível carregar dados iniciais.", err);
+          UIModule.showToast('Erro ao carregar esquemas: ' + (err && err.message ? err.message : String(err)), 'error', 8000);
         })
         .getDadosIniciais();
 
@@ -862,12 +860,8 @@
       // Exibe e habilita botões no header (Relatório e Motorista)
       var btnVincular = document.getElementById("btnVincularMotorista");
       var btnRel = document.getElementById("btnRelatorio");
-      if (btnVincular) btnVincular.style.display = '';
-      if (btnRel) btnRel.style.display = '';
-      if (_esquemaPontos.length > 0) {
-        if (btnVincular) btnVincular.disabled = false;
-        if (btnRel) btnRel.disabled = false;
-      }
+      if (btnVincular) { btnVincular.style.display = ''; btnVincular.disabled = false; }
+      if (btnRel) { btnRel.style.display = ''; btnRel.disabled = false; }
 
       // Exibe barra de modo de visualização
       var secModo = document.getElementById('sectionModoVisualizacao');
