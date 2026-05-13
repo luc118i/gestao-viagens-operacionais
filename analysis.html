@@ -396,12 +396,23 @@
                 ctxHtml = '<div class="alert-trecho">Trecho: ' + _escHtml(alerta.trecho) + '</div>';
               }
 
+              var btnOcorrencia = tipo === 'PARADA_PROIBIDA' && alerta.seq != null
+                ? '<div style="margin-top:6px;">'
+                  + '<button '
+                  + 'onclick="if(typeof AppModule!==\'undefined\')AppModule.criarParadaIrregularInline(this,' + Number(alerta.seq) + ')" '
+                  + 'style="font-size:11px;padding:2px 10px;border-radius:4px;border:1px solid #c0392b;background:transparent;color:#c0392b;cursor:pointer;font-weight:600;" '
+                  + 'onmouseover="if(!this.disabled){this.style.background=\'#c0392b\';this.style.color=\'#fff\';}" '
+                  + 'onmouseout="if(!this.disabled){this.style.background=\'transparent\';this.style.color=\'#c0392b\';}"'
+                  + '>+ Criar ocorrência</button></div>'
+                : '';
+
               card.innerHTML =
                 '<span class="alert-icon"></span>' +
                 '<div class="alert-body">' +
                   '<div class="alert-title">' + cfg.label + '</div>' +
                   '<div class="alert-desc">' + _escHtml(alerta.descricao) + '</div>' +
                   ctxHtml +
+                  btnOcorrencia +
                 '</div>';
               container.appendChild(card);
             });

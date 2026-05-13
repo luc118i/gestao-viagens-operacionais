@@ -2666,6 +2666,36 @@
       }
     }
 
+    /**
+     * Cria ocorrência de parada irregular para um único evento Não Aut. (tipo 42).
+     * Chamado pelo botão inline nos cards de alerta PARADA_PROIBIDA.
+     */
+    function criarParadaIrregularInline(btnEl, seq) {
+      if (btnEl) {
+        btnEl.disabled = true;
+        btnEl.textContent = 'Criando…';
+        btnEl.style.opacity = '0.6';
+      }
+
+      // Copia enrichedTrip mantendo proibido42 apenas no ponto alvo
+      var tripFiltrado = _enrichedTrip.map(function(pt) {
+        if (Number(pt.seq) !== Number(seq)) return Object.assign({}, pt, { proibido42: false });
+        return pt;
+      });
+
+      var idEsquema = (document.getElementById('selectEsquema') || {}).value || '';
+      var esqObj = _esquemas.find(function(e) { return e.id_esquema === idEsquema; });
+
+      _launchParadasFora({
+        enrichedTrip:  tripFiltrado,
+        esquemaPontos: _esquemaPontos,
+        motorista:     _vinculos.length > 0 ? _vinculos[0] : {},
+        nomeLinha:     esqObj ? esqObj.nome_linha : '',
+        horario:       esqObj ? (esqObj.horario || '') : '',
+        summary:       _analysis ? (_analysis.summary || {}) : {},
+      });
+    }
+
     return {
       init,
       getTrip,
@@ -2683,6 +2713,7 @@
       _buscarMotoristaManual,
       _confirmarManual,
       _onGerarRelatorioInline,
+      criarParadaIrregularInline: criarParadaIrregularInline,
       _novaAnalise: _onLimpar,
       _setModo,
       abrirMapa,
