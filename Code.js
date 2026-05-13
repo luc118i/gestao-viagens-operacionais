@@ -651,15 +651,45 @@ function getLocais() {
 }
 
 /**
- * Cadastra um novo motorista na aba MOTORISTAS.
+ * Cadastra um novo motorista na aba MOTORISTAS e sincroniza com a tabela da API.
  * @param {{matricula:string, nome:string, base:string, ibutton:string}} dados
  * @returns {{matricula:string, nome:string, base:string, ibutton:string}}
  */
 function salvarMotorista(dados) {
   try {
-    return SheetsService.saveMotorista(dados);
+    var result = SheetsService.saveMotorista(dados);
+    _sincronizarMotoristaComApi(result);
+    return result;
   } catch (e) {
     throw new Error('Erro ao salvar motorista: ' + e.message);
+  }
+}
+
+/**
+ * Envia (upsert) os dados do motorista para a tabela drivers da API.
+ * Não lança exceção — falha silenciosa para não bloquear o fluxo.
+ */
+function _sincronizarMotoristaComApi(motorista) {
+  try {
+    var props   = PropertiesService.getScriptProperties();
+    var baseUrl = (props.getProperty('REPORT_API_URL') || '').replace(/\/$/, '');
+    if (!baseUrl) return;
+
+    var mat  = String(motorista.matricula || '').trim();
+    var nome = String(motorista.nome      || '').trim();
+    var base = String(motorista.base      || '').trim() || null;
+
+    if (!nome) return;
+    var code = mat || nome;
+
+    UrlFetchApp.fetch(baseUrl + '/drivers/upsert', {
+      method:      'post',
+      contentType: 'application/json',
+      payload:     JSON.stringify({ code: code, name: nome, base: base }),
+      muteHttpExceptions: true,
+    });
+  } catch (e) {
+    Logger.log('[salvarMotorista] Falha ao sincronizar com API: ' + e.message);
   }
 }
 

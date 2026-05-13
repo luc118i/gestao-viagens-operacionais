@@ -1243,16 +1243,21 @@ var ReportService = (() => {
 
     if (paradasFora.length === 0) return [];
 
-    // ── Lookups únicos (motorista e viagem) ──────────────────────
+    // ── Upsert do motorista e lookup da viagem ───────────────────
     var driverId = null;
     var tripId   = null;
 
-    if (motorista.matricula) {
+    if (motorista.matricula || motorista.nome) {
       try {
-        var dr = UrlFetchApp.fetch(
-          baseUrl + "/drivers/lookup?code=" + encodeURIComponent(motorista.matricula),
-          { method: "get", muteHttpExceptions: true }
-        );
+        var mat  = motorista.matricula || '';
+        var nome = motorista.nome      || '';
+        var base = motorista.base      || null;
+        var dr = UrlFetchApp.fetch(baseUrl + "/drivers/upsert", {
+          method:      "post",
+          contentType: "application/json",
+          payload:     JSON.stringify({ code: mat || nome, name: nome || mat, base: base }),
+          muteHttpExceptions: true,
+        });
         if (dr.getResponseCode() === 200) {
           driverId = (JSON.parse(dr.getContentText()) || {}).id || null;
         }
