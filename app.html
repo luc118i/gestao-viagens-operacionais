@@ -220,7 +220,7 @@
         .withSuccessHandler(function (pontos) {
           _esquemaPontos = pontos || [];
 
-          var esqLabel = (esqObj ? esqObj.nome_linha + " · " : "") + _esquemaPontos.length + " pontos";
+          var esqLabel = (esqObj ? esqObj.nome_linha + (esqObj.sentido ? " · " + esqObj.sentido : "") + " · " : "") + _esquemaPontos.length + " pontos";
           if (infoEl) {
             infoEl.textContent = esqLabel;
             infoEl.style.display = _esquemaPontos.length > 0 ? "block" : "none";
@@ -375,7 +375,7 @@
 
         var meta = '';
         if (hor)  meta += '<span class="tag-horario">' + hor + '</span>';
-        if (sent) meta += '<span>' + sent + '</span>';
+        if (sent) meta += '<span class="tag-sentido">' + sent + '</span>';
 
         return '<div class="esquema-opt' + isSel + '" data-id="' + _escHtml(String(esq.id_esquema)) + '">' +
           '<div class="esquema-opt-main">' + id + ' &mdash; ' + nome + '</div>' +
@@ -402,6 +402,7 @@
         if (esqObj) {
           var label = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
           if (esqObj.horario) label += '  ·  ' + esqObj.horario;
+          if (esqObj.sentido) label += '  ·  ' + esqObj.sentido;
           input.value = label;
         } else {
           input.value = '';
