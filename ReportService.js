@@ -1256,7 +1256,7 @@ var ReportService = (() => {
     var paradasFora = [];
     enrichedTrip.forEach(function(pt, idx) {
       if (idx === 0 || idx === lastIdx) return;
-      if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
+      if (!pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
       if (!pt.proibido42) return;
       paradasFora.push({ ponto: pt.ponto, codigo: pt.codigo || null, entrada: pt.entrada, saida: pt.saida });
@@ -1267,6 +1267,8 @@ var ReportService = (() => {
     // ── Upsert do motorista e lookup da viagem ───────────────────
     var driverId = null;
     var tripId   = null;
+    var matchedLineName = nomeLinha;
+    var matchedTripTime = horario;
 
     if (motorista.matricula || motorista.nome) {
       try {
@@ -1293,7 +1295,13 @@ var ReportService = (() => {
           { method: "get", muteHttpExceptions: true }
         );
         if (tr.getResponseCode() === 200) {
-          tripId = (JSON.parse(tr.getContentText()) || {}).id || null;
+          var tripData = JSON.parse(tr.getContentText()) || {};
+          tripId = tripData.id || null;
+          // Use the DB's official line name and direction
+          if (tripData.lineName) {
+            matchedLineName = tripData.lineName + (tripData.direction ? ' — ' + tripData.direction : '');
+          }
+          if (tripData.departureTime) matchedTripTime = tripData.departureTime;
         }
       } catch (e) { /* segue sem tripId */ }
     }
@@ -1301,7 +1309,7 @@ var ReportService = (() => {
     // ── Dados comuns a todas as ocorrências ──────────────────────
     var dateStr       = _parseDateBrToIso(summary.dataViagem || "") || _todayIso();
     var vehicleNumber = String(summary.veiculo || "—").trim();
-    var esquemaHtml   = _buildEsquemaHtml(esquemaPontos, nomeLinha, horario);
+    var esquemaHtml   = _buildEsquemaHtml(esquemaPontos, matchedLineName, matchedTripTime);
     var hasMot        = !!(motorista.nome || motorista.matricula);
 
     var results = [];
@@ -1318,9 +1326,9 @@ var ReportService = (() => {
         startTime:     startTime,
         endTime:       endTime,
         vehicleNumber: vehicleNumber,
-        lineLabel:     nomeLinha  || null,
-        tripId:        tripId     || undefined,
-        tripTime:      horario    || null,
+        lineLabel:     matchedLineName || null,
+        tripId:        tripId         || undefined,
+        tripTime:      matchedTripTime || null,
         place:         pf.ponto   || "—",
         placeCode:     pf.codigo  || undefined,
         relatoHtml:    esquemaHtml,
@@ -1352,26 +1360,7 @@ var ReportService = (() => {
 
         if (code >= 200 && code < 300) {
           var occId = body.id || null;
-          var esquemaPdfStatus = "sem_esquema";
-          if (occId && esquemaHtml) {
-            try {
-              var evResp = UrlFetchApp.fetch(
-                baseUrl + "/occurrences/" + occId + "/esquema-pdf-evidence",
-                {
-                  method:      "post",
-                  contentType: "application/json",
-                  payload:     JSON.stringify({ esquemaHtml: esquemaHtml }),
-                  muteHttpExceptions: true,
-                }
-              );
-              esquemaPdfStatus = (evResp.getResponseCode() >= 200 && evResp.getResponseCode() < 300)
-                ? "ok"
-                : "error";
-            } catch (evErr) {
-              esquemaPdfStatus = "error";
-            }
-          }
-          results.push({ ponto: pf.ponto, status: "ok", id: occId, esquemaPdfStatus: esquemaPdfStatus });
+          results.push({ ponto: pf.ponto, status: "ok", id: occId });
         } else {
           results.push({ ponto: pf.ponto, status: "error", httpCode: code, message: body.message || resp.getContentText() });
         }
@@ -1389,5 +1378,6 @@ var ReportService = (() => {
     gerarRelatorioCompleto: gerarRelatorioCompleto,
     enviarParaAPI: enviarParaAPI,
     enviarParadasFora: enviarParadasFora,
+    buildEsquemaHtml: _buildEsquemaHtml,
   };
 })();

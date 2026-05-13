@@ -501,8 +501,61 @@ function _colorirEsquemaPontos_(sheet) {
   }
 }
 
+/**
+ * Busca o esquema de uma linha pelo nome e horário.
+ * Retorna { found: true, html } ou { found: false }.
+ */
+function _getSchemaForLine_(lineName, departureTime) {
+  if (!lineName) return { found: false };
+  var esquemas = EsquemasService.getEsquemas();
+  var normLine = _normSchemaStr_(lineName);
+  var match    = null;
+
+  for (var i = 0; i < esquemas.length; i++) {
+    var esq       = esquemas[i];
+    var eNorm     = _normSchemaStr_(esq.nome_linha || '');
+    var timeMatch = !departureTime || (esq.horario || '').trim() === departureTime;
+    if (eNorm === normLine && timeMatch) { match = esq; break; }
+    if (!match && timeMatch && (eNorm.indexOf(normLine) !== -1 || normLine.indexOf(eNorm) !== -1)) {
+      match = esq;
+    }
+  }
+
+  if (!match) return { found: false };
+  var pontos = EsquemasService.getPontosDoEsquema(match.id_esquema);
+  if (!pontos || !pontos.length) return { found: false };
+  var html = ReportService.buildEsquemaHtml(pontos, match.nome_linha, match.horario);
+  return { found: true, html: html };
+}
+
+function _normSchemaStr_(s) {
+  return String(s || '').trim().toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/\s+/g, ' ');
+}
+
 function doGet(e) {
-  var page = (e && e.parameter && e.parameter.page) || 'index';
+  var params = (e && e.parameter) || {};
+
+  // ── JSON API ─────────────────────────────────────────────────────────────
+  if (params.action) {
+    try {
+      if (params.action === 'getSchema') {
+        var lineName     = (params.lineName     || '').trim();
+        var depTime      = (params.departureTime || '').trim();
+        var result       = _getSchemaForLine_(lineName, depTime);
+        return ContentService.createTextOutput(JSON.stringify(result))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      return ContentService.createTextOutput(JSON.stringify({ error: 'unknown_action' }))
+        .setMimeType(ContentService.MimeType.JSON);
+    } catch (err) {
+      return ContentService.createTextOutput(JSON.stringify({ error: String(err.message || err) }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+  }
+
+  var page = params.page || 'index';
 
   if (page === 'manager') {
     try {
