@@ -555,15 +555,8 @@ var ReportService = (() => {
     var TH = 'background:#f0f2f8;padding:6px 8px;font-size:9px;font-weight:700;text-transform:uppercase;' +
              'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;';
     var TD = 'padding:6px 8px;border:1px solid #dde1ee;vertical-align:middle;';
-    var MONO = 'font-family:monospace;';
 
-    // Detecta quais colunas têm dados
-    var temEntrada   = esquemaOrdenado.some(function(ep) { return ep.entrada; });
-    var temSaida     = esquemaOrdenado.some(function(ep) { return ep.saida; });
     var temComercial = esquemaOrdenado.some(function(ep) { return ep.horario_comercial; });
-    var temParada    = esquemaOrdenado.some(function(ep) { return ep.tempo_local; });
-    var temDistancia = esquemaOrdenado.some(function(ep) { return ep.distanciaProxKm !== undefined; });
-    var temDesloc    = esquemaOrdenado.some(function(ep) { return ep.tempoDeslocMin !== undefined; });
 
     var h = '<div style="border-top:2px solid #f47920;padding-top:16px;">' +
             '<h4 style="font-size:13px;margin:0 0 10px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
@@ -574,12 +567,7 @@ var ReportService = (() => {
             '<thead><tr>' +
             '<th style="' + TH + 'text-align:center;width:30px;">#</th>' +
             '<th style="' + TH + 'text-align:left;">Local</th>' +
-            (temEntrada   ? '<th style="' + TH + 'text-align:center;">Entrada</th>'        : '') +
-            (temSaida     ? '<th style="' + TH + 'text-align:center;">Saída</th>'          : '') +
-            (temParada    ? '<th style="' + TH + 'text-align:center;">T. Local</th>'       : '') +
             (temComercial ? '<th style="' + TH + 'text-align:center;">Hor. Comercial</th>' : '') +
-            (temDistancia ? '<th style="' + TH + 'text-align:center;">Dist. (km)</th>'     : '') +
-            (temDesloc    ? '<th style="' + TH + 'text-align:center;">Deslocamento</th>'   : '') +
             '</tr></thead><tbody>';
 
     esquemaOrdenado.forEach(function(ep, idx) {
@@ -589,27 +577,15 @@ var ReportService = (() => {
                   : isLast  ? 'background:#fff8f0;'
                   : '';
 
-      var nomeCel = '<strong>' + (ep.nome_ponto || ep.id_ponto || '—') + '</strong>' +
-                    (isFirst ? ' <span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">ORIGEM</span>' : '') +
-                    (isLast  ? ' <span style="font-size:9px;background:#1565c0;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">DESTINO</span>' : '');
-
-      var vazio       = '<span style="color:#ccc;">—</span>';
-      var entradaCel  = ep.entrada ? '<strong style="color:#1565c0;">' + ep.entrada + '</strong>' : vazio;
-      var saidaCel    = ep.saida   ? '<strong style="color:#c62828;">' + ep.saida   + '</strong>' : vazio;
-      var paradaCel   = (!isFirst && !isLast && ep.tempo_local) ? ep.tempo_local + ' min' : vazio;
-      var horCel      = ep.horario_comercial ? '<strong style="color:#1565c0;">' + ep.horario_comercial + '</strong>' : vazio;
-      var distCel     = (!isLast && ep.distanciaProxKm !== undefined) ? ep.distanciaProxKm.toFixed(1) + ' km' : vazio;
-      var deslocCel   = (!isLast && ep.tempoDeslocMin  !== undefined) ? ep.tempoDeslocMin + ' min'            : vazio;
+      var nomeCel = '<strong>' + (ep.nome_ponto || ep.id_ponto || '—') + '</strong>';
+      var horCel  = ep.horario_comercial
+        ? '<strong style="color:#1565c0;font-family:monospace;">' + ep.horario_comercial + '</strong>'
+        : '<span style="color:#ccc;">—</span>';
 
       h += '<tr style="' + rowBg + '">' +
            '<td style="' + TD + 'text-align:center;color:#888;">' + (ep.ordem || idx + 1) + '</td>' +
            '<td style="' + TD + '">' + nomeCel + '</td>' +
-           (temEntrada   ? '<td style="' + TD + MONO + 'text-align:center;">' + entradaCel + '</td>' : '') +
-           (temSaida     ? '<td style="' + TD + MONO + 'text-align:center;">' + saidaCel   + '</td>' : '') +
-           (temParada    ? '<td style="' + TD + 'text-align:center;">'        + paradaCel  + '</td>' : '') +
-           (temComercial ? '<td style="' + TD + MONO + 'text-align:center;">' + horCel     + '</td>' : '') +
-           (temDistancia ? '<td style="' + TD + 'text-align:center;">'        + distCel    + '</td>' : '') +
-           (temDesloc    ? '<td style="' + TD + 'text-align:center;">'        + deslocCel  + '</td>' : '') +
+           (temComercial ? '<td style="' + TD + 'text-align:center;">' + horCel + '</td>' : '') +
            '</tr>';
     });
 
