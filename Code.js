@@ -122,8 +122,23 @@ function getPontosEsquemaParaFormulario(idEsquema) {
     }
     return result;
   } catch (e) {
-    return [];
+    throw new Error('Erro ao ler pontos do esquema ' + idEsquema + ': ' + (e.message || e));
   }
+}
+
+/**
+ * Retorna o número de pontos de cada esquema informado.
+ * @param {string[]} ids  — array de id_esquema
+ * @returns {Object}      — { id_esquema: count }
+ */
+function getContagemPontosEsquemas(ids) {
+  try {
+    var result = {};
+    (ids || []).forEach(function(id) {
+      result[String(id)] = EsquemasService.getPontosDoEsquema(id).length;
+    });
+    return result;
+  } catch(e) { return {}; }
 }
 
 /**
@@ -222,12 +237,13 @@ function getDistanciasCached(pairs) {
     var sheet = ss.getSheetByName('DISTANCIAS');
     if (!sheet || sheet.getLastRow() < 2) return {};
 
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 3).getValues();
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues();
     var map  = {};
     data.forEach(function(row) {
       var a = String(row[0]).trim(), b = String(row[1]).trim();
       var km = parseFloat(row[2]);
-      if (a && b && km > 0) map[a + ':' + b] = km;
+      var tv = String(row[3] || '').trim();
+      if (a && b && km > 0) map[a + ':' + b] = { km: km, tipoVia: tv || 'BR' };
     });
 
     var result = {};
@@ -253,26 +269,74 @@ function saveDistanciasCached(pairKms) {
     var sheet = ss.getSheetByName('DISTANCIAS');
     if (!sheet) {
       sheet = ss.insertSheet('DISTANCIAS');
-      sheet.getRange(1, 1, 1, 3).setValues([['ponto_a', 'ponto_b', 'km']]);
+      sheet.getRange(1, 1, 1, 4).setValues([['codigo_ponto_A', 'codigo_ponto_B', 'km', 'tipo_via']]);
     }
 
-    var existing = {};
-    if (sheet.getLastRow() >= 2) {
-      sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function(row) {
-        existing[String(row[0]).trim() + ':' + String(row[1]).trim()] = true;
+    // Garante que a coluna tipo_via existe e descobre sua posição
+    var lastCol = sheet.getLastColumn();
+    var tvCol = -1;
+    if (lastCol >= 1) {
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      for (var j = 0; j < headers.length; j++) {
+        if (String(headers[j]).trim().toLowerCase() === 'tipo_via') { tvCol = j + 1; break; }
+      }
+    }
+    if (tvCol === -1) {
+      tvCol = lastCol + 1;
+      sheet.getRange(1, tvCol).setValue('tipo_via');
+    }
+
+    // Lê pares existentes com seus tipo_via atuais
+    // existingMap: key -> { rowIdx (0-based), via }
+    var existingMap = {};
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var readCols = Math.max(2, tvCol);
+      var sheetData = sheet.getRange(2, 1, lastRow - 1, readCols).getValues();
+      sheetData.forEach(function(row, idx) {
+        var key = String(row[0]).trim() + ':' + String(row[1]).trim();
+        var via = readCols >= tvCol ? String(row[tvCol - 1]).trim() : '';
+        existingMap[key] = { rowIdx: idx, via: via };
       });
     }
 
+    var newRows = [], newVias = [];
+    var updateVia = []; // { rowIdx, via } para pares existentes com tipo_via vazio
+
     pairKms.forEach(function(pair) {
-      var km = Math.round(parseFloat(pair.km) * 100) / 100;
-      if (!pair.a || !pair.b || !(km > 0)) return;
-      var norm = _normPair_(pair.a, pair.b);
-      var key  = norm[0] + ':' + norm[1];
-      if (!existing[key]) {
-        sheet.appendRow([norm[0], norm[1], km]);
-        existing[key] = true;
+      if (!pair.a || !pair.b) return;
+      var km      = Math.round(parseFloat(pair.km) * 100) / 100;
+      var tipoVia = pair.tipoVia || 'BR';
+      var norm    = _normPair_(pair.a, pair.b);
+      var key     = norm[0] + ':' + norm[1];
+
+      if (!existingMap[key]) {
+        // Par novo: só insere se tiver km válido
+        if (km > 0) {
+          newRows.push([norm[0], norm[1], km]);
+          newVias.push([tipoVia]);
+          existingMap[key] = { rowIdx: -1, via: tipoVia }; // evita duplicata no mesmo lote
+        }
+      } else if (!existingMap[key].via && tipoVia) {
+        // Par existente com tipo_via vazio: agenda atualização
+        updateVia.push({ rowIdx: existingMap[key].rowIdx, via: tipoVia });
+        existingMap[key].via = tipoVia; // evita duplicata no mesmo lote
       }
+      // Par existente com tipo_via já definido → preserva, não sobrescreve
     });
+
+    // Insere novos pares
+    if (newRows.length) {
+      var startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, newRows.length, 3).setValues(newRows);
+      sheet.getRange(startRow, tvCol, newRows.length, 1).setValues(newVias);
+    }
+
+    // Atualiza tipo_via em pares existentes que estavam vazios
+    updateVia.forEach(function(req) {
+      sheet.getRange(req.rowIdx + 2, tvCol).setValue(req.via);
+    });
+
   } catch (e) {
     Logger.log('[saveDistanciasCached] ' + e.message);
   }

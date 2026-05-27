@@ -359,7 +359,7 @@ mark { background: #ffe082; color: inherit; border-radius: 2px; }
     <div style="margin-bottom:7px;">
       <div style="font-size:10px; color:#888; margin-bottom:3px;">Inserir após</div>
       <select class="insert-select" id="insertAfter">
-        <option value="-1">⬆ No início da sequência</option>
+        <option value="-1">↑ No início da sequência</option>
       </select>
     </div>
 
@@ -506,7 +506,7 @@ function _seqItemHtml(p, i) {
     + '<div class="seq-name">' + esc(p.nomePonto)
     + (p.tipo ? '<div class="seq-type">' + esc(p.tipo) + '</div>' : '') + '</div>'
     + (p.isNew ? '<span class="seq-new-badge">novo</span>' : '')
-    + '<button class="seq-rm" data-idx="' + i + '" title="Remover">✕</button>'
+    + '<button class="seq-rm" data-idx="' + i + '" title="Remover"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>'
     + '</div>';
 }
 
@@ -557,7 +557,7 @@ function renderSequencia() {
 function preencherInsertAfter() {
   var sel = document.getElementById('insertAfter');
   var prev = sel.value;
-  sel.innerHTML = '<option value="-1">⬆ No início da sequência</option>'
+  sel.innerHTML = '<option value="-1">↑ No início da sequência</option>'
     + _sequencia.map(function(p, i) {
         return '<option value="' + i + '">Após ' + (i+1) + '. ' + esc(p.nomePonto) + '</option>';
       }).join('');
@@ -673,7 +673,7 @@ function resetForm() {
   document.getElementById('addBox').style.display = 'none';
   document.getElementById('unsavedPill').style.display = 'none';
   document.getElementById('btnSave').disabled = true;
-  document.getElementById('insertAfter').innerHTML = '<option value="-1">⬆ No início da sequência</option>';
+  document.getElementById('insertAfter').innerHTML = '<option value="-1">↑ No início da sequência</option>';
   setFeedback('', '');
   esquemaInput.focus();
 }

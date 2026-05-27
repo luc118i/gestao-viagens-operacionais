@@ -14,6 +14,11 @@
           <span class="ins-lbl">Inserir após:</span>
           <select class="fs" id="insAfter" style="flex:1; font-size:12px; padding:5px 8px;"></select>
         </div>
+        <div class="ins-row" id="importRow" style="display:none; margin-top:4px;">
+          <button class="btn btn-ghost btn-sm" style="width:100%;font-size:11px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;justify-content:center;" onclick="abrirImportarPontos()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Importar de outro horário</button>
+        </div>
+        <div id="anttWarn" style="display:none;"></div>
+        <div id="anttSuggest" style="display:none;"></div>
         <div class="sw" style="margin-top:8px;">
           <input type="text" id="ptSearch" class="fi" placeholder="Buscar ponto por nome, código ou tipo…" autocomplete="off" />
           <div class="sd" id="ptDrop"></div>

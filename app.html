@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   // ============================================================
   //  app.js  —  Orquestrador principal da aplicação
   //  Tema: claro (redesign)
@@ -149,6 +149,10 @@
           // Popula o combobox pesquisável com os esquemas carregados
           _renderEsquemaOpts('');
 
+          // Mostra aviso de "sem esquemas" no card de upload
+          var emptyEl = document.getElementById('uploadEsquemaEmpty');
+          if (emptyEl) emptyEl.style.display = _esquemas.length === 0 ? 'block' : 'none';
+
           console.log(
             "[App] Dados iniciais: " +
               _esquemas.length +
@@ -224,7 +228,7 @@
             infoEl.style.display = _esquemaPontos.length > 0 ? "block" : "none";
           }
           if (uploadInfo) {
-            uploadInfo.textContent = "✓ " + esqLabel;
+            uploadInfo.textContent = "" + esqLabel;
             uploadInfo.style.display = 'block';
           }
           // Habilita btnProcessar se CSV também já carregado
@@ -441,25 +445,36 @@
 
       function renderOpts(query) {
         var q = (query || '').trim().toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+          .normalize('NFD').replace(/[̀-ͯ]/g, '');
         var list = _esquemas.filter(function(esq) {
           if (!q) return true;
           var id   = String(esq.id_esquema || '').toLowerCase();
           var nome = (esq.nome_linha || '').toLowerCase()
-            .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+            .normalize('NFD').replace(/[̀-ͯ]/g, '');
           var hor  = (esq.horario || '').toLowerCase();
-          return id.includes(q) || nome.includes(q) || hor.includes(q);
+          var sent = (esq.sentido || '').toLowerCase();
+          return id.includes(q) || nome.includes(q) || hor.includes(q) || sent.includes(q);
         });
 
         if (list.length === 0) {
-          dropdown.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:var(--text3);">Nenhum resultado.</div>';
+          var msg = _esquemas.length === 0 ? 'Nenhum esquema cadastrado.' : 'Nenhum resultado.';
+          var managerBtn = (typeof WEB_APP_URL !== 'undefined' && WEB_APP_URL)
+            ? '<div style="padding:6px 12px 8px; border-top:1px solid var(--border-light,#eee);">' +
+              '<a onclick="window.open(WEB_APP_URL+\'?page=manager\',\'_blank\')" style="color:var(--laranja);font-size:12px;font-weight:600;cursor:pointer;">+ Cadastrar esquemas</a>' +
+              '</div>' : '';
+          dropdown.innerHTML = '<div style="padding:8px 12px;font-size:12px;color:var(--text3);">' + msg + '</div>' + managerBtn;
           return;
         }
 
         dropdown.innerHTML = list.slice(0, 30).map(function(esq) {
-          var label = _escHtml(esq.id_esquema + ' — ' + (esq.nome_linha || esq.id_esquema));
-          if (esq.horario) label += ' <span style="color:var(--text3);font-size:10px;">· ' + _escHtml(esq.horario) + '</span>';
-          return '<div data-id="' + _escHtml(String(esq.id_esquema)) + '" style="padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border-light,#eee);" onmouseover="this.style.background=\'var(--bg2)\';" onmouseout="this.style.background=\'\';">' + label + '</div>';
+          var nome = _escHtml(esq.id_esquema + ' — ' + (esq.nome_linha || esq.id_esquema));
+          var meta = '';
+          if (esq.horario) meta += '<span class="tag-horario">' + _escHtml(esq.horario) + '</span>';
+          if (esq.sentido) meta += ' <span class="tag-sentido">' + _escHtml(esq.sentido) + '</span>';
+          return '<div data-id="' + _escHtml(String(esq.id_esquema)) + '" style="padding:8px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border-light,#eee);" onmouseover="this.style.background=\'var(--bg2)\'" onmouseout="this.style.background=\'\'">' +
+            nome +
+            (meta ? '<div class="esquema-opt-meta" style="margin-top:3px;">' + meta + '</div>' : '') +
+            '</div>';
         }).join('');
 
         dropdown.querySelectorAll('[data-id]').forEach(function(el) {
@@ -693,36 +708,55 @@
      * Detecta paradas em locais proibidos (tipo 42) por proximidade de coordenadas.
      * Marca pt.proibido42 = true e injeta alertas PARADA_PROIBIDA em _analysis.alerts.
      */
+    /** Retorna true para qualquer representação de "tipo 42 não autorizado". */
+    function _isTipo42(tipo) {
+      var t = String(tipo || '').trim();
+      if (/\b42\b/.test(t)) return true;
+      var norm = t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      return norm.indexOf('nao autorizado') !== -1;
+    }
+
     function _detectarParadasProibidas() {
-      if (!_locaisCache.length || !_enrichedTrip.length || !_analysis) return;
+      if (!_enrichedTrip.length || !_analysis) return;
 
-      var locais42 = _locaisCache.filter(function(l) {
-        return String(l.tipo || '').trim() === '42';
-      });
-      if (!locais42.length) return;
-
-      var MIN_PARADA_S   = 60;  // 1 min mínimo para considerar parada real
-      var RAIO_PADRAO_M  = 100; // 100m se raio não definido no cadastro
-
+      // Passo 1 — marca por código: pontos casados com tipo 42 na base de locais
       _enrichedTrip.forEach(function(pt) {
-        if (pt.proibido42) return;                      // já detectado
-        if (!pt.parada_s || pt.parada_s < MIN_PARADA_S) return;
-        if (!pt.lat || !pt.lng) return;                 // sem coordenadas
-
-        for (var i = 0; i < locais42.length; i++) {
-          var l = locais42[i];
-          if (!l.lat || !l.lng) continue;
-          var raioM = l.raio > 0 ? l.raio : RAIO_PADRAO_M;
-          var distM = _haversineM(pt.lat, pt.lng, l.lat, l.lng);
-          if (distM <= raioM) {
-            pt.proibido42    = true;
-            pt.nomeProibido42 = l.descricao || l.descResumida || l.codigo || pt.ponto;
-            break;
-          }
+        if (pt.proibido42) return;
+        if (pt.matched && _isTipo42(pt.tipo) && pt.parada_s > 0) {
+          pt.proibido42 = true;
         }
       });
 
-      // Injeta / atualiza alertas PARADA_PROIBIDA (remove os antigos primeiro)
+      // Passo 2 — marca por proximidade GPS (complementa casos sem tipo no ponto)
+      if (_locaisCache.length) {
+        var locais42 = _locaisCache.filter(function(l) {
+          return _isTipo42(l.tipo);
+        });
+
+        if (locais42.length) {
+          var MIN_PARADA_S  = 60;
+          var RAIO_PADRAO_M = 100;
+
+          _enrichedTrip.forEach(function(pt) {
+            if (pt.proibido42) return;
+            if (!pt.parada_s || pt.parada_s < MIN_PARADA_S) return;
+            if (!pt.lat || !pt.lng) return;
+
+            for (var i = 0; i < locais42.length; i++) {
+              var l = locais42[i];
+              if (!l.lat || !l.lng) continue;
+              var raioM = l.raio > 0 ? l.raio : RAIO_PADRAO_M;
+              if (_haversineM(pt.lat, pt.lng, l.lat, l.lng) <= raioM) {
+                pt.proibido42     = true;
+                pt.nomeProibido42 = l.descricao || l.descResumida || l.codigo || pt.ponto;
+                break;
+              }
+            }
+          });
+        }
+      }
+
+      // Passo 3 — reconstrói alertas PARADA_PROIBIDA a partir de todos os pts marcados
       var outros = (_analysis.alerts || []).filter(function(a) { return a.tipo !== 'PARADA_PROIBIDA'; });
       _enrichedTrip.forEach(function(pt) {
         if (!pt.proibido42) return;
@@ -1135,12 +1169,19 @@
         if (d.editando)    return _renderCardEdit(d, idx);
         return _renderCardView(d, idx);
       }).join('');
+
+      // Seção manual sempre visível abaixo dos cards detectados
+      html += _buildManualAddHtml();
+
       container.innerHTML = html;
 
       // Popula selects de cards em modo edição ou cadastro
       _autoVinculoDataList.forEach(function(d, idx) {
         if (d.editando || d.cadastrando) _popularSelectsCard(idx);
       });
+
+      // Popula selects da seção manual
+      _popularSelectsManual();
     }
 
     function _renderCardView(d, idx) {
@@ -1156,14 +1197,14 @@
           '<span style="font-size:11px;color:var(--text3);margin-left:6px;">— cadastre para registrar</span>';
 
       var trechoAviso = (d.pontoInicio && d.pontoInicio === (d.pontoFim || d.pontoInicio))
-        ? '<span style="font-size:10px;background:rgba(232,160,32,0.12);color:var(--amarelo);padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px;" title="Início e fim idênticos — use Editar para corrigir o trecho">⚠ mesmo ponto</span>'
+        ? '<span style="font-size:10px;background:rgba(232,160,32,0.12);color:var(--amarelo);padding:2px 7px;border-radius:20px;font-weight:600;margin-left:6px;" title="Início e fim idênticos — use Editar para corrigir o trecho"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg> mesmo ponto</span>'
         : '';
       var trechoHtml = d.pontoInicio
         ? '<strong>' + _escHtml(d.pontoInicio) + '</strong><span style="color:var(--text3);"> → </span><strong>' + _escHtml(d.pontoFim || d.pontoInicio) + '</strong>' + trechoAviso
         : '<em style="color:var(--text3);">trecho não detectado</em>';
 
       var btnPrimario = matched
-        ? '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">✓ Confirmar</button>'
+        ? '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> Confirmar</button>'
         : '<button onclick="AppModule._toggleCadastroCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">+ Cadastrar</button>';
 
       return '<div style="border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-top:10px;background:var(--surface);">' +
@@ -1172,7 +1213,7 @@
         '<div style="font-size:11px;color:var(--text2);">Trecho: ' + trechoHtml + '</div>' +
         '<div style="display:flex;gap:8px;margin-top:12px;">' +
           btnPrimario +
-          '<button onclick="AppModule._toggleEditCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;">✎ Editar</button>' +
+          '<button onclick="AppModule._toggleEditCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4z"/></svg> Editar</button>' +
           '<button onclick="AppModule._descartarCard(' + idx + ')" style="padding:5px 10px;border-radius:6px;background:transparent;border:none;color:var(--text3);font-size:12px;cursor:pointer;">Ignorar</button>' +
         '</div>' +
       '</div>';
@@ -1190,7 +1231,7 @@
           '<input id="mCard_mat_' + idx + '" type="text" value="' + _escHtml(mat) + '" placeholder="Matrícula" style="' + inputStyle + '" />' +
           '<button onclick="AppModule._buscarMotoristaCard(' + idx + ')" style="flex-shrink:0;padding:5px 12px;border-radius:6px;border:1px solid var(--border);background:transparent;font-size:12px;font-weight:600;color:var(--text2);cursor:pointer;white-space:nowrap;">Buscar</button>' +
         '</div>' +
-        '<div id="mCard_nome_' + idx + '" style="font-size:12px;min-height:18px;margin-bottom:10px;color:' + (nome ? 'var(--verde)' : 'var(--text3)') + ';">' + _escHtml(nome || '—') + '</div>' +
+        '<input id="mCard_nomeInput_' + idx + '" type="text" value="' + _escHtml(nome || '') + '" placeholder="Nome do motorista" style="' + inputStyle + 'margin-bottom:10px;color:' + (nome ? 'var(--verde)' : '') + ';" />' +
         '<div style="font-size:10px;color:var(--text3);margin-bottom:4px;">Trecho</div>' +
         '<div style="display:flex;gap:6px;align-items:center;margin-bottom:12px;">' +
           '<div style="flex:1;min-width:0;"><select id="mCard_ini_' + idx + '" style="' + selStyle + '"></select></div>' +
@@ -1198,7 +1239,7 @@
           '<div style="flex:1;min-width:0;"><select id="mCard_fim_' + idx + '" style="' + selStyle + '"></select></div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;">' +
-          '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">✓ Confirmar</button>' +
+          '<button onclick="AppModule._confirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> Confirmar</button>' +
           '<button onclick="AppModule._toggleEditCard(' + idx + ')" style="padding:5px 12px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text3);font-size:12px;cursor:pointer;">Cancelar</button>' +
         '</div>' +
       '</div>';
@@ -1227,7 +1268,7 @@
           '<div style="flex:1;min-width:0;"><select id="mCard_fim_' + idx + '" style="' + selStyle + '"></select></div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;">' +
-          '<button onclick="AppModule._cadastrarConfirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">💾 Cadastrar e Confirmar</button>' +
+          '<button onclick="AppModule._cadastrarConfirmarCard(' + idx + ')" style="padding:5px 14px;border-radius:6px;background:#22a96a;border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg> Cadastrar e Confirmar</button>' +
           '<button onclick="AppModule._toggleCadastroCard(' + idx + ')" style="padding:5px 12px;border-radius:6px;background:transparent;border:1px solid var(--border);color:var(--text3);font-size:12px;cursor:pointer;">Cancelar</button>' +
         '</div>' +
       '</div>';
@@ -1311,8 +1352,8 @@
     }
 
     function _buscarMotoristaCard(idx) {
-      var matInput = document.getElementById('mCard_mat_' + idx);
-      var nomeDisp = document.getElementById('mCard_nome_' + idx);
+      var matInput  = document.getElementById('mCard_mat_' + idx);
+      var nomeInput = document.getElementById('mCard_nomeInput_' + idx);
       var d = _autoVinculoDataList[idx];
       if (!matInput || !d) return;
 
@@ -1320,15 +1361,16 @@
       var encontrado = mat ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; }) : null;
 
       d.editMat  = mat;
-      d.editNome = encontrado ? encontrado.nome : '';
+      d.editNome = encontrado ? encontrado.nome : (nomeInput ? nomeInput.value.trim() : '');
 
-      if (nomeDisp) {
+      if (nomeInput) {
         if (encontrado) {
-          nomeDisp.textContent = encontrado.nome + (encontrado.base ? ' · ' + encontrado.base : '');
-          nomeDisp.style.color = 'var(--verde)';
-        } else {
-          nomeDisp.textContent = mat ? 'Matrícula não encontrada' : '—';
-          nomeDisp.style.color = mat ? 'var(--vermelho)' : 'var(--text3)';
+          nomeInput.value = encontrado.nome;
+          nomeInput.style.color = 'var(--verde)';
+          nomeInput.title = encontrado.base ? encontrado.base : '';
+        } else if (mat) {
+          UIModule.showToast('Matrícula ' + mat + ' não encontrada na base local.', 'warning', 3000);
+          nomeInput.style.color = '';
         }
       }
     }
@@ -1340,20 +1382,16 @@
       var mat, nome, inicio, fim;
 
       if (d.editando) {
-        var matInput = document.getElementById('mCard_mat_' + idx);
-        var nomeDisp = document.getElementById('mCard_nome_' + idx);
-        var selIni   = document.getElementById('mCard_ini_' + idx);
-        var selFim   = document.getElementById('mCard_fim_' + idx);
-        mat    = matInput ? matInput.value.trim() : '';
-        nome   = (nomeDisp && nomeDisp.style.color !== 'var(--vermelho)') ? nomeDisp.textContent.trim() : '';
+        var matInput    = document.getElementById('mCard_mat_' + idx);
+        var nomeInputEl = document.getElementById('mCard_nomeInput_' + idx);
+        var selIni      = document.getElementById('mCard_ini_' + idx);
+        var selFim      = document.getElementById('mCard_fim_' + idx);
+        mat    = matInput    ? matInput.value.trim()    : '';
+        nome   = nomeInputEl ? nomeInputEl.value.trim() : '';
         inicio = selIni ? selIni.value : '';
         fim    = selFim ? selFim.value : '';
         if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
-        if (!nome && mat) {
-          var m = _motoristas.find(function(x) { return String(x.matricula).trim() === mat; });
-          nome = m ? m.nome : '(não cadastrado)';
-        }
-        if (!nome || nome === '—') nome = d.nomeCsv;
+        if (!nome) nome = d.nomeCsv;
       } else {
         if (!d.pontoInicio) { UIModule.showToast('Trecho não detectado. Clique em Editar.', 'warning'); return; }
         mat    = d.motorista ? String(d.motorista.matricula || '') : '';
@@ -1413,7 +1451,7 @@
             csvLabel +
             '<div style="font-size:11px;color:var(--laranja);margin-top:4px;">' + _escHtml(inicioNome) + ' → ' + _escHtml(fimNome) + '</div>' +
           '</div>' +
-          '<button onclick="AppModule._removerVinculo(' + i + ')" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0;line-height:1;" title="Remover">✕</button>' +
+          '<button onclick="AppModule._removerVinculo(' + i + ')" style="background:none;border:none;color:var(--text3);cursor:pointer;font-size:16px;padding:0;line-height:1;" title="Remover"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>' +
         '</div>';
       }).join('');
 
@@ -1445,12 +1483,9 @@
       }
     }
 
-    function _renderManualAddCard() {
-      var container = document.getElementById('motoristaDetectadosList');
-      if (!container) return;
+    function _buildManualAddHtml() {
       var inputStyle = 'width:100%;box-sizing:border-box;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;color:var(--text);background:var(--bg);outline:none;';
-      var html =
-        '<div style="margin-top:16px;">' +
+      return '<div style="margin-top:14px;padding-top:14px;border-top:1px solid var(--border);">' +
         '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3);margin-bottom:10px;">Adicionar Motorista</div>' +
         '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;">' +
         '<div style="display:flex;gap:6px;margin-bottom:8px;">' +
@@ -1463,10 +1498,11 @@
         '<select id="mManual_ini" style="' + inputStyle + 'flex:1;"></select>' +
         '<select id="mManual_fim" style="' + inputStyle + 'flex:1;"></select>' +
         '</div>' +
-        '<button onclick="AppModule._confirmarManual()" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">✓ Confirmar</button>' +
+        '<button onclick="AppModule._confirmarManual()" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> Confirmar</button>' +
         '</div></div>';
-      container.innerHTML = html;
+    }
 
+    function _popularSelectsManual() {
       var pontos = _getPontosLista();
       var optsBase = '<option value="">— Selecione —</option>' +
         pontos.map(function(p) {
@@ -1476,6 +1512,13 @@
       var selFim = document.getElementById('mManual_fim');
       if (selIni) selIni.innerHTML = optsBase;
       if (selFim) selFim.innerHTML = optsBase;
+    }
+
+    function _renderManualAddCard() {
+      var container = document.getElementById('motoristaDetectadosList');
+      if (!container) return;
+      container.innerHTML = _buildManualAddHtml();
+      _popularSelectsManual();
     }
 
     function _buscarMotoristaManual() {
@@ -1669,7 +1712,7 @@
           btnConfirm.disabled = busy;
           btnConfirm.innerHTML = busy
             ? '<span class="btn-spin"></span> Gerando...'
-            : '📋 Gerar';
+            : '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> Gerar';
         }
         if (btnCancel) btnCancel.disabled = busy;
       };
@@ -1710,6 +1753,8 @@
      * Lança enviarParadasFora em background e gerencia o card de progresso.
      */
     function _launchParadasFora(params) {
+      var onDone = params._onDone || null;
+
       // Conta previamente quantas paradas fora existem para exibir no card
       var esquemaIdSet = {};
       (params.esquemaPontos || []).forEach(function(ep) {
@@ -1720,7 +1765,7 @@
       var count = 0;
       enriched.forEach(function(pt, idx) {
         if (idx === 0 || idx === lastIdx) return;
-        if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
+        if (!pt.parada_s || pt.parada_s <= 0) return;
         if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
         if (!pt.proibido42) return;
         count++;
@@ -1728,6 +1773,7 @@
 
       if (count === 0) {
         UIModule.showToast("Nenhuma parada irregular detectada.", "info", 3000);
+        if (onDone) onDone();
         return;
       }
 
@@ -1737,28 +1783,26 @@
 
       google.script.run
         .withSuccessHandler(function(results) {
+          if (onDone) onDone('');
           var ok  = (results || []).filter(function(r) { return r.status === 'ok'; }).length;
           var err = (results || []).length - ok;
-          var esquemaPdfErro = !semEsquema && (results || []).some(function(r) {
-            return r.status === 'ok' && r.esquemaPdfStatus === 'error';
-          });
-          var esquemaInfo = semEsquema
-            ? ' · ⚠ Sem esquema'
-            : esquemaPdfErro
-              ? ' · Esquema: erro'
-              : ' · Esquema anexado';
           if (err === 0) {
-            _updateBgProgress('success', '✓ ' + ok + ' ocorrência' + (ok !== 1 ? 's' : '') + ' criada' + (ok !== 1 ? 's' : '') + esquemaInfo);
+            _updateBgProgress('success', '' + ok + ' ocorrência' + (ok !== 1 ? 's' : '') + ' criada' + (ok !== 1 ? 's' : ''));
           } else {
-            _updateBgProgress('warning', ok + ' criada' + (ok !== 1 ? 's' : '') + ', ' + err + ' com erro' + esquemaInfo);
+            _updateBgProgress('warning', ok + ' criada' + (ok !== 1 ? 's' : '') + ', ' + err + ' com erro');
           }
         })
         .withFailureHandler(function(e) {
+          if (onDone) onDone();
           var msg = e && e.message ? e.message : String(e);
           _updateBgProgress('error', 'Erro: ' + msg.slice(0, 80));
           console.error('[App] enviarParadasFora falhou:', e);
         })
-        .enviarParadasFora(params);
+        .enviarParadasFora((function() {
+          var p = Object.assign({}, params);
+          delete p._onDone;
+          return p;
+        })());
     }
 
     function _showBgProgress(text) {
@@ -2096,7 +2140,7 @@
       // Atualiza motorista ativo
       if (modo === 'MOTORISTA') {
         if (!_vinculos.length) {
-          UIModule.showToast('Nenhum motorista vinculado. Use o botão 👤 Motorista.', 'warning');
+          UIModule.showToast('Nenhum motorista vinculado. Use o botão <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Motorista.', 'warning');
         }
         var sel = document.getElementById('modoSelectMotorista');
         var idx = sel ? parseInt(sel.value, 10) : NaN;
@@ -2501,7 +2545,7 @@
       var _setBusy = function(busy) {
         if (btn) {
           btn.disabled = busy;
-          btn.innerHTML = busy ? '<span class="btn-spin"></span> Gerando...' : '📋 Gerar Relatório';
+          btn.innerHTML = busy ? '<span class="btn-spin"></span> Gerando...' : '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg> Gerar Relatório';
         }
       };
 
@@ -2670,17 +2714,49 @@
      * Cria ocorrência de parada irregular para um único evento Não Aut. (tipo 42).
      * Chamado pelo botão inline nos cards de alerta PARADA_PROIBIDA.
      */
-    function criarParadaIrregularInline(btnEl, seq) {
-      if (btnEl) {
-        btnEl.disabled = true;
-        btnEl.textContent = 'Criando…';
-        btnEl.style.opacity = '0.6';
+    function criarParadaIrregularInline(tagEl, seq) {
+      if (_vinculos.length === 0) {
+        var btnVincular = document.getElementById('btnVincularMotorista');
+        if (btnVincular) btnVincular.click();
+        UIModule.showToast('Vincule um motorista e clique em "Gerar Ocorrência" novamente.', 'info', 5000);
+        return;
       }
 
-      // Copia enrichedTrip mantendo proibido42 apenas no ponto alvo
+      // Feedback visual no span-tag
+      function _resetTag(textFinal) {
+        if (!tagEl) return;
+        tagEl.style.opacity = '';
+        tagEl.style.pointerEvents = '';
+        tagEl.classList.add('tag-ocorrencia-hover');
+        var normalSpan = tagEl.querySelector('.tag-txt-normal');
+        var hoverSpan  = tagEl.querySelector('.tag-txt-hover');
+        if (normalSpan) normalSpan.textContent = textFinal || 'Não Aut.';
+        if (hoverSpan)  hoverSpan.style.display = '';
+      }
+
+      if (tagEl) {
+        tagEl.style.opacity = '0.6';
+        tagEl.style.pointerEvents = 'none';
+        tagEl.classList.remove('tag-ocorrencia-hover');
+        var normalSpan = tagEl.querySelector('.tag-txt-normal');
+        var hoverSpan  = tagEl.querySelector('.tag-txt-hover');
+        if (normalSpan) normalSpan.textContent = 'Criando…';
+        if (hoverSpan)  hoverSpan.style.display = 'none';
+      }
+
+      // Força proibido42=true no ponto alvo; demais ficam false para este relatório
+      var seqNum = Number(seq);
+      var pontoAlvo = _enrichedTrip.find(function(pt) { return Number(pt.seq) === seqNum; });
+      if (!pontoAlvo) {
+        _resetTag();
+        UIModule.showToast('Ponto não encontrado.', 'error', 3000);
+        return;
+      }
+
       var tripFiltrado = _enrichedTrip.map(function(pt) {
-        if (Number(pt.seq) !== Number(seq)) return Object.assign({}, pt, { proibido42: false });
-        return pt;
+        if (Number(pt.seq) !== seqNum) return Object.assign({}, pt, { proibido42: false });
+        // garante matched=true para que o filtro do servidor aceite o ponto
+        return Object.assign({}, pt, { proibido42: true, matched: true });
       });
 
       var idEsquema = (document.getElementById('selectEsquema') || {}).value || '';
@@ -2689,10 +2765,11 @@
       _launchParadasFora({
         enrichedTrip:  tripFiltrado,
         esquemaPontos: _esquemaPontos,
-        motorista:     _vinculos.length > 0 ? _vinculos[0] : {},
+        motorista:     _vinculos[0],
         nomeLinha:     esqObj ? esqObj.nome_linha : '',
         horario:       esqObj ? (esqObj.horario || '') : '',
         summary:       _analysis ? (_analysis.summary || {}) : {},
+        _onDone:       _resetTag,
       });
     }
 

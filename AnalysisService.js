@@ -261,8 +261,10 @@ var AnalysisService = (() => {
         });
       }
 
-      // Parada em local proibido (tipo 42)
-      if (pt.matched && String(pt.tipo || '').trim() === '42' && pt.parada_s > 0) {
+      // Parada em local proibido (tipo 42 — aceita "42", "Local Não Autorizado - 42", etc.)
+      const _isTipo42 = (t) => { const s = String(t || '').trim(); if (/\b42\b/.test(s)) return true; return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').includes('nao autorizado'); };
+      if (pt.matched && _isTipo42(pt.tipo) && pt.parada_s > 0) {
+        pt.proibido42 = true;
         alerts.push({
           tipo: 'PARADA_PROIBIDA',
           descricao: `Parada de ${TimeUtils.formatDuration(pt.parada_s)} em local proibido: "${pt.ponto}"`,

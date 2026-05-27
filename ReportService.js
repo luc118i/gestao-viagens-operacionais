@@ -1002,7 +1002,7 @@ var ReportService = (() => {
         '</tr></thead><tbody>';
       paradasFora.forEach(function(p) {
         var statusHtml = p.proibido
-          ? '<span style="color:#d00000;font-weight:700;">⛔ Irregular</span>'
+          ? '<span style="color:#d00000;font-weight:700;display:inline-flex;align-items:center;gap:3px;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'12\' height=\'12\'><circle cx=\'12\' cy=\'12\' r=\'10\'/><line x1=\'4.93\' y1=\'4.93\' x2=\'19.07\' y2=\'19.07\'/></svg> Irregular</span>'
           : '<span style="color:#e8a020;font-weight:600;">Não previsto</span>';
         var rowBg = p.proibido ? 'background:#fff3f3;' : 'background:#fffbf0;';
         h +=
@@ -1092,7 +1092,7 @@ var ReportService = (() => {
       eventos.length === 0
     ) {
       h +=
-        '<p style="color:#22a96a;font-size:12px;font-weight:600;">✓ Viagem sem ocorrências operacionais registradas.</p>';
+        '<p style="color:#22a96a;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'13\' height=\'13\'><polyline points=\'20 6 9 17 4 12\'/></svg> Viagem sem ocorrências operacionais registradas.</p>';
     }
 
     // Esquema da viagem (referência da rota planejada)
@@ -1128,7 +1128,7 @@ var ReportService = (() => {
         var nomeCel = '<strong>' + (ep.nome_ponto || ep.id_ponto || '—') + '</strong>' +
                       (isFirst
                         ? ' <span style="font-size:9px;background:#f47920;color:#fff;' +
-                          'border-radius:3px;padding:1px 5px;margin-left:3px;">✈</span>'
+                          'border-radius:3px;padding:1px 5px;margin-left:3px;display:inline-flex;align-items:center;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'9\' height=\'9\'><line x1=\'22\' y1=\'2\' x2=\'11\' y2=\'13\'/><polygon points=\'22 2 15 22 11 13 2 9 22 2\'/></svg></span>'
                         : '');
         var horCel = ep.horario_comercial
           ? '<strong style="color:#1565c0;">' + ep.horario_comercial + '</strong>'

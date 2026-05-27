@@ -1,4 +1,4 @@
-<script>
+﻿<script>
   // ============================================================
   //  analysis.js  —  Módulo de análise e renderização de dados
   //  Tema: claro (redesign)
@@ -98,7 +98,7 @@
 
         var statusTag = item.visitado
           ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
-          : '<span class="tag tag-nao-visitado">✗ Não visitado</span>';
+          : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
 
         var paradaS  = pr ? (pr.parada_s || 0) : 0;
         var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
@@ -198,7 +198,7 @@
 
       var statusTag = item.visitado
         ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
-        : '<span class="tag tag-nao-visitado">✗ Não visitado</span>';
+        : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
 
       var paradaS  = pr ? (pr.parada_s || 0) : 0;
       var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
@@ -231,17 +231,20 @@
 
       tr.style.fontStyle = 'italic';
 
-      var tipoTag, statusTag;
-      if (ponto.proibido42) {
-        // Parada irregular: local tipo 42 — crítico absoluto
+      // Detecta tipo 42 mesmo quando proibido42 ainda não foi marcado (ex.: "Local Não Autorizado - 42")
+      var tipoStr = String(ponto.tipo || '').trim();
+      var ehProibido = ponto.proibido42 ||
+        /\b42\b/.test(tipoStr) ||
+        tipoStr.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').indexOf('nao autorizado') !== -1;
+
+      var tipoTag = _buildTipoTag(Object.assign({}, ponto, { proibido42: ehProibido }));
+      var statusTag;
+      if (ehProibido) {
         tr.classList.add('row-critico');
-        tipoTag = '<span class="tag-tipo" style="background:#d00000;color:#fff;font-weight:700;">⛔ Irregular</span>';
-        statusTag = '<span class="tag tag-status-critico" title="Parada de ' + Math.round(paradaS/60) + ' min em local proibido">⛔ Parada Irregular</span>';
+        statusTag = '<span class="tag tag-status-critico" title="Parada de ' + Math.round(paradaS/60) + ' min em local proibido"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Parada Irregular</span>';
       } else {
-        // Não previsto: parada em local conhecido mas fora do esquema da viagem
         if (paradaS > 15 * 60) tr.classList.add('row-critico');
         else if (paradaS > 0)   tr.classList.add('row-excesso');
-        tipoTag = '<span class="tag-tipo tag-nao-aut">Não previsto</span>';
         statusTag = _getStatusTag(ponto, excessoS);
       }
 
@@ -386,10 +389,10 @@
                              : alerta.classificacao === 'BAIXA'           ? 'Abaixo do ideal'
                              : '';
                 ctxHtml = '<div class="alert-ctx">'
-                  + '<span class="alert-ctx-item">📍 ' + _escHtml(alerta.trecho || '') + '</span>'
-                  + '<span class="alert-ctx-item">📏 ' + alerta.distKm.toFixed(1) + ' km</span>'
+                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ' + _escHtml(alerta.trecho || '') + '</span>'
+                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M5 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5z"/><line x1="3" y1="9" x2="7" y2="9"/><line x1="3" y1="14" x2="5" y2="14"/><line x1="10" y1="3" x2="10" y2="7"/><line x1="15" y1="3" x2="15" y2="5"/></svg> ' + alerta.distKm.toFixed(1) + ' km</span>'
                   + '<span class="alert-ctx-item">⏱ ' + alerta.tempoMin + ' min</span>'
-                  + '<span class="alert-ctx-item">🚌 ' + alerta.velocidadeKmh + ' km/h</span>'
+                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg> ' + alerta.velocidadeKmh + ' km/h</span>'
                   + (classTxt ? '<span class="alert-ctx-badge">' + classTxt + '</span>' : '')
                   + '</div>';
               } else if (alerta.trecho) {
@@ -590,7 +593,7 @@
 
       // Local proibido (tipo 42) — crítico imediato
       if (ponto && ponto.proibido42) {
-        return '<span class="tag tag-status-critico" title="Parada em local proibido — ' + Math.round(paradaS/60) + ' min">⛔ Local Proibido</span>';
+        return '<span class="tag tag-status-critico" title="Parada em local proibido — ' + Math.round(paradaS/60) + ' min"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Local Proibido</span>';
       }
 
       // Ponto não identificado na base de locais
@@ -617,7 +620,7 @@
         return '<span class="tag tag-status-transito" title="Ponto visitado sem parada registrada">Em trânsito</span>';
       }
       if (excessoS <= 0) {
-        return '<span class="tag tag-realizado" title="Parada dentro do tempo esperado">✓ OK</span>';
+        return '<span class="tag tag-realizado" title="Parada dentro do tempo esperado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> OK</span>';
       }
       if (excessoS <= 10 * 60) {
         // Excesso leve — até 10 min
@@ -640,18 +643,36 @@
       return TEMPO_ESPERADO_PADRAO;
     }
 
-    function _buildTipoTag(ponto) {
-      if (ponto.proibido42) return '<span class="tag-tipo" style="background:#d00000;color:#fff;">⛔ Proibido</span>';
-      if (!ponto.matched) return '<span class="tag-tipo tag-desconhecido">Não id.</span>';
-      if (ponto.garagem)    return '<span class="tag-tipo tag-garagem">Garagem</span>';
-      if (ponto.rodoviaria) return '<span class="tag-tipo tag-rodoviaria">Rodoviária</span>';
-      if (ponto.pedagio)    return '<span class="tag-tipo tag-rodoviaria">Pedágio</span>';
-      var tipo = (ponto.tipo || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-      if (tipo.indexOf('controle') !== -1) return '<span class="tag-tipo tag-controle">Controle</span>';
-      if (tipo.indexOf('auxiliar') !== -1) return '<span class="tag-tipo tag-auxiliar">Auxiliar</span>';
-      if (tipo.indexOf('nao autorizado') !== -1) return '<span class="tag-tipo tag-nao-aut">Não Aut.</span>';
-      return '<span class="tag-tipo tag-desconhecido">' + _escHtml(ponto.tipo || '—') + '</span>';
-    }
+     function _buildTipoTag(ponto) {
+       var seq = ponto.seq != null ? Number(ponto.seq) : -1;
+
+       if (ponto.proibido42) {
+         if (seq >= 0) {
+           return '<span class="tag-tipo tag-ocorrencia-hover" style="background:#d00000;color:#fff;border-color:#d00000;" onclick="AppModule.criarParadaIrregularInline(this,' + seq + ')" title="Clique para gerar ocorrência">' +
+                  '<span class="tag-txt-normal">&#x26D4; Proibido</span>' +
+                  '<span class="tag-txt-hover">Gerar Ocorrência</span>' +
+                  '</span>';
+         }
+         return '<span class="tag-tipo" style="background:#d00000;color:#fff;">&#x26D4; Proibido</span>';
+       }
+       if (!ponto.matched) return '<span class="tag-tipo tag-desconhecido">Não id.</span>';
+       if (ponto.garagem)    return '<span class="tag-tipo tag-garagem">Garagem</span>';
+       if (ponto.rodoviaria) return '<span class="tag-tipo tag-rodoviaria">Rodoviária</span>';
+       if (ponto.pedagio)    return '<span class="tag-tipo tag-rodoviaria">Pedágio</span>';
+       var tipo = (ponto.tipo || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+       if (tipo.indexOf('controle') !== -1) return '<span class="tag-tipo tag-controle">Controle</span>';
+       if (tipo.indexOf('auxiliar') !== -1) return '<span class="tag-tipo tag-auxiliar">Auxiliar</span>';
+       if (tipo.indexOf('nao autorizado') !== -1) {
+         if (seq >= 0) {
+           return '<span class="tag-tipo tag-nao-aut tag-ocorrencia-hover" onclick="AppModule.criarParadaIrregularInline(this,' + seq + ')" title="Clique para gerar ocorrência">' +
+                  '<span class="tag-txt-normal">Não Aut.</span>' +
+                  '<span class="tag-txt-hover">Gerar Ocorrência</span>' +
+                  '</span>';
+         }
+         return '<span class="tag-tipo tag-nao-aut">Não Aut.</span>';
+       }
+       return '<span class="tag-tipo tag-desconhecido">' + _escHtml(ponto.tipo || '—') + '</span>';
+     }
 
     function _fmtDatetime(dtStr) {
       if (!dtStr || dtStr.trim() === '') return '—';

@@ -935,6 +935,27 @@
     border: 1px solid rgba(217, 64, 64, 0.25);
   }
 
+  /* Hover para gerar ocorrência inline (tag-nao-aut e proibido42) */
+  .tag-ocorrencia-hover {
+    cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    user-select: none;
+  }
+  .tag-ocorrencia-hover .tag-txt-hover {
+    display: none;
+  }
+  .tag-ocorrencia-hover:hover .tag-txt-normal {
+    display: none;
+  }
+  .tag-ocorrencia-hover:hover .tag-txt-hover {
+    display: inline;
+  }
+  .tag-ocorrencia-hover:hover {
+    background: #1565c0 !important;
+    color: #fff !important;
+    border-color: #1565c0 !important;
+  }
+
   .tag-garagem {
     background: rgba(138, 145, 158, 0.15);
     color: var(--cinza);

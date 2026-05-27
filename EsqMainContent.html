@@ -43,12 +43,12 @@
 
     <!-- Footer -->
     <div class="hor-footer">
-      <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()">↓ Baixar PDF</button>
+      <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Baixar PDF</button>
     </div>
   </div><!-- /hor-panel -->
 
   <div class="map-ph" id="mapPh">
-    <div class="ph-icon">🗺️</div>
+    <div class="ph-icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="48" height="48" style="opacity:.35;"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg></div>
     <p>Selecione ou crie um esquema para visualizar o traçado</p>
   </div>
   <div id="map"></div>
@@ -57,6 +57,13 @@
     <div class="leg-item"><div class="leg-dot" style="background:#e05050;"></div> Fim</div>
     <div class="leg-item"><div class="leg-dot" style="background:#f47920;"></div> Ponto</div>
     <div class="leg-item" style="gap:6px;"><div style="width:22px;height:3px;background:#f47920;border-radius:2px;opacity:0.8;"></div> Rota</div>
+    <!-- ANTT items — shown dynamically by _drawAnttOnMap() -->
+    <div class="leg-antt" id="mapAnttLegend" style="display:none;">
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#22c55e;opacity:0.85;flex-shrink:0;"></div> OK</div>
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#f59e0b;opacity:0.85;flex-shrink:0;"></div> Atenção</div>
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#ef4444;opacity:0.85;flex-shrink:0;"></div> Excede</div>
+      <div class="leg-item"><div class="leg-dot" style="background:#6366f1;flex-shrink:0;"></div> Sugestão</div>
+    </div>
   </div>
 
 </div><!-- /map-wrap -->

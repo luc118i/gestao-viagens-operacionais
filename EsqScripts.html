@@ -8,8 +8,10 @@ var _locais  = [];
 var _lMap    = {};
 var _sel     = null;
 var _seq     = [];
-var _isNovo  = false;
-var _seqDirt = false;
+var _isNovo        = false;
+var _seqDirt       = false;
+var _voltaMode     = false;  // true quando criando viagem de volta
+var _voltaSnapshot = null;   // { seq, legVia, customStopTimes } da viagem original
 
 var _map     = null;
 var _markers = [];
@@ -25,6 +27,7 @@ var _lastCalc        = null;
 var _pendingSelectIdx = null;
 var _activeHorRow    = null;
 var _pdfCols     = { chegada:true, parada:true, saida:true, desl:true, comercial:true, dif:true };
+var _pdfMode     = 'normal';
 var _pdfTitle    = '';
 var _pdfSubtitle = '';
 var _osrmLegs        = undefined;
@@ -35,9 +38,23 @@ var _horStartIdx     = 0;
 var _customStopTimes = {};
 var _legVia          = {};
 var _tipoViaVel      = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
+var _VIA_LABEL_TO_KEY = { 'BR': 'BR', 'Estadual': 'Est', 'Municipal': 'Mun', 'Urbana': 'Urb' };
 var _osrmStatus      = 'pending';
 var _horSidebarHidden = (function(){ try { return localStorage.getItem('vc_hor_sidebar') === 'hidden'; } catch(e){ return false; } })();
 var _horOsmHidden     = (function(){ try { return localStorage.getItem('vc_hor_osm')     === 'hidden'; } catch(e){ return false; } })();
+
+// ── ANTT ──────────────────────────────────────────────────────
+var ANTT_MAX_KM  = 495; // km — máximo entre pontos de apoio consecutivos (ANTT)
+var ANTT_WARN_KM = 395; // km — aviso de proximidade ao limite
+var ANTT_MIN_KM  = 30;  // km — pontos de apoio desnecessariamente próximos
+var _anttMap          = {};   // { rowIdx → { type, dist, fromNome } }
+var _anttStatus       = null; // estado do fim da rota
+var _anttWarnIdx      = -1;   // índice da linha com badge warn atual (para substituição por error)
+var _anttSuggCands    = [];   // candidatos de sugestão calculados
+var _anttSuggCacheKey = '';   // chave do último batch de cache consultado
+var _stretchPolys     = [];   // Leaflet polylines para coloração de trechos ANTT (map view)
+var _suggMapMarkers   = [];   // Leaflet markers para sugestões de apoio (map view)
+var _anttMapActive    = false; // true quando overlays ANTT estão desenhados no mapa
 
 // Tempo de parada (minutos) por tipo de ponto
 var STOP_TIMES = {
@@ -181,7 +198,11 @@ function _fetchOsrmDistances(callback) {
 
   function legsFromCache(cached) {
     return pts.slice(0, -1).map(function(pt, i) {
-      var km = cached[normKey(pt.idPonto, pts[i+1].idPonto)];
+      var entry = cached[normKey(pt.idPonto, pts[i+1].idPonto)];
+      var km = entry && entry.km > 0 ? entry.km : 0;
+      if (km > 0 && entry.tipoVia && !_legVia[pt.idPonto]) {
+        _legVia[pt.idPonto] = entry.tipoVia;
+      }
       return km > 0 ? { distKm: km, durationMin: 0 } : null;
     });
   }
@@ -209,11 +230,13 @@ function _fetchOsrmDistances(callback) {
 
         var toSave = [];
         legs.forEach(function(leg, i) {
-          if (leg.distKm > 0) {
-            var key = normKey(pts[i].idPonto, pts[i+1].idPonto);
-            if (!(cached[key] > 0))
-              toSave.push({ a: pts[i].idPonto, b: pts[i+1].idPonto, km: leg.distKm });
-          }
+          if (!pts[i] || !pts[i+1]) return;
+          var key    = normKey(pts[i].idPonto, pts[i+1].idPonto);
+          var isNew  = leg.distKm > 0 && !((cached[key] || {}).km > 0);
+          var via    = _legVia[pts[i].idPonto] || 'BR';
+          // Envia TODOS os pares: km > 0 apenas nos novos; existentes recebem km=0
+          // para que o backend só atualize tipo_via sem criar linha duplicada
+          toSave.push({ a: pts[i].idPonto, b: pts[i+1].idPonto, km: isNew ? leg.distKm : 0, tipoVia: via });
         });
         if (toSave.length && typeof google !== 'undefined' && google.script)
           google.script.run.saveDistanciasCached(toSave);
@@ -235,7 +258,7 @@ function _fetchOsrmDistances(callback) {
   if (typeof google !== 'undefined' && google.script) {
     google.script.run
       .withSuccessHandler(function(cached) {
-        var allHit = pairs.every(function(p){ return cached[normKey(p.a, p.b)] > 0; });
+        var allHit = pairs.every(function(p){ return (cached[normKey(p.a, p.b)] || {}).km > 0; });
         if (allHit) {
           _osrmStatus = 'cache';
           callback(legsFromCache(cached), null);
@@ -257,7 +280,8 @@ function setPreset(btn, defaultVel) {
   document.querySelectorAll('.hor-preset-btn').forEach(function(b){ b.classList.remove('active'); });
   btn.classList.add('active');
   var tipo = btn.textContent.trim();
-  document.getElementById('horVelMedia').value = (_tipoViaVel[tipo] || defaultVel);
+  var key  = _VIA_LABEL_TO_KEY[tipo] || tipo;
+  document.getElementById('horVelMedia').value = (_tipoViaVel[key] || defaultVel);
   saveHorConfig();
   renderHorario();
 }
@@ -265,11 +289,14 @@ function setPreset(btn, defaultVel) {
 function saveHorConfig() {
   if (!_sel) return;
   var partida = document.getElementById('horHoraPartida').value || '';
-  var via     = '';
+  var via = '', vel = parseFloat(document.getElementById('horVelMedia').value);
   document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
     if (b.classList.contains('active')) via = b.textContent.trim();
   });
-  try { localStorage.setItem('vc_horcfg_' + _sel.id_esquema, JSON.stringify({ partida: partida, via: via })); } catch(e) {}
+  if (via && !isNaN(vel) && vel > 0) {
+    _tipoViaVel[_VIA_LABEL_TO_KEY[via] || via] = vel;
+  }
+  try { localStorage.setItem('vc_horcfg_' + _sel.id_esquema, JSON.stringify({ partida: partida, via: via, viaVel: _tipoViaVel })); } catch(e) {}
 }
 
 function _restoreHorConfig(esq) {
@@ -277,8 +304,12 @@ function _restoreHorConfig(esq) {
   try { cfg = JSON.parse(localStorage.getItem('vc_horcfg_' + esq.id_esquema) || 'null'); } catch(e) {}
   var partida = (cfg && cfg.partida) ? cfg.partida : (esq.horario || '00:00');
   var via     = (cfg && cfg.via)     ? cfg.via     : 'BR';
+  if (cfg && cfg.viaVel) {
+    Object.keys(cfg.viaVel).forEach(function(k) { _tipoViaVel[k] = cfg.viaVel[k]; });
+  }
   document.getElementById('horHoraPartida').value = partida;
-  document.getElementById('horVelMedia').value = _tipoViaVel[via] || 85;
+  var viaKey = _VIA_LABEL_TO_KEY[via] || via;
+  document.getElementById('horVelMedia').value = _tipoViaVel[viaKey] || 85;
   document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
     b.classList.toggle('active', b.textContent.trim() === via);
   });
@@ -293,11 +324,12 @@ function _salvarVelAtiva() {
     if (b.classList.contains('active')) tipo = b.textContent.trim();
   });
   if (!tipo) return;
-  _tipoViaVel[tipo] = vel;
+  var tipoKey = _VIA_LABEL_TO_KEY[tipo] || tipo;
+  _tipoViaVel[tipoKey] = vel;
   google.script.run
     .withSuccessHandler(function() { toast(tipo + ' → ' + vel + ' km/h salvo', 'success'); })
     .withFailureHandler(function(e) { toast('Erro: ' + (e.message || e), 'error'); })
-    .salvarTipoViaVelocidade(_sel.id_esquema, tipo, vel);
+    .salvarTipoViaVelocidade(_sel.id_esquema, tipoKey, vel);
 }
 
 // ============================================================
@@ -469,16 +501,442 @@ function renderHorario() {
   });
 }
 
+// ============================================================
+//  ANTT — Verificação de Pontos de Apoio
+// ============================================================
+
+/**
+ * Ponto de apoio ANTT = qualquer ponto da sequência SEM horário comercial definido.
+ * Independe de tipo ou nome — o critério único é a ausência de saída comercial.
+ */
+function _isApoioAntt(idx) {
+  var p = _seq[idx];
+  if (!p) return false;
+  return !_comercialTimes[p.idPonto];
+}
+
+/**
+ * Percorre a sequência acumulando km entre pontos de apoio consecutivos.
+ * - Pontos de apoio: qualquer ponto sem horário comercial → zera o contador.
+ * - Pontos comerciais: alerta no PRIMEIRO que cruzar 395 km (warn) ou 495 km (error).
+ * - Último ponto: sempre verifica o trecho final.
+ * Preenche _anttMap[rowIdx] = { type, dist, fromNome }.
+ */
+function _computeAnttAlerts(c) {
+  _anttMap     = {};
+  _anttWarnIdx = -1;
+  if (!c || _seq.length < 2) return;
+
+  var startIdx     = Math.min(_horStartIdx, _seq.length - 1);
+  var vel          = parseFloat(document.getElementById('horVelMedia').value) || 80;
+  var lastNome     = _seq[startIdx] ? _seq[startIdx].nomePonto : '';
+  var lastApoioIdx = startIdx;
+  var accumDist    = 0;
+  var maxStretch   = 0;   // maior trecho já fechado (entre dois apoios)
+  var warnFired    = false;
+  var errorFired   = false;
+
+  for (var i = startIdx + 1; i < c.pontos.length; i++) {
+    var p = c.pontos[i];
+    if (p.preDep) continue;
+
+    var seg = p.dist || 0;
+    if (seg === 0 && p.tv > 0) seg = Math.round((p.tv / 60) * vel * 10) / 10;
+    accumDist += seg;
+
+    var isLast  = (i === _seq.length - 1);
+    var isApoio = _isApoioAntt(i);
+    var d       = Math.round(accumDist);
+
+    if (isApoio) {
+      if (d > maxStretch) maxStretch = d;
+      if      (d > ANTT_MAX_KM)            _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
+      else if (d > ANTT_WARN_KM)           _anttMap[i] = { type: 'warn',  dist: d, fromNome: lastNome };
+      else if (d > 0 && d < ANTT_MIN_KM)  _anttMap[i] = { type: 'info',  dist: d, fromNome: lastNome };
+      lastNome     = _seq[i].nomePonto;
+      lastApoioIdx = i;
+      accumDist    = 0;
+      warnFired    = false;
+      errorFired   = false;
+    } else {
+      if (!errorFired && d > ANTT_MAX_KM) {
+        if (warnFired) { delete _anttMap[_anttWarnIdx]; }
+        _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
+        errorFired = true;
+      } else if (!warnFired && d > ANTT_WARN_KM) {
+        _anttMap[i] = { type: 'warn', dist: d, fromNome: lastNome };
+        _anttWarnIdx = i;
+        warnFired = true;
+      }
+      if (isLast) {
+        if (d > maxStretch) maxStretch = d;
+        if (!_anttMap[i] && !errorFired) {
+          if      (d > ANTT_MAX_KM)  _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
+          else if (d > ANTT_WARN_KM) _anttMap[i] = { type: 'warn',  dist: d, fromNome: lastNome };
+        }
+      }
+    }
+  }
+
+  var apoioPt = _seq[lastApoioIdx];
+  _anttStatus = {
+    accumKm:       Math.round(accumDist),
+    remaining:     Math.round(ANTT_MAX_KM - accumDist),
+    maxStretch:    maxStretch,
+    lastApoioNome: lastNome,
+    lastApoioLat:  apoioPt ? (apoioPt.lat || null) : null,
+    lastApoioLng:  apoioPt ? (apoioPt.lng || null) : null
+  };
+}
+
+/**
+ * Retorna true se o ponto pode ser candidato a apoio nas sugestões.
+ * Usa o NOME (mais confiável que tipo) para excluir rodoviárias/terminais.
+ */
+function _isApoioCandidate(nome) {
+  var n = (nome || '').trim().toUpperCase();
+  return !['RODOVIARIA','RODOVIARIO','TERMINAL','ESTACAO'].some(function(k){
+    return n.indexOf(k) !== -1;
+  });
+}
+
+/** Distância em km entre dois pares de coordenadas (fórmula de Haversine). */
+function _haversinKm(lat1, lng1, lat2, lng2) {
+  var R = 6371, r = Math.PI / 180;
+  var dLat = (lat2 - lat1) * r, dLng = (lng2 - lng1) * r;
+  var a = Math.sin(dLat/2)*Math.sin(dLat/2)
+        + Math.cos(lat1*r)*Math.cos(lat2*r)*Math.sin(dLng/2)*Math.sin(dLng/2);
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+/** Atualiza a barra de status ANTT (ok / warn / error) no card de pontos. */
+function _updateAnttWarnBar() {
+  var bar = document.getElementById('anttWarn');
+  if (!bar) return;
+  if (!_anttStatus) { bar.style.display = 'none'; return; }
+
+  // Determina o pior estado em toda a rota
+  var hasError = false, hasWarn = false, worstDist = 0;
+  Object.keys(_anttMap).forEach(function(k) {
+    var a = _anttMap[k];
+    if (!a) return;
+    if (a.type === 'error') { hasError = true; if (a.dist > worstDist) worstDist = a.dist; }
+    if (a.type === 'warn'  && !hasError) { hasWarn = true; if (a.dist > worstDist) worstDist = a.dist; }
+  });
+
+  var icoHtml, cls, txt;
+  if (hasError) {
+    icoHtml = ico('alert-triangle', 14); cls = 'error';
+    txt = worstDist + 'km sem apoio — excede o limite ANTT de ' + ANTT_MAX_KM + 'km';
+  } else if (hasWarn) {
+    icoHtml = ico('zap', 14); cls = 'warn';
+    txt = worstDist + 'km no trecho mais longo — faltam ' + (ANTT_MAX_KM - worstDist) + 'km para o limite';
+  } else {
+    var ms = _anttStatus.maxStretch || _anttStatus.accumKm || 0;
+    icoHtml = ico('check', 14); cls = 'ok';
+    txt = 'Conforme ANTT — maior trecho: ' + ms + 'km / ' + ANTT_MAX_KM + 'km';
+  }
+
+  bar.className = 'antt-warn-bar ' + cls;
+  bar.style.display = '';
+  bar.innerHTML = '<span class="antt-warn-ico">' + icoHtml + '</span>'
+    + '<span class="antt-warn-txt">' + txt + '</span>';
+}
+
+// ─── Sugestões de próximo apoio ──────────────────────────────
+
+/**
+ * Calcula até `max` candidatos de apoio mais próximos na direção do trajeto.
+ * Retorna array de { local, estKm, realKm, isForward }.
+ */
+function _computeApoioSuggestions(max) {
+  if (!_anttStatus || !_anttStatus.lastApoioLat || !_anttStatus.lastApoioLng) return [];
+
+  // Referência = último apoio (onde o trecho problemático começa)
+  var refLat = +_anttStatus.lastApoioLat, refLng = +_anttStatus.lastApoioLng;
+  // Busca pontos até o limite máximo a partir do último apoio
+  var searchRadius = ANTT_MAX_KM;
+
+  // Vetor direcional: do último apoio para o último ponto da rota
+  var tail = _seq[_seq.length - 1];
+  var hasDirVec = tail && tail.lat && tail.lng
+    && (+tail.lat !== refLat || +tail.lng !== refLng);
+  var dirLat = hasDirVec ? (+tail.lat - refLat) : 0;
+  var dirLng = hasDirVec ? (+tail.lng - refLng) : 0;
+
+  // IDs já na sequência → não sugerir
+  var inSeq = {};
+  _seq.forEach(function(p) { inSeq[p.idPonto] = true; });
+
+  var cands = [];
+  _locais.forEach(function(l) {
+    if (!_isApoioCandidate(l.descricao) || !l.lat || !l.lng || inSeq[l.codigo]) return;
+    var linKm = _haversinKm(refLat, refLng, +l.lat, +l.lng);
+    var estKm = Math.round(linKm * 1.3);
+    if (estKm < 10 || estKm > searchRadius) return;
+
+    var isForward = true;
+    if (hasDirVec) {
+      var vLat = +l.lat - refLat, vLng = +l.lng - refLng;
+      isForward = (vLat * dirLat + vLng * dirLng) >= 0;
+    }
+    cands.push({ local: l, estKm: estKm, realKm: null, isForward: isForward });
+  });
+
+  cands.sort(function(a, b) {
+    if (a.isForward !== b.isForward) return a.isForward ? -1 : 1;
+    return a.estKm - b.estKm;
+  });
+
+  return cands.slice(0, max || 5);
+}
+
+/** Renderiza o painel de sugestões no sidebar. */
+function _renderApoioSuggestions(cands) {
+  var el = document.getElementById('anttSuggest');
+  if (!el) return;
+  if (!cands || !cands.length) { el.style.display = 'none'; return; }
+
+  var isErr = _anttStatus && _anttStatus.accumKm > ANTT_MAX_KM;
+  el.className = 'antt-sugg-panel' + (isErr ? ' error' : '');
+  el.style.display = '';
+
+  var html = '<div class="antt-sugg-head">' + ico('lightbulb', 13) + ' Sugestões de apoio</div>';
+  html += cands.map(function(c) {
+    var dClass = c.realKm ? 'real' : 'est';
+    var dVal   = c.realKm ? c.realKm : c.estKm;
+    var dPfx   = c.realKm ? '' : '~';
+    return '<div class="antt-sugg-item" data-cod="' + esc(c.local.codigo) + '">'
+      + '<div class="antt-sugg-info">'
+        + '<div class="antt-sugg-nome">' + esc(c.local.descricao) + '</div>'
+        + '<div class="antt-sugg-meta">'
+          + '<span class="antt-sugg-dist ' + dClass + '">' + dPfx + dVal + 'km</span>'
+          + (c.local.tipo ? ' · ' + esc(c.local.tipo) : '')
+          + (!c.isForward ? ' <span class="antt-sugg-behind">' + ico('arrow-left', 11) + ' atrás</span>' : '')
+        + '</div>'
+      + '</div>'
+      + '<button class="antt-sugg-add btn-add-sugg" data-cod="' + esc(c.local.codigo) + '">+</button>'
+      + '</div>';
+  }).join('');
+  el.innerHTML = html;
+
+  el.querySelectorAll('.antt-sugg-add').forEach(function(btn) {
+    btn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var found = _locais.find(function(l){ return l.codigo === btn.getAttribute('data-cod'); });
+      if (found) addPontoNoFim(found);
+    });
+  });
+}
+
+/**
+ * Consulta o cache de distâncias (Sheets) para os pares
+ * último-ponto → candidato e atualiza os km reais onde houver hit.
+ */
+function _refreshSuggestionsWithCache(cands) {
+  if (!cands.length || typeof google === 'undefined' || !google.script) return;
+  var lastPt = _seq.length ? _seq[_seq.length - 1] : null;
+  if (!lastPt) return;
+
+  // Evita re-consultar o mesmo conjunto
+  var key = lastPt.idPonto + '|' + cands.map(function(c){ return c.local.codigo; }).join(',');
+  if (key === _anttSuggCacheKey) return;
+  _anttSuggCacheKey = key;
+
+  var pairs = cands.map(function(c){ return { a: lastPt.idPonto, b: c.local.codigo }; });
+
+  google.script.run
+    .withSuccessHandler(function(cached) {
+      var updated = false;
+      cands.forEach(function(c) {
+        var a = lastPt.idPonto, b = c.local.codigo;
+        var k = (a <= b) ? (a + ':' + b) : (b + ':' + a);
+        var ck = (cached[k] || {}).km || 0;
+        if (ck > 0 && ck !== c.realKm) {
+          c.realKm = ck;
+          updated = true;
+        }
+      });
+      if (!updated) return;
+      // Re-ordena com distâncias reais
+      cands.sort(function(a, b) {
+        if (a.isForward !== b.isForward) return a.isForward ? -1 : 1;
+        return (a.realKm || a.estKm) - (b.realKm || b.estKm);
+      });
+      _renderApoioSuggestions(cands);
+    })
+    .withFailureHandler(function(){})
+    .getDistanciasCached(pairs);
+}
+
+/** Ponto de entrada: calcula, renderiza e dispara consulta ao cache. */
+function _updateApoioSuggestions() {
+  if (!_anttStatus || _anttStatus.accumKm <= ANTT_WARN_KM) {
+    var el = document.getElementById('anttSuggest');
+    if (el) el.style.display = 'none';
+    _anttSuggCands = [];
+    return;
+  }
+  _anttSuggCands = _computeApoioSuggestions(5);
+  _renderApoioSuggestions(_anttSuggCands);
+  _refreshSuggestionsWithCache(_anttSuggCands);
+}
+
+// ── ANTT map overlays ────────────────────────────────────────
+
+/** Remove todas as camadas ANTT do mapa (stretch polys + suggestion markers). */
+function _clearAnttMapLayers() {
+  _stretchPolys.forEach(function(p){ p.remove(); });
+  _stretchPolys = [];
+  _suggMapMarkers.forEach(function(m){ m.remove(); });
+  _suggMapMarkers = [];
+  _anttMapActive = false;
+  var anttLeg = document.getElementById('mapAnttLegend');
+  if (anttLeg) anttLeg.style.display = 'none';
+}
+
+/**
+ * Desenha no mapa:
+ *  1. Polylines coloridas por trecho entre pontos de apoio (verde/âmbar/vermelho)
+ *  2. Marcadores de sugestão de apoio (pins roxos clicáveis)
+ * Chamada de updateMap() — ANTES de adicionar _poly para que a rota fique por cima.
+ */
+function _drawAnttOnMap() {
+  _clearAnttMapLayers();
+  if (!_map || _seq.length < 2) return;
+
+  // Calcula horário + ANTT com as legs disponíveis
+  var legs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c = _calcHorario(legs);
+  _computeAnttAlerts(c);
+  if (!_anttStatus) return;
+
+  // Só exibe overlays se houver preocupação ANTT real
+  var needsOverlay = _anttStatus.maxStretch > ANTT_WARN_KM || _anttStatus.accumKm > ANTT_WARN_KM;
+  if (!needsOverlay) return;
+
+  var clr = { error: '#ef4444', warn: '#f59e0b', ok: '#22c55e' };
+  var startIdx    = Math.min(_horStartIdx, _seq.length - 1);
+  var stretchStart = startIdx;
+  var accumDist   = 0;
+  var hasWarnErr  = false;
+
+  function _flushStretch(endIdx) {
+    var d = Math.round(accumDist);
+    if (d <= 0) return; // sem distância (OSRM não respondeu ainda)
+    var type = d > ANTT_MAX_KM ? 'error' : d > ANTT_WARN_KM ? 'warn' : 'ok';
+    if (type !== 'ok') hasWarnErr = true;
+    var coords = [];
+    for (var j = stretchStart; j <= endIdx; j++) {
+      var sp = _seq[j];
+      if (sp && sp.lat && sp.lng) coords.push([+sp.lat, +sp.lng]);
+    }
+    if (coords.length < 2) return;
+    var fromNome = (_seq[stretchStart] || {}).nomePonto || '?';
+    var toNome   = (_seq[endIdx]       || {}).nomePonto || '?';
+    var lbl  = type === 'error' ? 'Excede ANTT' : type === 'warn' ? 'Atenção ANTT' : 'Trecho OK';
+    var tip  = '<b>' + lbl + '</b><br>' + d + ' km'
+             + '<br><span style="font-size:10px;color:#ccc">' + esc(fromNome) + ' → ' + esc(toNome) + '</span>';
+    var pl = L.polyline(coords, {
+      color: clr[type], weight: 10, opacity: 0.32,
+      lineCap: 'round', lineJoin: 'round'
+    }).addTo(_map);
+    pl.bindTooltip(tip, { sticky: true });
+    _stretchPolys.push(pl);
+  }
+
+  for (var i = startIdx + 1; i < c.pontos.length; i++) {
+    var p = c.pontos[i];
+    if (p.preDep) continue;
+    accumDist += p.dist || 0;
+    var isApoio = _isApoioAntt(i);
+    var isLast  = (i === c.pontos.length - 1);
+    if (isApoio || isLast) {
+      _flushStretch(i);
+      if (isApoio) { stretchStart = i; accumDist = 0; }
+    }
+  }
+
+  // Exibe seção ANTT na legenda do mapa
+  _anttMapActive = hasWarnErr;
+  var anttLeg = document.getElementById('mapAnttLegend');
+  if (anttLeg) anttLeg.style.display = hasWarnErr ? '' : 'none';
+
+  // Marcadores de sugestão de apoio
+  var cands = _computeApoioSuggestions(5);
+  _anttSuggCands = cands;
+  cands.forEach(function(cand) {
+    if (!cand.local || !cand.local.lat || !cand.local.lng) return;
+    var dVal = cand.realKm || cand.estKm;
+    var dPfx = cand.realKm ? '' : '~';
+    var icon = L.divIcon({
+      className: '',
+      html: '<div class="antt-map-sugg-pin">+</div>',
+      iconSize: [28, 28], iconAnchor: [14, 14]
+    });
+    var tipStr = '<b>' + esc(cand.local.descricao) + '</b>'
+               + '<br><span style="font-size:10px;color:#a5b4fc">' + dPfx + dVal + ' km desde último apoio'
+               + (cand.local.tipo ? ' · ' + esc(cand.local.tipo) : '') + '</span>'
+               + '<br><span style="font-size:10px;color:#818cf8">Clique para adicionar ao esquema</span>';
+    var m = L.marker([+cand.local.lat, +cand.local.lng], { icon: icon, zIndexOffset: 600 });
+    m.bindTooltip(tipStr, { direction: 'top', offset: [0, -16] });
+    m.on('click', (function(loc) {
+      return function() { addPontoNoMapa(loc); };
+    })(cand.local));
+    m.addTo(_map);
+    _suggMapMarkers.push(m);
+  });
+}
+
+/** Retorna o HTML do badge ANTT para inserir na célula de nome. */
+function _anttBadgeHtml(idx) {
+  var a = _anttMap[idx];
+  if (!a) return '';
+  var badgeIco = a.type === 'error' ? ico('alert-triangle', 11) : a.type === 'warn' ? ico('zap', 11) : ico('info', 11);
+  var lbl = a.type === 'error'
+    ? badgeIco + ' ' + a.dist + 'km s/ apoio'
+    : a.type === 'warn'
+    ? badgeIco + ' ' + a.dist + 'km (lim. ' + ANTT_MAX_KM + ')'
+    : badgeIco + ' ' + a.dist + 'km (apoio próximo)';
+  var tip = a.type === 'error'
+    ? a.dist + 'km desde ' + a.fromNome + ' — excede o limite ANTT de ' + ANTT_MAX_KM + 'km entre pontos de apoio'
+    : a.type === 'warn'
+    ? a.dist + 'km desde ' + a.fromNome + ' — próximo ao limite ANTT (' + ANTT_MAX_KM + 'km)'
+    : 'Apenas ' + a.dist + 'km desde ' + a.fromNome + ' — pontos de apoio muito próximos';
+  return ' <span class="antt-badge antt-' + a.type + '" title="' + esc(tip) + '">' + lbl + '</span>';
+}
+
+/** Atualiza indicadores ANTT nos TRs existentes (uso em partial updates). */
+function _applyAnttToRows(c) {
+  _computeAnttAlerts(c);
+  for (var i = 0; i < c.pontos.length; i++) {
+    var row = document.getElementById('horRow' + i);
+    if (!row || c.pontos[i].preDep) continue;
+    row.classList.remove('antt-row-error','antt-row-warn','antt-row-info');
+    var tds = row.querySelectorAll('td');
+    if (!tds[0]) continue;
+    var old = tds[0].querySelector('.antt-badge');
+    if (old) old.remove();
+    var a = _anttMap[i];
+    if (a) {
+      row.classList.add('antt-row-' + a.type);
+      tds[0].insertAdjacentHTML('beforeend', _anttBadgeHtml(i));
+    }
+  }
+  _updateAnttWarnBar();
+  _updateApoioSuggestions();
+}
+
 function _buildStatsHtml(c, osrmLegs) {
   var _S = function(bg,co,bo,txt){ return '<span style="background:'+bg+';color:'+co+';border:1px solid '+bo+';border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;">'+txt+'</span>'; };
   var distBadge = _osrmStatus === 'pending'
     ? _S('#e3f2fd','#1565c0','#90caf9','⏳ Calculando…')
     : _osrmStatus === 'ok'
-      ? _S('#e8f5e9','#2e7d32','#a5d6a7','📍 Traçado real (OSM)')
+      ? _S('#e8f5e9','#2e7d32','#a5d6a7', ico('map-pin',11) + ' Traçado real (OSM)')
       : _osrmStatus === 'cache'
-        ? _S('#e8eaf6','#283593','#9fa8da','📦 Cache de distâncias')
-        : _S('#fce4ec','#c62828','#ef9a9a','⚠️ OSRM indisponível — mín. 30 min');
-  var timeBadge = '<span style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;">⏱ ' + Math.round(c.vel || 85) + ' km/h</span>';
+        ? _S('#e8eaf6','#283593','#9fa8da', ico('archive',11) + ' Cache de distâncias')
+        : _S('#fce4ec','#c62828','#ef9a9a', ico('alert-triangle',11) + ' OSRM indisponível — mín. 30 min');
+  var timeBadge = '<span style="background:#fff8e1;color:#f57f17;border:1px solid #ffe082;border-radius:4px;padding:1px 7px;font-size:10px;font-weight:700;">' + ico('gauge',11) + ' ' + Math.round(c.vel || 85) + ' km/h</span>';
   return '<div class="hor-src-bar">' + distBadge + timeBadge + '</div>'
     + '<div class="hor-summary">'
     + '<div class="hor-stat"><div class="hor-stat-val">' + c.distTotal + ' km</div><div class="hor-stat-lbl">Distância total</div></div>'
@@ -499,6 +957,7 @@ function _renderHorarioWith(osrmLegs) {
   var c       = _calcHorario(osrmLegs);
   _lastCalc   = c;
   _recomputeComercialBase(c);
+  _computeAnttAlerts(c);
   var partida  = document.getElementById('horHoraPartida').value || '00:00';
   var startIdx = Math.min(_horStartIdx, _seq.length - 1);
 
@@ -518,7 +977,7 @@ function _renderHorarioWith(osrmLegs) {
         + sign3 + (Math.abs(diff) > 1 ? _dur(Math.abs(diff)) : '') + '</span>';
     }
     var startMark = (i === startIdx)
-      ? '<span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;">✈</span>' : '';
+      ? '<span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;margin-left:3px;">' + ico('send',9) + '</span>' : '';
     return '<div class="hor-sidebar-item" id="horSbar' + i + '"'
       + (preDep ? ' style="opacity:0.4;"' : '') + '>'
       + '<div class="hor-sidebar-num">' + (i + 1) + startMark + '</div>'
@@ -543,8 +1002,13 @@ function _renderHorarioWith(osrmLegs) {
     var isLast  = (i === c.pontos.length - 1);
     var preDep  = p.preDep;
 
-    var cls = isStart ? ' class="row-first"' : isLast ? ' class="row-last"' : '';
-    if (preDep) cls = ' class="row-predep"';
+    var clsArr = [];
+    if      (preDep)   clsArr.push('row-predep');
+    else if (isStart)  clsArr.push('row-first');
+    else if (isLast)   clsArr.push('row-last');
+    var anttA = !preDep && _anttMap[i];
+    if (anttA) clsArr.push('antt-row-' + anttA.type);
+    var cls = clsArr.length ? ' class="' + clsArr.join(' ') + '"' : '';
 
     if (preDep) {
       return '<tr id="horRow' + i + '" class="row-predep">'
@@ -568,19 +1032,20 @@ function _renderHorarioWith(osrmLegs) {
     var saidStr = p.saidaMin !== null
                 ? _ms(p.saidaMin)
                 : (p.chegadaMin !== null
-                    ? '<strong style="color:#f47920;">★ ' + _ms(p.chegadaMin) + '</strong>'
+                    ? '<strong style="color:#f47920;">' + ico('star',11) + ' ' + _ms(p.chegadaMin) + '</strong>'
                     : '—');
 
     var cidadeCell = '<td style="font-weight:600;">'
       + esc(p.nomePonto)
-      + (isStart ? ' <span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;">✈</span>' : '')
+      + (isStart ? ' <span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;">' + ico('send',9) + '</span>' : '')
+      + _anttBadgeHtml(i)
       + '</td>';
 
     var comVal  = _comercialTimes[_seq[i].idPonto] || '';
     var comCell;
     if (comVal) {
       comCell = '<span class="hor-com-display" onclick="editComercial(' + i + ',this)">'
-              + esc(comVal) + '<span class="hor-com-edit-icon">✎</span></span>';
+              + esc(comVal) + '<span class="hor-com-edit-icon">' + ico('pencil',10) + '</span></span>';
     } else {
       comCell = '<input type="text" class="hor-com-input" placeholder="HH:MM" '
               + 'onfocus="highlightRow(' + i + ')" '
@@ -608,7 +1073,7 @@ function _renderHorarioWith(osrmLegs) {
     + '<th style="text-align:center;">Chegada</th>'
     + '<th style="text-align:center;">Parada</th>'
     + '<th style="text-align:center;">Saída</th>'
-    + '<th style="text-align:right;" title="Tempo até o próximo ponto — passe o mouse para configurar o tipo de via do trecho">Temp. Desl. ↓</th>'
+    + '<th style="text-align:right;" title="Tempo até o próximo ponto — passe o mouse para configurar o tipo de via do trecho">Temp. Desl. ' + ico('arrow-down',11) + '</th>'
     + '<th style="text-align:center;">Comercial</th>'
     + '<th style="text-align:center;" title="Diferença: Comercial − Calculado (+folga / −estouro)">Dif.</th>'
     + '</tr></thead>'
@@ -689,7 +1154,7 @@ function _buildComAnalysis(c) {
   var tSgn = totalDiff > 0 ? '+' : totalDiff < 0 ? '−' : '≈';
 
   return '<div class="hor-osm-analysis" id="horOsmWrap"' + (_horOsmHidden ? ' style="display:none;"' : '') + '>'
-    + '<div class="hor-osm-title">📊 OSM vs. Comercial — Comparativo por trecho'
+    + '<div class="hor-osm-title">' + ico('bar-chart',13) + ' OSM vs. Comercial — Comparativo por trecho'
     + '<button class="hor-panel-close" onclick="toggleHorOsm()" title="Ocultar">×</button>'
     + '</div>'
     + '<div class="hor-osm-legend">'
@@ -805,7 +1270,8 @@ function _confirmComercial(idx, inputEl, moveNext) {
   var raw = inputEl.value.trim();
   if (raw === '') {
     inputEl.classList.remove('hor-com-error');
-    onComercialTimeChange(idx, '', inputEl, moveNext);
+    onComercialTimeChange(idx, '', inputEl);
+    if (moveNext) _focusNextComercial(idx);
     return;
   }
   var val = _validateHHMM(raw);
@@ -815,25 +1281,28 @@ function _confirmComercial(idx, inputEl, moveNext) {
     return;
   }
   inputEl.classList.remove('hor-com-error');
-  onComercialTimeChange(idx, val, inputEl, moveNext);
+  onComercialTimeChange(idx, val, inputEl);
+  if (moveNext) _focusNextComercial(idx);
 }
 
-function onComercialTimeChange(idx, val, inputEl, moveNext) {
+function onComercialTimeChange(idx, val, inputEl) {
   var key = _seq[idx].idPonto;
   if (val) { _comercialTimes[key] = val; } else { delete _comercialTimes[key]; }
   _markDirty();
 
   if (inputEl) {
+    // Zera onblur ANTES de manipular o DOM para evitar chamada re-entrante
+    // quando o browser dispara blur sincronamente ao remover o elemento via innerHTML
+    inputEl.onblur = null;
     var td = inputEl.parentNode;
-    if (val) {
+    if (td && val) {
       td.innerHTML = '<span class="hor-com-display" onclick="editComercial(' + idx + ',this)">'
-        + esc(val) + '<span class="hor-com-edit-icon">✎</span></span>';
+        + esc(val) + '<span class="hor-com-edit-icon">' + ico('pencil',10) + '</span></span>';
     }
   }
 
   unhighlightRow(idx);
   _partialUpdateComercial();
-  if (moveNext) _focusNextComercial(idx);
 }
 
 function _focusNextComercial(fromIdx) {
@@ -920,6 +1389,8 @@ function _partialUpdateComercial() {
     timeEl.innerHTML = chegaStr + deltaHtml;
   }
 
+  _applyAnttToRows(c);
+
   var horMain   = document.querySelector('#horBody .hor-main');
   if (!horMain) return;
   var analysisEl = horMain.querySelector('.hor-osm-analysis');
@@ -969,7 +1440,7 @@ function _partialUpdateSchedule() {
     if (p.saidaMin !== null) {
       tds[3].textContent = _ms(p.saidaMin);
     } else if (p.chegadaMin !== null) {
-      tds[3].innerHTML = '<strong style="color:#f47920;">★ ' + _ms(p.chegadaMin) + '</strong>';
+      tds[3].innerHTML = '<strong style="color:#f47920;">' + ico('star',11) + ' ' + _ms(p.chegadaMin) + '</strong>';
     } else {
       tds[3].textContent = '—';
     }
@@ -1001,6 +1472,8 @@ function _partialUpdateSchedule() {
     timeEl.innerHTML = chegaStr + dHtml;
   }
 
+  _applyAnttToRows(c);
+
   var horMain    = document.querySelector('#horBody .hor-main');
   if (!horMain) return;
   var analysisEl = horMain.querySelector('.hor-osm-analysis');
@@ -1029,7 +1502,9 @@ function abrirModalPdf() {
   var ex = document.getElementById('pdfModalOverlay');
   if (ex) ex.remove();
 
-  var title    = _pdfTitle    || (_sel.id_esquema + ' — ' + _sel.nome_linha);
+  var _partStr = (_sel.horario || '00:00').replace(':', 'h');
+  var _sentStr = _sel.sentido ? ' (' + _sel.sentido + ')' : '';
+  var title    = _pdfTitle    || (_partStr + ' - ' + _sel.nome_linha + ' (' + _sel.id_esquema + ')' + _sentStr);
   var subtitle = _pdfSubtitle || '';
 
   var colDefs = [
@@ -1040,8 +1515,12 @@ function abrirModalPdf() {
     { key:'comercial', label:'Comercial'          },
     { key:'dif',       label:'Dif.'               }
   ];
+  var comDisabled = (_pdfMode === 'comercial');
+  var disabledKeys = { comercial:true, dif:true };
   var checks = colDefs.map(function(c) {
-    return '<label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;">'
+    var isDisabled = comDisabled && disabledKeys[c.key];
+    return '<label id="pdfColLabel_' + c.key + '" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;'
+      + (isDisabled ? 'opacity:0.4;pointer-events:none;' : '') + '">'
       + '<input type="checkbox" id="pdfCol_' + c.key + '"'
       + (_pdfCols[c.key] ? ' checked' : '')
       + ' style="width:14px;height:14px;accent-color:#f47920;cursor:pointer;">'
@@ -1053,7 +1532,7 @@ function abrirModalPdf() {
     + '<div style="background:#fff;border-radius:12px;width:440px;max-width:94vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
       + '<div style="background:#1a1d23;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;">'
         + '<div style="font-size:14px;font-weight:800;color:#fff;">Exportar PDF</div>'
-        + '<button onclick="fecharModalPdf()" style="background:none;border:none;color:#9aa0ad;font-size:20px;cursor:pointer;line-height:1;padding:0;">✕</button>'
+        + '<button onclick="fecharModalPdf()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;line-height:1;padding:4px;display:flex;align-items:center;">' + ico('x',16) + '</button>'
       + '</div>'
       + '<div style="padding:20px 22px;">'
         + '<div style="margin-bottom:12px;">'
@@ -1064,6 +1543,17 @@ function abrirModalPdf() {
           + '<label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:4px;">Subtítulo <span style="font-weight:400;text-transform:none;">(opcional)</span></label>'
           + '<input id="pdfSubtitleInput" type="text" value="' + esc(subtitle) + '" placeholder="Ex: SUGESTÃO DE MUDANÇA" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d4d8e8;border-radius:6px;font-size:12px;font-family:inherit;">'
         + '</div>'
+        + '<div style="margin-bottom:16px;">'
+          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Modo</div>'
+          + '<div style="display:flex;gap:8px;">'
+            + '<label id="pdfModeNormalLabel" onclick="pdfModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode !== 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode !== 'comercial' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfMode" id="pdfModeNormal" value="normal"' + (_pdfMode !== 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal'
+            + '</label>'
+            + '<label id="pdfModeComercialLabel" onclick="pdfModeSelect(\'comercial\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'comercial' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfMode" id="pdfModeComercial" value="comercial"' + (_pdfMode === 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Hor. Comercial'
+            + '</label>'
+          + '</div>'
+        + '</div>'
         + '<div>'
           + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
@@ -1071,7 +1561,7 @@ function abrirModalPdf() {
       + '</div>'
       + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
         + '<button onclick="fecharModalPdf()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
-        + '<button onclick="gerarPdfComOpcoes()" style="padding:8px 20px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">↓ Gerar PDF</button>'
+        + '<button onclick="gerarPdfComOpcoes()" style="padding:8px 20px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">' + ico('arrow-down',13) + ' Gerar PDF</button>'
       + '</div>'
     + '</div></div>';
 
@@ -1087,11 +1577,29 @@ function fecharModalPdf() {
   if (m) m.remove();
 }
 
+function pdfModeSelect(mode) {
+  var nLbl = document.getElementById('pdfModeNormalLabel');
+  var cLbl = document.getElementById('pdfModeComercialLabel');
+  var nRad = document.getElementById('pdfModeNormal');
+  var cRad = document.getElementById('pdfModeComercial');
+  var isCom = (mode === 'comercial');
+  if (nLbl) { nLbl.style.borderColor = isCom ? '#d4d8e8' : '#f47920'; nLbl.style.background = isCom ? '#fff' : '#fff8f0'; }
+  if (cLbl) { cLbl.style.borderColor = isCom ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom ? '#fff8f0' : '#fff'; }
+  if (nRad) nRad.checked = !isCom;
+  if (cRad) cRad.checked =  isCom;
+  ['comercial','dif'].forEach(function(k) {
+    var lbl = document.getElementById('pdfColLabel_' + k);
+    if (lbl) { lbl.style.opacity = isCom ? '0.4' : ''; lbl.style.pointerEvents = isCom ? 'none' : ''; }
+  });
+}
+
 function gerarPdfComOpcoes() {
   ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
     var el = document.getElementById('pdfCol_' + k);
     if (el) _pdfCols[k] = el.checked;
   });
+  var mEl = document.querySelector('input[name="pdfMode"]:checked');
+  _pdfMode = mEl ? mEl.value : 'normal';
   var tEl = document.getElementById('pdfTitleInput');
   var sEl = document.getElementById('pdfSubtitleInput');
   _pdfTitle    = tEl ? tEl.value.trim() : '';
@@ -1115,7 +1623,8 @@ function imprimirHorario() {
   var fonteDist = _osrmStatus === 'ok' ? 'Traçado real (OSM)' : _osrmStatus === 'cache' ? 'Cache de distâncias' : 'Mín. 30 min (sem rota)';
   var startIdx  = Math.min(_horStartIdx, c.pontos.length - 1);
   var cols      = _pdfCols;
-  var title     = _pdfTitle    || (_sel.id_esquema + ' — ' + _sel.nome_linha);
+  var _sentStr  = _sel.sentido ? ' (' + _sel.sentido + ')' : '';
+  var title     = _pdfTitle    || ((_sel.horario || '00:00').replace(':', 'h') + ' - ' + _sel.nome_linha + ' (' + _sel.id_esquema + ')' + _sentStr);
   var subtitle  = _pdfSubtitle || '';
 
   function pe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1127,19 +1636,23 @@ function imprimirHorario() {
   function partidaR(s){ var p=(s||'00:00').split(':'); return ms(r5(+p[0]*60+(+p[1]||0))); }
   function comR(s){ if(!s) return s; var p=s.split(':'); return p.length<2 ? s : ms(r5(+p[0]*60+(+p[1]||0))); }
 
+  var pdfMode   = _pdfMode || 'normal';
   var activeCols = [{ key:'cidade', label:'Cidade', align:'left' }];
-  if (cols.chegada)   activeCols.push({ key:'chegada',   label:'Chegada',      align:'center' });
-  if (cols.parada)    activeCols.push({ key:'parada',    label:'Parada',       align:'center' });
-  if (cols.saida)     activeCols.push({ key:'saida',     label:'Saída',        align:'center' });
-  if (cols.desl)      activeCols.push({ key:'desl',      label:'Desl.',        align:'left'   });
-  if (cols.comercial) activeCols.push({ key:'comercial', label:'Comercial',    align:'center' });
-  if (cols.dif)       activeCols.push({ key:'dif',       label:'Dif.',         align:'center' });
+  if (cols.chegada) activeCols.push({ key:'chegada', label:'Chegada', align:'center' });
+  if (cols.parada)  activeCols.push({ key:'parada',  label:'Parada',  align:'center' });
+  if (cols.saida)   activeCols.push({ key:'saida',   label:'Saída',   align:'center' });
+  if (cols.desl) activeCols.push({ key:'desl', label:'Desl.', align:'left' });
+  if (pdfMode !== 'comercial') {
+    if (cols.comercial) activeCols.push({ key:'comercial', label:'Comercial', align:'center' });
+    if (cols.dif)       activeCols.push({ key:'dif',       label:'Dif.',      align:'center' });
+  }
 
   var thead = activeCols.map(function(col) {
     return '<th style="text-align:' + col.align + ';">' + col.label + '</th>';
   }).join('');
 
   var tbody = '';
+  var accumTv = 0, accumDist = 0, accumAllOsrm = true;
   c.pontos.forEach(function(p, i) {
     var isStart = (i === startIdx);
     var isLast  = (i === c.pontos.length - 1);
@@ -1151,37 +1664,67 @@ function imprimirHorario() {
       return;
     }
     var comVal = _comercialTimes[_seq[i].idPonto] || '';
+    if (pdfMode === 'comercial' && !isStart) {
+      accumTv   += (p.tv   || 0);
+      accumDist += (p.dist || 0);
+      if (p.distSource !== 'osrm') accumAllOsrm = false;
+    }
+    if (pdfMode === 'comercial' && !comVal) return;
     var cells  = {};
 
     cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>'
-      + (isStart ? ' <span style="font-size:9px;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">✈</span>' : '');
+      + (isStart ? ' <span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">' + ico('send',9) + '</span>' : '');
 
-    cells.chegada = isStart
-      ? '<span style="color:#bbb;">—</span>'
-      : '<strong>' + (p.chegadaMin === null ? '—' : msR(p.chegadaMin)) + '</strong>';
-    cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? hhmm(p.tp) : '—';
-    cells.saida   = p.saidaMin !== null
-      ? '<strong>' + msR(p.saidaMin) + '</strong>'
-      : (p.chegadaMin !== null ? '<strong style="color:#f47920;">★ ' + msR(p.chegadaMin) + '</strong>' : '—');
-
-    if (isStart || !p.hasCoords) {
-      cells.desl = '—';
+    if (pdfMode === 'comercial') {
+      cells.chegada = isStart
+        ? '<span style="color:#bbb;">—</span>'
+        : (comVal ? '<strong>' + pe(comR(comVal)) + '</strong>' : '<span style="color:#ccc;">—</span>');
+      cells.parada = (!isStart && !isLast && p.tp) ? hhmm(p.tp) : '—';
+      if (isStart) {
+        cells.saida = comVal ? '<strong>' + pe(comR(comVal)) + '</strong>' : '—';
+      } else if (isLast) {
+        cells.saida = '<span style="color:#bbb;">—</span>';
+      } else if (comVal) {
+        cells.saida = '<strong>' + msR(_p(comVal) + (p.tp || 0)) + '</strong>';
+      } else {
+        cells.saida = '—';
+      }
+      if (isStart || (accumDist === 0 && accumTv === 0)) {
+        cells.desl = '—';
+      } else {
+        var tvStr2   = hhmm(accumTv) + (!accumAllOsrm ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+        var distStr2 = accumDist.toFixed(1) + ' km' + (!accumAllOsrm ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+        cells.desl   = tvStr2 + ' <span style="color:#d4d8e8;margin:0 2px;">|</span> ' + distStr2;
+      }
+      accumTv = 0; accumDist = 0; accumAllOsrm = true;
     } else {
-      var tvStr   = hhmm(p.tv)   + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
-      var distStr = p.dist.toFixed(1) + ' km' + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
-      cells.desl  = tvStr + ' <span style="color:#d4d8e8;margin:0 2px;">|</span> ' + distStr;
-    }
+      cells.chegada = isStart
+        ? '<span style="color:#bbb;">—</span>'
+        : '<strong>' + (p.chegadaMin === null ? '—' : msR(p.chegadaMin)) + '</strong>';
+      cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? hhmm(p.tp) : '—';
+      cells.saida   = p.saidaMin !== null
+        ? '<strong>' + msR(p.saidaMin) + '</strong>'
+        : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + ico('star',11) + ' ' + msR(p.chegadaMin) + '</strong>' : '—');
 
-    cells.comercial = comVal
-      ? '<strong style="color:#1565c0;">' + pe(comR(comVal)) + '</strong>'
-      : '<span style="color:#ccc;">—</span>';
+      if (isStart || !p.hasCoords) {
+        cells.desl = '—';
+      } else {
+        var tvStr   = hhmm(p.tv)   + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+        var distStr = p.dist.toFixed(1) + ' km' + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
+        cells.desl  = tvStr + ' <span style="color:#d4d8e8;margin:0 2px;">|</span> ' + distStr;
+      }
 
-    cells.dif = '—';
-    if (comVal && p.chegadaMin !== null) {
-      var d2 = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto), a2 = Math.abs(d2);
-      var c2 = d2 > 2 ? '#22c97a' : d2 < -2 ? '#e53935' : '#f47920';
-      var s2 = d2 > 2 ? '+' : d2 < -2 ? '−' : '≈';
-      cells.dif = '<strong style="color:' + c2 + ';">' + s2 + (a2 > 1 ? hhmm(a2) : '') + '</strong>';
+      cells.comercial = comVal
+        ? '<strong style="color:#1565c0;">' + pe(comR(comVal)) + '</strong>'
+        : '<span style="color:#ccc;">—</span>';
+
+      cells.dif = '—';
+      if (comVal && p.chegadaMin !== null) {
+        var d2 = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto), a2 = Math.abs(d2);
+        var c2 = d2 > 2 ? '#22c97a' : d2 < -2 ? '#e53935' : '#f47920';
+        var s2 = d2 > 2 ? '+' : d2 < -2 ? '−' : '≈';
+        cells.dif = '<strong style="color:' + c2 + ';">' + s2 + (a2 > 1 ? hhmm(a2) : '') + '</strong>';
+      }
     }
 
     var rowBg = isStart ? 'background:#f0fff8;' : isLast ? 'background:#fff8f0;' : (!comVal ? 'background:#fff8f2;' : '');
@@ -1250,23 +1793,27 @@ function imprimirHorario() {
   html += '<script>'
     + 'window.onload = function() {'
     +   'try {'
-    +     'var PX    = 96 / 25.4;'                                   // px por mm a 96 DPI
-    +     'var pageH = Math.round((297 - 10 - 28) * PX);'           // A4 - margens top+bottom = 259mm ≈ 979px
-    +     'var safe  = Math.round(22 * PX);'                        // zona segura = 22mm ≈ 83px (footer é 18mm)
+    +     'var PX    = 96 / 25.4;'                                        // px por mm a 96 DPI (CSS pixels)
+    +     'var pageH = Math.round((297 - 10 - 28) * PX);'                // A4 − margens top+bottom = 259mm
+    +     'var safe  = Math.round(22 * PX);'                             // zona segura ≥ footer (18mm) + buffer
+    +     'var a4W   = Math.round(186 * PX);'                            // largura do conteúdo A4 (210-12-12 mm)
+    +     'var body  = document.querySelector(".body");'
     +     'var tbody = document.querySelector("tbody");'
-    +     'if (tbody) {'
-    +       'var curY = tbody.getBoundingClientRect().top % pageH;'  // posição do tbody dentro da primeira página
+    +     'if (tbody && body) {'
+    +       'body.style.width = a4W + "px";'                             // força largura de impressão para medir
+    +       'void body.offsetHeight;'                                     // reflow síncrono — alturas reais de A4
+    +       'var curY = tbody.getBoundingClientRect().top % pageH;'
     +       'Array.from(tbody.querySelectorAll("tr")).forEach(function(row) {'
     +         'var rh = row.getBoundingClientRect().height;'
-    +         'if (curY + rh > pageH - safe) {'                      // linha cairia na zona do footer
+    +         'if (curY + rh > pageH - safe) {'
     +           'row.style.breakBefore = "page";'
     +           'row.style.pageBreakBefore = "always";'
-    +           'curY = rh;'                                          // reinicia no topo da nova página
+    +           'curY = rh;'
     +         '} else {'
     +           'curY += rh;'
-    +           'if (curY >= pageH) curY %= pageH;'                  // cruzou virada de página natural
     +         '}'
     +       '});'
+    +       'body.style.width = "";'                                      // restaura antes de imprimir
     +     '}'
     +     'var bodyH = document.querySelector(".body").scrollHeight;'
     +     'var pages = Math.max(1, Math.ceil(bodyH / pageH));'
@@ -1291,6 +1838,116 @@ function imprimirHorario() {
   var base = window.location.href.split('?')[0];
   document.getElementById('btnVoltar').href = base;
 })();
+
+// ============================================================
+//  Importar pontos de outro horário da mesma linha
+// ============================================================
+function _updateImportBtn() {
+  var row = document.getElementById('importRow');
+  if (!row || !_sel) { if (row) row.style.display = 'none'; return; }
+  var outros = _esqs.filter(function(e) {
+    return e.id_esquema !== _sel.id_esquema && e.nome_linha === _sel.nome_linha;
+  });
+  row.style.display = outros.length ? '' : 'none';
+}
+
+function abrirImportarPontos() {
+  if (!_sel) return;
+  var outros = _esqs.filter(function(e) {
+    return e.id_esquema !== _sel.id_esquema && e.nome_linha === _sel.nome_linha;
+  });
+  if (!outros.length) {
+    toast('Nenhum outro horário encontrado para esta linha.', 'info');
+    return;
+  }
+  var list = document.getElementById('importEsqList');
+  list.innerHTML = '<div style="text-align:center;padding:16px;color:#aaa;font-size:12px;">Carregando horários…</div>';
+  document.getElementById('importModalOverlay').style.display = 'flex';
+
+  function _renderImportList(contagem) {
+    list.innerHTML = outros.map(function(e) {
+      var cnt = contagem ? (contagem[String(e.id_esquema)] || 0) : null;
+      var vazio = cnt !== null && cnt === 0;
+      var cntHtml = cnt !== null
+        ? '<span style="margin-left:6px;font-size:10px;color:' + (vazio ? '#f87171' : '#6ee7b7') + ';">'
+          + (vazio ? '(sem pontos)' : cnt + ' pto' + (cnt !== 1 ? 's' : '')) + '</span>'
+        : '';
+      return '<div class="sdi" data-id="' + esc(e.id_esquema) + '"'
+        + (vazio ? ' style="opacity:.45;pointer-events:none;cursor:default;"' : ' style="cursor:pointer;"')
+        + '>'
+        + '<div class="sdi-main">' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + cntHtml + '</div>'
+        + '<div class="sdi-meta">'
+        + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+        + esc(e.sentido || '')
+        + '</div></div>';
+    }).join('');
+    list.querySelectorAll('.sdi:not([style*="pointer-events:none"])').forEach(function(el) {
+      el.addEventListener('click', function() {
+        importarDeEsquema(el.getAttribute('data-id'));
+      });
+    });
+  }
+
+  if (typeof google !== 'undefined' && google.script) {
+    var ids = outros.map(function(e){ return e.id_esquema; });
+    google.script.run
+      .withSuccessHandler(function(contagem) { _renderImportList(contagem); })
+      .withFailureHandler(function()         { _renderImportList(null);     })
+      .getContagemPontosEsquemas(ids);
+  } else {
+    _renderImportList(null);
+  }
+}
+
+function fecharImportModal() {
+  document.getElementById('importModalOverlay').style.display = 'none';
+}
+
+function importarDeEsquema(idEsq) {
+  if (_seq.length > 0) {
+    if (!confirm('A sequência atual será substituída pelos pontos importados. Continuar?')) return;
+  }
+  fecharImportModal();
+  loading('Importando pontos…');
+  google.script.run
+    .withSuccessHandler(function(pontos) {
+      doneLoading();
+      if (!pontos || !pontos.length) {
+        toast('O horário de origem não possui pontos cadastrados.', 'error');
+        return;
+      }
+      // Monta sequência com dados de local do _lMap
+      _seq = pontos.map(function(p) {
+        var l = _lMap[String(p.idPonto)] || {};
+        return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
+                 lat: l.lat || null, lng: l.lng || null, isNew: true };
+      });
+      // Importa dados específicos da ROTA (não do horário)
+      _legVia = {};
+      pontos.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
+      _customStopTimes = {};
+      pontos.forEach(function(p) { if (p.tempoLocal) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal); });
+      // Horários comerciais são específicos de cada horário — não importar
+      _comercialTimes  = {};
+      _osrmLegs        = undefined;
+      _osrmSeqKey      = '';
+      _osrmGeometry    = null;
+      _horStartIdx     = 0;
+      _osrmStatus      = 'pending';
+      renderSeq();
+      updateInsAfter();
+      updateMap();
+      dirtySeq();
+      var srcEsq = _esqs.find(function(e) { return e.id_esquema === idEsq; });
+      var srcLabel = srcEsq ? (srcEsq.horario ? srcEsq.horario + ' (' + srcEsq.sentido + ')' : srcEsq.id_esquema) : idEsq;
+      toast(pontos.length + ' pontos importados de ' + srcLabel + '. Salve para confirmar.', 'success', 5000);
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao importar: ' + (e.message || e), 'error');
+    })
+    .getPontosEsquemaParaFormulario(idEsq);
+}
 
 // ============================================================
 //  Boot
@@ -1337,6 +1994,7 @@ function updateMap() {
   _markers.forEach(function(m) { m.remove(); });
   _markers = [];
   if (_poly) { _poly.remove(); _poly = null; }
+  _clearAnttMapLayers();
 
   var pts = _seq.filter(function(p) { return p.lat && p.lng; });
   if (!pts.length) {
@@ -1359,6 +2017,11 @@ function updateMap() {
   var mapSeqKey = _seqCoordsKey();
   setTimeout(function() {
     _map.invalidateSize();
+
+    // 1. Desenha trechos ANTT coloridos PRIMEIRO (ficam abaixo da rota laranja)
+    _drawAnttOnMap();
+
+    // 2. Rota principal por cima
     _poly = L.polyline(lls, { color: '#f47920', weight: 5, opacity: 0.9 }).addTo(_map);
 
     if (_osrmGeometry && _osrmSeqKey === mapSeqKey) {
@@ -1370,12 +2033,18 @@ function updateMap() {
         _osrmSeqKey   = mapSeqKey;
         _osrmGeometry = geom;
         if (_poly && geom) _poly.setLatLngs(geom);
+        // Redesenha ANTT com distâncias reais e garante que a rota fica por cima
+        _drawAnttOnMap();
+        if (_poly) _poly.bringToFront();
       });
     }
 
+    // 3. Marcadores de sequência (DOM elements — sempre acima do SVG)
     _seq.forEach(function(p, i) {
       if (!p.lat || !p.lng) return;
       var first = (i === firstCoordIdx), last = (i === lastCoordIdx);
+      // Destaque de apoio ANTT apenas quando há alertas ativos na rota
+      var isApoio = _anttMapActive && !first && !last && _isApoioAntt(i);
       var bg  = first ? '#22c97a' : last ? '#e05050' : '#f47920';
       var sz  = (first || last) ? 28 : 22;
       var lbl = first ? 'I' : last ? 'F' : String(i + 1);
@@ -1383,6 +2052,7 @@ function updateMap() {
         className: '',
         html: '<div style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
               'background:' + bg + ';border:2.5px solid rgba(255,255,255,0.85);' +
+              (isApoio ? 'outline:2px solid rgba(34,197,90,0.75);outline-offset:1px;' : '') +
               'display:flex;align-items:center;justify-content:center;' +
               'font-size:' + (sz > 24 ? '11px' : '10px') + ';font-weight:800;color:#fff;' +
               'box-shadow:0 2px 8px rgba(0,0,0,0.55);">' + lbl + '</div>',
@@ -1391,7 +2061,8 @@ function updateMap() {
       var m = L.marker([+p.lat, +p.lng], { icon: icon });
       m.bindTooltip(
         '<strong>' + esc(p.nomePonto) + '</strong>' +
-        '<br><span style="font-size:10px;color:#888;">#' + (i+1) + (p.tipo ? ' · ' + esc(p.tipo) : '') + '</span>',
+        '<br><span style="font-size:10px;color:#888;">#' + (i+1) + (p.tipo ? ' · ' + esc(p.tipo) : '') +
+        (isApoio ? ' · <span style="color:#4ade80">apoio ANTT</span>' : '') + '</span>',
         { direction: 'top', offset: [0, -(sz/2) - 4] }
       );
       m.addTo(_map);
@@ -1409,7 +2080,15 @@ function setupEsqSearch() {
   var inp  = document.getElementById('esqSearch');
   var drop = document.getElementById('esqDrop');
 
-  inp.addEventListener('focus', function() { renderEsqs(this.value); });
+  // focus programático (abrirModalEsquema) NÃO abre o dropdown quando vazio —
+  // só reabre se já havia texto (ex: usuário voltou ao modal após digitar algo).
+  // Click do usuário no input → sempre mostra todos os resultados.
+  inp.addEventListener('focus', function() {
+    if (this.value.trim()) renderEsqs(this.value);
+  });
+  inp.addEventListener('click', function() {
+    renderEsqs(this.value); // usuário clicou intencionalmente → mostra tudo
+  });
   inp.addEventListener('input', function() { renderEsqs(this.value); });
 
   // blur fecha com delay — o mousedown no dropdown cancela o blur antes de fechar
@@ -1494,10 +2173,10 @@ function _updateHdrEsq(esq) {
   var btn   = document.getElementById('hdrEsqBtn');
   var label = document.getElementById('hdrEsqLabel');
   if (esq) {
-    label.textContent = '📋 ' + (esq.nome_linha || ('Esquema #' + esq.id_esquema));
+    label.innerHTML = ico('clipboard', 14) + ' ' + esc(esq.nome_linha || ('Esquema #' + esq.id_esquema));
     btn.classList.add('has-schema');
   } else {
-    label.textContent = '📋 Selecionar Esquema';
+    label.innerHTML = ico('clipboard', 14) + ' Selecionar Esquema';
     btn.classList.remove('has-schema');
   }
 }
@@ -1506,6 +2185,8 @@ function novoEsquema() {
   _isNovo = true; _sel = null; _seq = []; _seqDirt = false;
   _osrmLegs = undefined; _osrmSeqKey = ''; _osrmGeometry = null;
   _comercialTimes = {}; _customStopTimes = {}; _legVia = {}; _horStartIdx = 0; _osrmStatus = 'pending';
+  _clearAnttMapLayers();
+  document.getElementById('importRow').style.display = 'none';
   document.getElementById('esqSearch').value = '';
   document.getElementById('esqBadge').style.display = 'none';
   document.getElementById('fNome').value = '';
@@ -1519,6 +2200,7 @@ function novoEsquema() {
   document.getElementById('mapLegend').classList.remove('show');
   document.getElementById('hdrViewToggle').style.display = 'none';
   document.getElementById('btnSalvar').style.display = 'none';
+  document.getElementById('btnVolta').style.display  = 'none';
   document.getElementById('horPanel').style.display = 'none';
   document.getElementById('btnViewMapa').classList.add('active');
   document.getElementById('btnViewHorario').classList.remove('active');
@@ -1546,8 +2228,16 @@ function salvarEsquema() {
         var novoEsq = { id_esquema: String(r.id), nome_linha: nome, horario: hor, sentido: sent };
         _esqs.push(novoEsq);
         _isNovo = false;
-        selecionarEsq(novoEsq);
-        toast('Esquema #' + r.id + ' criado!', 'success');
+        document.getElementById('btnNovo').style.display = ''; // restaura sempre
+        if (_voltaMode && _voltaSnapshot) {
+          _voltaMode = false;
+          var snap = _voltaSnapshot;
+          _voltaSnapshot = null;
+          _aplicarVoltaESpelhar(novoEsq, snap);
+        } else {
+          selecionarEsq(novoEsq);
+          toast('Esquema #' + r.id + ' criado!', 'success');
+        }
       })
       .withFailureHandler(function(e) {
         doneLoading(); btn.disabled = false;
@@ -1610,11 +2300,13 @@ function carregarPontos(idEsq) {
       renderSeq();
       updateInsAfter();
       updateMap();
+      _updateImportBtn();
       document.getElementById('ptCard').style.display = '';
       document.getElementById('ptUnsaved').style.display = 'none';
       document.getElementById('btnSalvSeq').disabled = true;
       document.getElementById('hdrViewToggle').style.display = 'flex';
       document.getElementById('btnSalvar').style.display = '';
+      document.getElementById('btnVolta').style.display  = '';
       fecharModalEsquema();
       // Restaura config imediatamente (com _tipoViaVel padrão) para renderHorario ter os valores certos
       _restoreHorConfig(_sel);
@@ -1627,13 +2319,21 @@ function carregarPontos(idEsq) {
         .withSuccessHandler(function(v) {
           if (!v || _sel !== _selSnap) return;
           _tipoViaVel = v;
+          // Re-aplica customizações do usuário salvas no localStorage (prioridade sobre backend)
+          try {
+            var _lsCfg = JSON.parse(localStorage.getItem('vc_horcfg_' + _selSnap.id_esquema) || 'null');
+            if (_lsCfg && _lsCfg.viaVel) {
+              Object.keys(_lsCfg.viaVel).forEach(function(k) { _tipoViaVel[k] = _lsCfg.viaVel[k]; });
+            }
+          } catch(e) {}
           // Atualiza o campo de velocidade para o tipo ativo
           var via = '';
           document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
             if (b.classList.contains('active')) via = b.textContent.trim();
           });
-          if (via && _tipoViaVel[via]) {
-            document.getElementById('horVelMedia').value = _tipoViaVel[via];
+          var viaKey = _VIA_LABEL_TO_KEY[via] || via;
+          if (via && _tipoViaVel[viaKey]) {
+            document.getElementById('horVelMedia').value = _tipoViaVel[viaKey];
           }
           if (_view === 'horario') _lastCalc ? _partialUpdateSchedule() : renderHorario();
         })
@@ -1678,7 +2378,7 @@ function renderSeq() {
         + (p.tipo ? '<div class="seq-tipo">' + esc(p.tipo) + '</div>' : '')
       + '</div>'
       + (p.isNew ? '<span class="seq-new">novo</span>' : '')
-      + '<button class="btn-icon rm" data-idx="' + i + '" title="Remover">✕</button>'
+      + '<button class="btn-icon rm" data-idx="' + i + '" title="Remover">' + ico('x',13) + '</button>'
       + '</div>'
     );
     parts.push(dividerHtml(i));
@@ -1734,7 +2434,7 @@ function renderSeq() {
 function updateInsAfter() {
   var sel  = document.getElementById('insAfter');
   var prev = sel.value;
-  sel.innerHTML = '<option value="-1">⬆ No início da sequência</option>'
+  sel.innerHTML = '<option value="-1">↑ No início da sequência</option>'
     + _seq.map(function(p, i) {
         return '<option value="' + i + '">Após ' + (i + 1) + '. ' + esc(p.nomePonto) + '</option>';
       }).join('');
@@ -1756,6 +2456,7 @@ function dirtySeq() {
   _osrmSeqKey      = '';
   _osrmGeometry    = null;
   _horStartIdx     = 0;
+  _clearAnttMapLayers();
   document.getElementById('ptUnsaved').style.display = '';
   document.getElementById('btnSalvSeq').disabled = false;
   var s = document.getElementById('btnSalvar');
@@ -1773,7 +2474,88 @@ function abrirModalEsquema() {
 }
 
 function fecharModalEsquema() {
+  // Se o usuário fechou o modal sem concluir a viagem de volta, limpa o estado
+  if (_voltaMode) {
+    _voltaMode     = false;
+    _isNovo        = false;
+    _voltaSnapshot = null;
+    document.getElementById('btnNovo').style.display = '';
+    document.getElementById('btnSalvEsq').textContent = 'Atualizar Esquema';
+  }
   document.getElementById('esqModalOverlay').classList.add('hidden');
+}
+
+// ── Viagem de Volta ──────────────────────────────────────────
+function iniciarViagemVolta() {
+  if (!_sel) { toast('Nenhum esquema selecionado.', 'error'); return; }
+  if (!_seq.length) { toast('Adicione pontos antes de criar a viagem de volta.', 'info'); return; }
+
+  // Guarda snapshot do estado atual (sem horários comerciais — usuário preencherá na volta)
+  _voltaSnapshot = {
+    seq:             _seq.map(function(p){ return Object.assign({}, p); }),
+    legVia:          Object.assign({}, _legVia),
+    customStopTimes: Object.assign({}, _customStopTimes)
+  };
+  _voltaMode = true;
+  _isNovo    = true;  // força caminho de criação em salvarEsquema()
+
+  // Pré-preenche o modal
+  var sentAtual = _sel.sentido || 'Ida';
+  var sentVolta = sentAtual === 'Ida' ? 'Volta' : sentAtual === 'Volta' ? 'Ida' : 'Circular';
+  document.getElementById('fNome').value  = _sel.nome_linha || '';
+  document.getElementById('fHor').value   = '';
+  document.getElementById('fSent').value  = sentVolta;
+  document.getElementById('esqSearch').value = '';
+  document.getElementById('esqBadge').style.display  = 'none';
+  document.getElementById('esqForm').style.display   = '';
+  document.getElementById('btnSalvEsq').textContent  = 'Criar Viagem de Volta';
+  document.getElementById('btnNovo').style.display   = 'none'; // oculta durante o fluxo
+  document.getElementById('btnFecharModalEsq').style.display = '';
+  abrirModalEsquema();
+}
+
+/**
+ * Após criar o novo esquema, inverte a sequência do snapshot e salva via
+ * salvarSequenciaPontos, preservando tipos de trecho e tempos locais.
+ * Horários comerciais são omitidos (usuário preencherá na nova rota).
+ */
+function _aplicarVoltaESpelhar(novoEsq, snapshot) {
+  loading('Espelhando sequência…');
+
+  var orig    = snapshot.seq;              // [A, B, C, …, Z]
+  var reversed = orig.slice().reverse();   // [Z, …, C, B, A]
+
+  // Mapeia tipo de trecho para a rota inversa:
+  // Trecho X→Y (orig) = mesmo trecho físico Y→X (volta), tipo = snapshot.legVia[X]
+  // Logo: voltaLegVia[Y] = snapshot.legVia[X]  (onde Y vem após X na original)
+  var voltaLegVia = {};
+  for (var i = 0; i < orig.length - 1; i++) {
+    voltaLegVia[orig[i + 1].idPonto] = snapshot.legVia[orig[i].idPonto] || 'BR';
+  }
+
+  var payload = reversed.map(function(p) {
+    return {
+      idPonto:         p.idPonto,
+      nomePonto:       p.nomePonto,
+      tipo:            p.tipo || '',
+      horarioComercial: '',
+      tempoLocal:      snapshot.customStopTimes[p.idPonto] != null
+                         ? snapshot.customStopTimes[p.idPonto] : '',
+      tipoTrecho:      voltaLegVia[p.idPonto] || snapshot.legVia[p.idPonto] || ''
+    };
+  });
+
+  google.script.run
+    .withSuccessHandler(function() {
+      selecionarEsq(novoEsq);
+      toast('Viagem de volta criada — ' + reversed.length + ' pontos espelhados!', 'success');
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Esquema criado, mas erro ao salvar pontos: ' + (e.message || e), 'error');
+      selecionarEsq(novoEsq); // abre mesmo assim
+    })
+    .salvarSequenciaPontos(novoEsq.id_esquema, payload);
 }
 
 // ============================================================
@@ -1818,25 +2600,62 @@ function renderPts(q) {
       || norm(l.descricao).includes(nq)
       || norm(l.tipo || '').includes(nq)
       || norm(l.codigo).includes(nq);
-  }).slice(0, 60);
+  }).slice(0, 80);
+
+  // ── ANTT context ──────────────────────────────────────────────
+  _updateAnttWarnBar();
+  var nearLimit = _anttStatus && _anttStatus.accumKm > ANTT_WARN_KM;
+  var insertIdx = parseInt(document.getElementById('insAfter').value) || 0;
+  var refPt     = _seq[insertIdx] || null; // último ponto antes da inserção
+
+  // Fase 3 — Ordena apoio para o topo quando próximo do limite
+  if (nearLimit) {
+    list.sort(function(a, b) {
+      var aA = _isApoioCandidate(a.descricao), bA = _isApoioCandidate(b.descricao);
+      return (aA === bA) ? 0 : aA ? -1 : 1;
+    });
+  }
 
   if (!list.length) {
     drop.innerHTML = '<div class="sd-empty">Nenhum resultado</div>';
   } else {
     var seqIdx = {};
     _seq.forEach(function(p, i) { seqIdx[p.idPonto] = i + 1; });
+
     drop.innerHTML = list.map(function(l) {
-      var pos   = seqIdx[l.codigo];
-      var jaNo  = pos !== undefined;
-      var coord = l.lat ? '📍' : '❌';
+      var pos       = seqIdx[l.codigo];
+      var jaNo      = pos !== undefined;
+      var isApoioT  = _isApoioCandidate(l.descricao);
+      var apoioBadge = isApoioT
+        ? '<span class="sdi-apoio-badge">apoio</span>'
+        : '';
+
+      // Fase 4 — Estimativa de distância (straight-line × 1.3)
+      var distChip = '';
+      if (nearLimit && isApoioT && l.lat && l.lng && refPt && refPt.lat && refPt.lng) {
+        var linKm  = _haversinKm(refPt.lat, refPt.lng, l.lat, l.lng);
+        var estKm  = Math.round(linKm * 1.3);
+        var total  = _anttStatus.accumKm + estKm;
+        distChip = total <= ANTT_MAX_KM
+          ? '<span class="antt-dist-ok">~' + estKm + 'km · cabe</span>'
+          : '<span class="antt-dist-warn">~' + estKm + 'km · passa</span>';
+      }
+
       return '<div class="sdi' + (jaNo ? ' off' : '') + '" data-cod="' + esc(l.codigo) + '">'
-        + '<div class="sdi-main">' + hl(l.descricao, q)
+        + '<div class="sdi-main">'
+          + hl(l.descricao, q)
           + (jaNo ? ' <span style="font-size:9px;background:#e3f2fd;color:#1565c0;border:1px solid #90caf9;border-radius:3px;padding:0 5px;">pos. ' + pos + '</span>' : '')
+          + apoioBadge
         + '</div>'
-        + '<div class="sdi-meta">' + hl(l.codigo, q) + (l.tipo ? ' · ' + esc(l.tipo) : '') + ' ' + coord + '</div>'
+        + '<div class="sdi-meta">'
+          + hl(l.codigo, q) + (l.tipo ? ' · ' + esc(l.tipo) : '')
+          + (l.lat ? '' : ' <span style="color:#f87171;font-size:10px;">sem coord.</span>')
+          + distChip
+        + '</div>'
         + '</div>';
     }).join('');
   }
+
   drop.classList.add('open');
   drop.querySelectorAll('.sdi:not(.off)').forEach(function(el) {
     el.addEventListener('mousedown', function(ev) {
@@ -1859,6 +2678,63 @@ function addPonto(local) {
   _pendingSelectIdx = after + 1;
   dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
   document.getElementById('insAfter').value = String(after + 1);
+}
+
+/** Adiciona ponto sempre no final da sequência (usado pelas sugestões ANTT no painel lateral). */
+function addPontoNoFim(local) {
+  var insertAt = _seq.length; // índice após o último
+  _seq.push({
+    idPonto: local.codigo, nomePonto: local.descricao,
+    tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+  });
+  _pendingSelectIdx = insertAt;
+  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+  document.getElementById('insAfter').value = String(insertAt);
+  var list = document.getElementById('seqList');
+  if (list) list.scrollTop = list.scrollHeight;
+}
+
+/**
+ * Para cada par consecutivo (A, B) da sequência, calcula o "desvio extra"
+ * que X causaria: dist(A,X) + dist(X,B) − dist(A,B).
+ * Retorna o índice i tal que X deve ser inserido APÓS _seq[i].
+ */
+function _findBestInsertIdx(lat, lng) {
+  if (_seq.length <= 1) return 0;
+  var best = 0, bestScore = Infinity;
+  for (var i = 0; i < _seq.length - 1; i++) {
+    var a = _seq[i], b = _seq[i + 1];
+    if (!a.lat || !a.lng || !b.lat || !b.lng) continue;
+    var dAX = _haversinKm(+a.lat, +a.lng, lat, lng);
+    var dXB = _haversinKm(lat, lng, +b.lat, +b.lng);
+    var dAB = _haversinKm(+a.lat, +a.lng, +b.lat, +b.lng);
+    var score = dAX + dXB - dAB;
+    if (score < bestScore) { bestScore = score; best = i; }
+  }
+  return best;
+}
+
+/**
+ * Adiciona ponto na posição geográfica correta da sequência
+ * (critério de mínimo desvio). Usado pelos pins de sugestão ANTT no mapa.
+ */
+function addPontoNoMapa(local) {
+  if (!local.lat || !local.lng) { addPontoNoFim(local); return; }
+  var afterIdx = _findBestInsertIdx(+local.lat, +local.lng);
+  _seq.splice(afterIdx + 1, 0, {
+    idPonto: local.codigo, nomePonto: local.descricao,
+    tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+  });
+  _pendingSelectIdx = afterIdx + 1;
+  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+  document.getElementById('insAfter').value = String(afterIdx + 1);
+  // Rola a lista até o item inserido
+  var list = document.getElementById('seqList');
+  if (list) {
+    var item = list.querySelector('[data-idx="' + (afterIdx + 1) + '"]');
+    if (item) item.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    else list.scrollTop = (afterIdx + 1) * 48;
+  }
 }
 
 // ============================================================

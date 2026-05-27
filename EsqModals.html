@@ -3,7 +3,7 @@
   <div class="esq-modal">
     <div class="esq-modal-head">
       <div class="esq-modal-title">Selecionar Esquema</div>
-      <button class="esq-modal-close" id="btnFecharModalEsq" style="display:none;" onclick="fecharModalEsquema()">✕</button>
+      <button class="esq-modal-close" id="btnFecharModalEsq" style="display:none;" onclick="fecharModalEsquema()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
     </div>
     <div class="esq-modal-body">
       <div class="sw esq-search-wrap">
@@ -49,6 +49,20 @@
     <div class="esq-modal-footer">
       <button class="btn btn-ghost btn-sm" id="btnNovo" onclick="novoEsquema()">+ Novo Esquema</button>
       <span style="font-size:10px;color:#bbb;">Selecione ou crie um esquema para continuar</span>
+    </div>
+  </div>
+</div>
+
+<!-- Modal: importar pontos de outro horário da mesma linha -->
+<div class="esq-modal-overlay" id="importModalOverlay" style="display:none;" onclick="if(event.target===this)fecharImportModal()">
+  <div class="esq-modal" style="max-width:440px;">
+    <div class="esq-modal-head">
+      <div class="esq-modal-title">Importar Pontos</div>
+      <button class="esq-modal-close" onclick="fecharImportModal()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    </div>
+    <div class="esq-modal-body">
+      <p style="font-size:12px;color:#888;margin:0 0 12px;">Selecione o horário de origem da mesma linha. Os pontos (rota, tipos de trecho e paradas) serão copiados. Horários comerciais não são importados.</p>
+      <div id="importEsqList" style="max-height:320px;overflow-y:auto;"></div>
     </div>
   </div>
 </div>
