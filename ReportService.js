@@ -226,6 +226,17 @@ var ReportService = (() => {
       return { status: createCode, body: createParsed };
     }
 
+    // ── Passo 1.5: anexa imagens/evidências (não-fatal) ─────────────
+    var evidencias = (params && params.evidencias) || [];
+    if (evidencias.length > 0) {
+      try {
+        _uploadEvidencias(baseUrl, occurrenceId, evidencias);
+      } catch (e) {
+        // Falha no upload não impede a geração do PDF (apenas sai sem imagens)
+        Logger.log("Falha ao anexar evidências: " + e);
+      }
+    }
+
     // ── Passo 2: gera o PDF ─────────────────────────────────────────
     var ttl = props.getProperty("REPORTS_PDF_TTL") || "3600";
     var pdfResp = UrlFetchApp.fetch(
@@ -335,6 +346,7 @@ var ReportService = (() => {
     var lastIdx = trechoTrip.length - 1;
     trechoTrip.forEach(function (pt, idx) {
       if (idx === 0 || idx === lastIdx) return;
+      if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: ponto de apoio / ignorado
       if (!pt.parada_s || pt.parada_s <= 0) return;
       var tipoKey = String(pt.tipo || '').trim();
       var paradaMin = Math.round((pt.parada_s / 60) * 10) / 10;
@@ -465,6 +477,60 @@ var ReportService = (() => {
   // ============================================================
 
   /**
+   * Faz upload de imagens (base64) para POST /occurrences/:id/evidences.
+   * Monta o corpo multipart/form-data manualmente (UrlFetchApp não suporta
+   * múltiplos campos com o mesmo nome "files" via objeto payload).
+   *
+   * @param {string} baseUrl
+   * @param {string} occurrenceId
+   * @param {Array}  evidencias  — [{ nome, mime, base64, legenda }]
+   * @returns {number} HTTP status
+   */
+  function _uploadEvidencias(baseUrl, occurrenceId, evidencias) {
+    var boundary = "----GASBoundary" + Date.now();
+    var parts = []; // array de Byte[]
+    function pushStr(s) { parts.push(Utilities.newBlob(s).getBytes()); }
+
+    var validas = evidencias.filter(function (ev) { return ev && ev.base64; });
+    if (validas.length === 0) return 0;
+
+    validas.forEach(function (ev) {
+      var nome = ev.nome || "evidencia.jpg";
+      var mime = ev.mime || "image/jpeg";
+      pushStr(
+        "--" + boundary + "\r\n" +
+        'Content-Disposition: form-data; name="files"; filename="' + nome + '"\r\n' +
+        "Content-Type: " + mime + "\r\n\r\n"
+      );
+      parts.push(Utilities.base64Decode(ev.base64));
+      pushStr("\r\n");
+    });
+
+    // Campo metadata: legenda por imagem, na mesma ordem dos arquivos
+    var metadata = validas.map(function (ev) {
+      return { caption: ev.legenda || null };
+    });
+    pushStr(
+      "--" + boundary + "\r\n" +
+      'Content-Disposition: form-data; name="metadata"\r\n\r\n' +
+      JSON.stringify(metadata) + "\r\n"
+    );
+    pushStr("--" + boundary + "--\r\n");
+
+    // Concatena todos os Byte[] em um único corpo
+    var body = [];
+    parts.forEach(function (p) { body = body.concat(p); });
+
+    var resp = UrlFetchApp.fetch(baseUrl + "/occurrences/" + occurrenceId + "/evidences", {
+      method: "post",
+      contentType: "multipart/form-data; boundary=" + boundary,
+      payload: body,
+      muteHttpExceptions: true,
+    });
+    return resp.getResponseCode();
+  }
+
+  /**
    * Converte o payload estruturado do relatório para o formato
    * esperado pelo endpoint POST /occurrences da API.
    */
@@ -531,6 +597,7 @@ var ReportService = (() => {
         var result = [];
         tripForMap.forEach(function(pt, idx) {
           if (idx === 0 || idx === lastIdx) return;
+          if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: não gera ocorrência
           if (!pt.parada_s || pt.parada_s <= 0) return;
           if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
           if (!pt.proibido42) return;
@@ -777,6 +844,38 @@ var ReportService = (() => {
   }
 
   /**
+   * Diferença assinada em minutos entre dois horários "HH:MM".
+   * Positivo = real depois do comercial (atraso); negativo = adiantado.
+   * Normaliza para o intervalo (-720, +720] para tratar virada de meia-noite.
+   * Retorna null se algum horário estiver ausente.
+   */
+  function _diffMin(realHHMM, schedHHMM) {
+    if (!realHHMM || !schedHHMM) return null;
+    var r = String(realHHMM).match(/(\d{1,2}):(\d{2})/);
+    var s = String(schedHHMM).match(/(\d{1,2}):(\d{2})/);
+    if (!r || !s) return null;
+    var rMin = parseInt(r[1], 10) * 60 + parseInt(r[2], 10);
+    var sMin = parseInt(s[1], 10) * 60 + parseInt(s[2], 10);
+    var d = ((rMin - sMin) % 1440 + 1440) % 1440; // 0..1439
+    if (d > 720) d -= 1440;                        // -719..720
+    return d;
+  }
+
+  /**
+   * Formata uma diferença assinada de minutos como "+33min" / "+1h47" / "no horário".
+   */
+  function _fmtDiff(min) {
+    if (min == null) return '—';
+    var abs = Math.abs(Math.round(min));
+    if (abs === 0) return 'no horário';
+    var sign = min > 0 ? '+' : '−'; // − (minus)
+    if (abs < 60) return sign + abs + 'min';
+    var hh = Math.floor(abs / 60);
+    var mm = abs % 60;
+    return sign + hh + 'h' + (mm > 0 ? ('0' + mm).slice(-2) : '');
+  }
+
+  /**
    * Gera o corpo HTML estruturado do relatório operacional.
    */
   function _buildRelatoHtml(payload, params) {
@@ -812,6 +911,8 @@ var ReportService = (() => {
 
     // Tempo esperado por ponto (do esquema operacional)
     var esqTLMap = {};
+    // Horário comercial por ponto (do esquema operacional) — usado para medir atraso
+    var esqComercialMap = {};
     _esqOrd.forEach(function(ep) {
       if (ep.id_ponto && ep.tempo_local) {
         var parts = String(ep.tempo_local).trim().split(':');
@@ -820,6 +921,9 @@ var ReportService = (() => {
           : parseFloat(ep.tempo_local) || 0;
         if (tl > 0) esqTLMap[String(ep.id_ponto).trim()] = tl;
       }
+      if (ep.id_ponto && ep.horario_comercial) {
+        esqComercialMap[String(ep.id_ponto).trim()] = String(ep.horario_comercial).trim();
+      }
     });
 
     var tripForMap = payload.tripForMap || [];
@@ -827,6 +931,7 @@ var ReportService = (() => {
     var paradasFora = [];
     tripForMap.forEach(function(pt, idx) {
       if (idx === 0 || idx === tripLastIdx) return;
+      if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: não é parada fora
       if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
       paradasFora.push({
@@ -866,12 +971,18 @@ var ReportService = (() => {
     // Tabela de registro do trecho — chegada / tempo no local / saída (MOTORISTA e TRECHO)
     if (payload.tipo !== 'COMPLETO' && tripForMap.length > 0) {
       var pontosRegistro = tripForMap.filter(function(pt) {
+        if (pt.ignorarManual) return false; // ajuste manual: removido do relatório
         return pt.matched || (pt.parada_s && pt.parada_s > 0);
       });
       if (pontosRegistro.length > 0) {
         var THR = 'background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;' +
                   'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;text-align:center;';
         var TDR = 'padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;font-size:11px;';
+        // Mostra colunas Comercial/Dif. somente quando o esquema tem horário comercial em algum ponto do trecho
+        var _temComercialReg = pontosRegistro.some(function(pt) {
+          var c = String(pt.codigo || '').trim();
+          return c && esqComercialMap[c];
+        });
         h += '<div style="margin-bottom:20px;">' +
              '<h4 style="font-size:13px;margin:0 0 10px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
              'Registro do Trecho</h4>' +
@@ -880,6 +991,8 @@ var ReportService = (() => {
              '<th style="' + THR + 'width:32px;">#</th>' +
              '<th style="' + THR + 'text-align:left;">Ponto</th>' +
              '<th style="' + THR + '">Chegada</th>' +
+             (_temComercialReg ? '<th style="' + THR + '">Comercial</th>' : '') +
+             (_temComercialReg ? '<th style="' + THR + '">Dif.</th>'      : '') +
              '<th style="' + THR + '">Tempo no Local</th>' +
              '<th style="' + THR + '">Saída</th>' +
              '</tr></thead><tbody>';
@@ -897,13 +1010,14 @@ var ReportService = (() => {
           var isGaragem = /GARAGEM/.test(nome);
           var isFirst = idx === 0;
           var isLast  = idx === pontosRegistro.length - 1;
-          // Ponto fora do esquema: tem parada, não é garagem e não consta no esquema
-          var isForaEsquema = !isGaragem && paradaMin > 0 && !(codigo && esquemaIdSet[codigo]);
+          var isApoio = !!pt.apoioManual; // ajuste manual: ponto de apoio legítimo
+          // Ponto fora do esquema: tem parada, não é garagem e não consta no esquema (apoio nunca é "fora")
+          var isForaEsquema = !isApoio && !isGaragem && paradaMin > 0 && !(codigo && esquemaIdSet[codigo]);
           var esperadoMin = esqTLMap[codigo] != null ? esqTLMap[codigo]
             : /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
             : isGaragem ? 20
             : TEMPO_ESPERADO_PADRAO;
-          var excessoMin = (isExtremo || isGaragem) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
+          var excessoMin = (isExtremo || isGaragem || isApoio) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
           var showInicioTag = isFirst && !isGaragem;
           var showFimTag    = isLast  && !isGaragem && _showFim;
           var rowBg = showInicioTag  ? 'background:#f0fff8;'
@@ -932,10 +1046,22 @@ var ReportService = (() => {
                 : '<span>' + _fmtMin(paradaMin) + '</span>';
           var chegada = _extractTime(pt.entrada) || '—';
           var saida   = ocultarTempoSaida ? '—' : (_extractTime(pt.saida || pt.entrada) || '—');
+          // Comercial (do esquema) × hora real → diferença assinada.
+          // No 1º ponto (origem) compara com a SAÍDA (partida); nos demais, com a chegada.
+          var comercial   = codigo ? (esqComercialMap[codigo] || null) : null;
+          var horaCmp     = isFirst ? saida : chegada;
+          var difMin      = (horaCmp && horaCmp !== '—' && comercial) ? _diffMin(horaCmp, comercial) : null;
+          var comercialCel = comercial
+            ? '<span style="color:#1565c0;">' + comercial + '</span>'
+            : '<span style="color:#bbb;">—</span>';
+          var difCor  = difMin == null ? '#bbb' : difMin > 0 ? '#d94040' : difMin < 0 ? '#22a96a' : '#888';
+          var difCel  = '<span style="color:' + difCor + ';font-weight:' + (difMin ? '700' : '400') + ';">' + _fmtDiff(difMin) + '</span>';
           h += '<tr style="' + rowBg + '">' +
                '<td style="' + TDR + 'text-align:center;color:#888;">' + (pt.seq || (idx + 1)) + '</td>' +
                '<td style="' + TDR + '">' + nomeCel + '</td>' +
                '<td style="' + TDR + 'text-align:center;font-family:monospace;">' + chegada + '</td>' +
+               (_temComercialReg ? '<td style="' + TDR + 'text-align:center;font-family:monospace;">' + comercialCel + '</td>' : '') +
+               (_temComercialReg ? '<td style="' + TDR + 'text-align:center;">' + difCel + '</td>' : '') +
                '<td style="' + TDR + 'text-align:center;">' + paradaHtml + '</td>' +
                '<td style="' + TDR + 'text-align:center;font-family:monospace;">' + saida + '</td>' +
                '</tr>';
@@ -1258,6 +1384,7 @@ var ReportService = (() => {
     var paradasFora = [];
     enrichedTrip.forEach(function(pt, idx) {
       if (idx === 0 || idx === lastIdx) return;
+      if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: não gera ocorrência
       if (!pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
       if (!pt.proibido42) return;

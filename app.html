@@ -223,9 +223,10 @@
           _esquemaPontos = pontos || [];
 
           var esqLabel = (esqObj ? esqObj.nome_linha + (esqObj.sentido ? " · " + esqObj.sentido : "") + " · " : "") + _esquemaPontos.length + " pontos";
+          // No navbar o combobox já exibe linha/sentido/horário — aqui mostra só a contagem de pontos (sem redundância)
           if (infoEl) {
-            infoEl.textContent = esqLabel;
-            infoEl.style.display = _esquemaPontos.length > 0 ? "block" : "none";
+            infoEl.textContent = _esquemaPontos.length + (_esquemaPontos.length === 1 ? " ponto" : " pontos");
+            infoEl.style.display = _esquemaPontos.length > 0 ? "inline-flex" : "none";
           }
           if (uploadInfo) {
             uploadInfo.textContent = "" + esqLabel;
@@ -1494,11 +1495,15 @@
         '</div>' +
         '<div id="mManual_nomeDisp" style="font-size:11px;min-height:16px;margin-bottom:8px;color:var(--text3);">—</div>' +
         '<input id="mManual_nome" type="text" placeholder="Nome do motorista" style="' + inputStyle + 'margin-bottom:8px;" />' +
+        '<input id="mManual_base" type="text" placeholder="Base (ex.: REC, NAT) — opcional" style="' + inputStyle + 'margin-bottom:8px;" />' +
+        '<div id="mManual_cadastroNote" style="display:none;font-size:10.5px;color:var(--laranja);margin-bottom:8px;align-items:center;gap:5px;">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>' +
+        'Novo motorista — será cadastrado no sistema ao confirmar.</div>' +
         '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
         '<select id="mManual_ini" style="' + inputStyle + 'flex:1;"></select>' +
         '<select id="mManual_fim" style="' + inputStyle + 'flex:1;"></select>' +
         '</div>' +
-        '<button onclick="AppModule._confirmarManual()" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> Confirmar</button>' +
+        '<button id="mManual_confirmBtn" onclick="AppModule._confirmarManual()" style="padding:5px 14px;border-radius:6px;background:var(--laranja);border:none;color:#fff;font-size:12px;font-weight:600;cursor:pointer;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="20 6 9 17 4 12"/></svg> Confirmar</button>' +
         '</div></div>';
     }
 
@@ -1522,43 +1527,88 @@
     }
 
     function _buscarMotoristaManual() {
-      var matInput = document.getElementById('mManual_mat');
-      var nomeDisp = document.getElementById('mManual_nomeDisp');
+      var matInput  = document.getElementById('mManual_mat');
+      var nomeDisp  = document.getElementById('mManual_nomeDisp');
       var nomeInput = document.getElementById('mManual_nome');
+      var baseInput = document.getElementById('mManual_base');
+      var cadNote   = document.getElementById('mManual_cadastroNote');
       if (!matInput) return;
       var mat = matInput.value.trim();
       var encontrado = mat ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; }) : null;
-      if (nomeDisp) {
-        if (encontrado) {
+
+      if (encontrado) {
+        if (nomeDisp) {
           nomeDisp.textContent = encontrado.nome + (encontrado.base ? ' · ' + encontrado.base : '');
           nomeDisp.style.color = 'var(--verde)';
-          if (nomeInput) nomeInput.value = encontrado.nome;
-        } else {
+        }
+        if (nomeInput) nomeInput.value = encontrado.nome;
+        if (baseInput) baseInput.value = encontrado.base || '';
+        if (cadNote)   cadNote.style.display = 'none';
+      } else {
+        if (nomeDisp) {
           nomeDisp.textContent = mat ? 'Matrícula não encontrada' : '—';
           nomeDisp.style.color = mat ? 'var(--vermelho)' : 'var(--text3)';
         }
+        // Matrícula informada e inexistente → sinaliza que será um novo cadastro
+        if (cadNote) cadNote.style.display = mat ? 'inline-flex' : 'none';
       }
+    }
+
+    function _vincularMotorista(mat, nome, base, inicio, fim, msg) {
+      _vinculos.push({ matricula: mat || '—', nome: nome, base: base || '', ponto_inicio: inicio, ponto_fim: fim });
+      _populaSelectMotoristaRelatorio();
+      _atualizarPreviewRelatorio();
+      UIModule.showToast(msg || ('"' + nome + '" vinculado com sucesso.'), 'success', 3000);
+      _renderModalMotorista();
     }
 
     function _confirmarManual() {
       var matInput  = document.getElementById('mManual_mat');
       var nomeInput = document.getElementById('mManual_nome');
+      var baseInput = document.getElementById('mManual_base');
       var selIni    = document.getElementById('mManual_ini');
       var selFim    = document.getElementById('mManual_fim');
       var mat    = matInput  ? matInput.value.trim()  : '';
       var nome   = nomeInput ? nomeInput.value.trim() : '';
+      var base   = baseInput ? baseInput.value.trim() : '';
       var inicio = selIni    ? selIni.value           : '';
       var fim    = selFim    ? selFim.value           : '';
       if (!nome)           { UIModule.showToast('Informe o nome do motorista.', 'error'); return; }
       if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
       var dup = mat ? _vinculos.find(function(v) { return v.matricula === mat; }) : null;
       if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
-      var encontradoManual = mat ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; }) : null;
-      _vinculos.push({ matricula: mat || '—', nome: nome, base: (encontradoManual && encontradoManual.base) || '', ponto_inicio: inicio, ponto_fim: fim });
-      _populaSelectMotoristaRelatorio();
-      _atualizarPreviewRelatorio();
-      UIModule.showToast('"' + nome + '" vinculado com sucesso.', 'success', 3000);
-      _renderModalMotorista();
+
+      var jaCadastrado = mat
+        ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; })
+        : _motoristas.find(function(m) { return String(m.nome).trim().toUpperCase() === nome.toUpperCase(); });
+
+      // Já existe na base → apenas vincula
+      if (jaCadastrado) {
+        _vincularMotorista(mat, nome, base || jaCadastrado.base || '', inicio, fim);
+        return;
+      }
+
+      // Novo motorista → persiste no sistema (aba MOTORISTAS + API) e depois vincula
+      var btn = document.getElementById('mManual_confirmBtn');
+      if (btn) { btn.disabled = true; btn.textContent = 'Cadastrando…'; }
+
+      google.script.run
+        .withSuccessHandler(function(salvo) {
+          // Atualiza o cache local para buscas futuras na mesma sessão
+          _motoristas.push({
+            matricula: (salvo && salvo.matricula) || mat || '',
+            nome:      (salvo && salvo.nome)      || nome,
+            base:      (salvo && salvo.base)      || base || '',
+            ibutton:   (salvo && salvo.ibutton)   || ''
+          });
+          _vincularMotorista(mat, nome, base, inicio, fim, '"' + nome + '" cadastrado e vinculado.');
+        })
+        .withFailureHandler(function(err) {
+          // Falha ao persistir não impede o uso na análise atual
+          console.warn('[App] Falha ao cadastrar motorista:', err);
+          _vincularMotorista(mat, nome, base, inicio, fim, '"' + nome + '" vinculado (falha ao cadastrar no sistema).');
+        })
+        .salvarMotorista({ matricula: mat, nome: nome, base: base, ibutton: '' });
     }
 
     function _nomePontoPorId(idPonto) {
@@ -1572,6 +1622,131 @@
     //  MODAL DE RELATÓRIO
     // ============================================================
 
+    // Imagens/evidências selecionadas para anexar ao relatório principal
+    var _relFiles = [];   // [{ id, file, caption }]
+    var _relEvSeq = 0;
+
+    // Persiste o que foi digitado nos campos de legenda antes de re-renderizar
+    function _syncCaptionsRel() {
+      _relFiles.forEach(function (item) {
+        var inp = document.getElementById('relCap_' + item.id);
+        if (inp) item.caption = inp.value;
+      });
+    }
+
+    function _renderEvidenciasList() {
+      var list = document.getElementById('relEvidenciasList');
+      if (!list) return;
+      list.innerHTML = '';
+      _relFiles.forEach(function (item) {
+        var url = URL.createObjectURL(item.file);
+        var row = document.createElement('div');
+        row.style.cssText = 'display:flex;gap:8px;align-items:center;border:1px solid var(--border);border-radius:8px;padding:6px;';
+        row.innerHTML =
+          '<img src="' + url + '" style="width:44px;height:44px;object-fit:cover;border-radius:6px;flex-shrink:0;" />' +
+          '<input type="text" id="relCap_' + item.id + '" placeholder="Legenda (opcional)" class="form-input" style="flex:1;font-size:12px;padding:6px 8px;" value="' + _escHtml(item.caption || '').replace(/"/g, '&quot;') + '" />' +
+          '<button type="button" data-id="' + item.id + '" class="relEvRemove" title="Remover" style="cursor:pointer;border:none;background:transparent;color:var(--vermelho);font-size:18px;line-height:1;padding:2px 6px;">&times;</button>';
+        list.appendChild(row);
+      });
+      list.querySelectorAll('.relEvRemove').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          _syncCaptionsRel();
+          var id = this.getAttribute('data-id');
+          _relFiles = _relFiles.filter(function (f) { return String(f.id) !== String(id); });
+          _renderEvidenciasList();
+        });
+      });
+    }
+
+    function _resetEvidenciasRel() {
+      _relFiles = [];
+      var inp = document.getElementById('relEvidenciasInput');
+      if (inp) inp.value = '';
+      _renderEvidenciasList();
+    }
+
+    /** Adiciona um arquivo de imagem à lista de evidências. Retorna true se aceito. */
+    function _pushEvidenciaFile(file) {
+      if (!file || !file.type || file.type.indexOf('image/') !== 0) return false;
+      _relFiles.push({ id: 'ev' + (_relEvSeq++), file: file, caption: '' });
+      return true;
+    }
+
+    /** Cola imagens do clipboard (Ctrl+V) enquanto o modal de relatório está aberto. */
+    function _onModalRelatorioPaste(e) {
+      var overlay = document.getElementById('modalRelatorio');
+      if (!overlay || !overlay.classList.contains('open')) return;
+
+      var items = (e.clipboardData && e.clipboardData.items) || [];
+      var added = 0;
+      for (var i = 0; i < items.length; i++) {
+        var it = items[i];
+        if (it.kind === 'file' && it.type && it.type.indexOf('image/') === 0) {
+          var blob = it.getAsFile();
+          if (!blob) continue;
+          var ext = (it.type.split('/')[1] || 'png').replace(/[^a-z0-9]/gi, '') || 'png';
+          var named;
+          try {
+            named = new File([blob], 'colado-' + Date.now() + '-' + i + '.' + ext, { type: it.type });
+          } catch (err) {
+            named = blob; // navegadores sem construtor File: usa o blob direto
+          }
+          if (_pushEvidenciaFile(named)) added++;
+        }
+      }
+
+      if (added > 0) {
+        e.preventDefault();
+        _syncCaptionsRel();
+        _renderEvidenciasList();
+        if (typeof UIModule !== 'undefined' && UIModule.showToast) {
+          UIModule.showToast(added > 1 ? (added + ' imagens coladas.') : 'Imagem colada.', 'success', 2500);
+        }
+      }
+    }
+
+    /**
+     * Reduz a imagem (máx. 1280px, JPEG 0.82) e devolve base64 — alivia o
+     * transporte via google.script.run; a API ainda reduz para 800px no servidor.
+     */
+    function _fileToResizedBase64(file) {
+      return new Promise(function (resolve) {
+        var img = new Image();
+        var url = URL.createObjectURL(file);
+        img.onload = function () {
+          var maxDim = 1280;
+          var w = img.width, h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w >= h) { h = Math.round(h * maxDim / w); w = maxDim; }
+            else        { w = Math.round(w * maxDim / h); h = maxDim; }
+          }
+          var canvas = document.createElement('canvas');
+          canvas.width = w; canvas.height = h;
+          canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+          URL.revokeObjectURL(url);
+          try {
+            var dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+            resolve({ base64: dataUrl.split(',')[1] });
+          } catch (e) { resolve(null); }
+        };
+        img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+        img.src = url;
+      });
+    }
+
+    /** Lê todas as imagens selecionadas → array p/ a API. */
+    function _readEvidenciasBase64() {
+      _syncCaptionsRel();
+      if (!_relFiles.length) return Promise.resolve([]);
+      return Promise.all(_relFiles.map(function (item) {
+        return _fileToResizedBase64(item.file).then(function (res) {
+          if (!res) return null;
+          var nome = String(item.file.name || 'evidencia').replace(/\.[^/.]+$/, '') + '.jpg';
+          return { nome: nome, mime: 'image/jpeg', base64: res.base64, legenda: item.caption || '' };
+        });
+      })).then(function (arr) { return arr.filter(Boolean); });
+    }
+
     function _initModalRelatorio() {
       var overlay = document.getElementById("modalRelatorio");
       var btnOpen = document.getElementById("btnRelatorio");
@@ -1582,11 +1757,28 @@
       if (!overlay) return;
 
       var open = function () {
+        _resetEvidenciasRel();
         overlay.classList.add("open");
       };
       var close = function () {
         overlay.classList.remove("open");
       };
+
+      // Seleção de imagens/evidências
+      var evInput = document.getElementById("relEvidenciasInput");
+      if (evInput) {
+        evInput.addEventListener("change", function () {
+          _syncCaptionsRel();
+          Array.prototype.forEach.call(this.files || [], function (f) {
+            _pushEvidenciaFile(f);
+          });
+          this.value = ""; // permite reselecionar o mesmo arquivo
+          _renderEvidenciasList();
+        });
+      }
+
+      // Colar prints com Ctrl+V enquanto o modal estiver aberto
+      document.addEventListener("paste", _onModalRelatorioPaste);
 
       if (btnOpen) btnOpen.addEventListener("click", open);
       if (btnClose) btnClose.addEventListener("click", close);
@@ -1718,35 +1910,41 @@
       };
 
       _setBusy(true);
-      UIModule.showLoading("Capturando mapa e gerando relatório...");
-
-      _gerarComCaptura(params,
-        function (result) {
-          UIModule.hideLoading();
-          _setBusy(false);
-          document.getElementById("modalRelatorio").classList.remove("open");
-          console.log("[App] Payload do relatório:", result.payload);
-          UIModule.showToast("Relatório gerado com sucesso!", "success", 5000);
-          if (result.apiResponse) {
-            console.log("[App] Resposta da API:", result.apiResponse);
-            if (result.apiResponse.body && result.apiResponse.body.url) {
-              var fname = _buildPdfFilename(tipo, params.motorista);
-              _downloadPdf(result.apiResponse.body.url, fname);
-              UIModule.showToast("PDF pronto para download.", "success", 4000);
-            }
-          }
-          if (gerarParadas) {
-            _launchParadasFora(params);
-          }
-        },
-        function (err) {
-          UIModule.hideLoading();
-          _setBusy(false);
-          var msg = err && err.message ? err.message : String(err);
-          UIModule.showToast("Erro ao gerar relatório: " + msg, "error", 6000);
-          console.error("[App] Erro ao gerar relatório:", err);
-        }
+      UIModule.showLoading(
+        _relFiles.length ? "Processando imagens e gerando relatório..." : "Capturando mapa e gerando relatório..."
       );
+
+      _readEvidenciasBase64().then(function (evidencias) {
+        params.evidencias = evidencias; // anexadas só na ocorrência principal (server)
+
+        _gerarComCaptura(params,
+          function (result) {
+            UIModule.hideLoading();
+            _setBusy(false);
+            document.getElementById("modalRelatorio").classList.remove("open");
+            console.log("[App] Payload do relatório:", result.payload);
+            UIModule.showToast("Relatório gerado com sucesso!", "success", 5000);
+            if (result.apiResponse) {
+              console.log("[App] Resposta da API:", result.apiResponse);
+              if (result.apiResponse.body && result.apiResponse.body.url) {
+                var fname = _buildPdfFilename(tipo, params.motorista);
+                _downloadPdf(result.apiResponse.body.url, fname);
+                UIModule.showToast("PDF pronto para download.", "success", 4000);
+              }
+            }
+            if (gerarParadas) {
+              _launchParadasFora(params);
+            }
+          },
+          function (err) {
+            UIModule.hideLoading();
+            _setBusy(false);
+            var msg = err && err.message ? err.message : String(err);
+            UIModule.showToast("Erro ao gerar relatório: " + msg, "error", 6000);
+            console.error("[App] Erro ao gerar relatório:", err);
+          }
+        );
+      });
     }
 
     /**
@@ -1765,6 +1963,7 @@
       var count = 0;
       enriched.forEach(function(pt, idx) {
         if (idx === 0 || idx === lastIdx) return;
+        if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual
         if (!pt.parada_s || pt.parada_s <= 0) return;
         if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
         if (!pt.proibido42) return;

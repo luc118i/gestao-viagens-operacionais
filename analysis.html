@@ -9,6 +9,76 @@
     var TEMPO_ESPERADO_PADRAO = 40 * 60;
     var TOLERANCIA_S = 5 * 60; // margem de segurança antes de marcar excesso
 
+    // Ajuste manual de status por ponto (seq → 'apoio' | 'ignorar').
+    // 'apoio'  = parada legítima (some das ocorrências/excessos do relatório).
+    // 'ignorar'= remove totalmente o ponto do relatório/PDF.
+    var _apoioState = {};
+    var _lastTrip = null;
+    var _lastComp = null;
+
+    /** Estado de override de um ponto pela seq. */
+    function _ovState(seq) {
+      return (seq == null) ? undefined : _apoioState[String(seq)];
+    }
+
+    /** Indica se o status do ponto pode ser ajustado manualmente (clicável). */
+    function _isAjustavel(ponto, excessoS) {
+      if (!ponto) return false;
+      if (_ovState(ponto.seq)) return true;        // já ajustado → permite reverter
+      if (ponto.proibido42) return true;           // local proibido
+      if ((ponto.parada_s || 0) > 0 && !ponto.matched) return true; // parada em local não id.
+      if ((excessoS || 0) > 0) return true;        // excesso de tempo
+      return false;
+    }
+
+    /** Badge de status quando há override manual. */
+    function _statusOverrideTag(state) {
+      if (state === 'apoio') {
+        return '<span class="tag tag-realizado" title="Ponto de apoio (ajustado manualmente) — não conta no relatório"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg> Apoio</span>';
+      }
+      if (state === 'ignorar') {
+        return '<span class="tag tag-nao-visitado" title="Ignorado no relatório (ajustado manualmente)"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg> Ignorado</span>';
+      }
+      return '';
+    }
+
+    /**
+     * Envolve a célula de STATUS tornando-a clicável quando o ponto é ajustável.
+     * Clique alterna: status calculado → Apoio → Ignorar → calculado.
+     */
+    function _statusCell(seq, ajustavel, innerHtml) {
+      if (!ajustavel || seq == null) {
+        return '<td>' + innerHtml + '</td>';
+      }
+      return '<td onclick="AnalysisModule.toggleApoioStatus(' + Number(seq) + ')" ' +
+        'style="cursor:pointer;" title="Clique para ajustar: Apoio → Ignorar → normal">' +
+        innerHtml + '</td>';
+    }
+
+    /** Alterna o status manual de um ponto e re-renderiza. */
+    function toggleApoioStatus(seq) {
+      var key = String(seq);
+      var cur = _apoioState[key];
+      var next = cur === undefined ? 'apoio' : cur === 'apoio' ? 'ignorar' : undefined;
+      if (next === undefined) delete _apoioState[key];
+      else _apoioState[key] = next;
+
+      // Estampa as flags no ponto do enrichedTrip (mesma referência enviada ao relatório)
+      if (_lastTrip) {
+        for (var i = 0; i < _lastTrip.length; i++) {
+          if (Number(_lastTrip[i].seq) === Number(seq)) {
+            _lastTrip[i].apoioManual   = (next === 'apoio');
+            _lastTrip[i].ignorarManual = (next === 'ignorar');
+            break;
+          }
+        }
+      }
+      renderPontosTable(_lastTrip, _lastComp);
+    }
+
+    /** Mapa seq→estado (para o app aplicar ao relatório, se necessário). */
+    function getApoioState() { return _apoioState; }
+
     // ============================================================
     //  renderPontosTable — nova tabela de eventos (colunas: #, Ponto, Status, Parada, Excesso)
     // ============================================================
@@ -22,6 +92,8 @@
       const tbody = document.getElementById('tbodyPontos');
       if (!tbody) return;
       tbody.innerHTML = '';
+      _lastTrip = enrichedTrip || null;
+      _lastComp = comparacao || null;
 
       // Mapa código → comparação
       const statusMap = {};
@@ -42,15 +114,18 @@
     }
 
     function _renderEnrichedRows(tbody, enrichedTrip) {
-      enrichedTrip.forEach(function(ponto) {
+      enrichedTrip.forEach(function(ponto, idx) {
         var tr = document.createElement('tr');
 
         var paradaS  = ponto.parada_s || 0;
         var esperado = _getTempoEsperado(ponto);
         var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+        var _ov = _ovState(ponto.seq);
 
-        // Classe da linha baseada em severidade contextual
-        if (!ponto.matched && paradaS > 5 * 60) {
+        // Classe da linha baseada em severidade contextual (suprimida quando ajustado)
+        if (_ov) {
+          if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
+        } else if (!ponto.matched && paradaS > 5 * 60) {
           tr.classList.add('row-critico'); // parada prolongada em local desconhecido
         } else if (excessoS > 30 * 60) {
           tr.classList.add('row-critico');
@@ -60,19 +135,21 @@
           tr.classList.add('row-nao-visitado');
         }
 
-        var statusTag = _getStatusTag(ponto, excessoS);
+        var statusTag = _ov ? _statusOverrideTag(_ov) : _getStatusTag(ponto, excessoS);
+        var tipoTag   = _buildTipoTag(_ov ? Object.assign({}, ponto, { proibido42: false }) : ponto);
 
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-        var excessoHtml = excessoS > 0
+        var excessoHtml = (!_ov && excessoS > 0)
           ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
           : '<span style="color:var(--text3);">—</span>';
 
         tr.innerHTML =
           '<td class="seq-cell">' + ponto.seq + '</td>' +
           '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
-          '<td>' + _buildTipoTag(ponto) + '</td>' +
-          '<td>' + statusTag + '</td>' +
+          '<td>' + tipoTag + '</td>' +
+          _statusCell(ponto.seq, _isAjustavel(ponto, excessoS), statusTag) +
           '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+          _comercialCells('', ponto.entrada, ponto.saida, idx === 0) +
           '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
           '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
           '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
@@ -85,38 +162,42 @@
       comparacao.forEach(function(item, idx) {
         var tr = document.createElement('tr');
         var pr = item.ponto_realizado;
-
-        if (!item.visitado) {
-          tr.classList.add('row-nao-visitado');
-        } else if (pr) {
-          var paradaS  = pr.parada_s || 0;
-          var esperado = _getTempoEsperado(pr);
-          var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
-          if (excessoS > 30 * 60) tr.classList.add('row-critico');
-          else if (excessoS > 0)  tr.classList.add('row-excesso');
-        }
-
-        var statusTag = item.visitado
-          ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
-          : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
+        var seq = pr ? pr.seq : null;
+        var _ov = _ovState(seq);
 
         var paradaS  = pr ? (pr.parada_s || 0) : 0;
         var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
         var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
 
+        if (_ov) {
+          if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
+        } else if (!item.visitado) {
+          tr.classList.add('row-nao-visitado');
+        } else if (pr) {
+          if (excessoS > 30 * 60) tr.classList.add('row-critico');
+          else if (excessoS > 0)  tr.classList.add('row-excesso');
+        }
+
+        var statusTag = _ov
+          ? _statusOverrideTag(_ov)
+          : item.visitado
+            ? _getStatusTag(pr, excessoS)
+            : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
+
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-        var excessoHtml = excessoS > 0
+        var excessoHtml = (!_ov && excessoS > 0)
           ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
           : '<span style="color:var(--text3);">—</span>';
 
-        var tipoTag = pr ? _buildTipoTag(pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
+        var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
 
         tr.innerHTML =
           '<td class="seq-cell">' + (item.ordem || (idx + 1)) + '</td>' +
           '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
           '<td>' + tipoTag + '</td>' +
-          '<td>' + statusTag + '</td>' +
+          _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
           '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+          _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, idx === 0) +
           '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
           '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
           '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
@@ -159,7 +240,7 @@
 
       // Merge: insere cada extra antes do próximo ponto visitado do esquema com entrada > extra.entrada
       var extraIdx = 0;
-      comparacao.forEach(function(item) {
+      comparacao.forEach(function(item, idx) {
         var schemaTime = item.ponto_realizado ? (item.ponto_realizado.entrada || '') : '';
         // Insere extras que ocorreram antes deste ponto do esquema
         while (extraIdx < extras.length) {
@@ -171,7 +252,7 @@
             break;
           }
         }
-        _renderSchemaRow(tbody, item);
+        _renderSchemaRow(tbody, item, idx === 0);
       });
       // Extras restantes (após o último ponto visitado)
       while (extraIdx < extras.length) {
@@ -182,41 +263,45 @@
       return extras.length;
     }
 
-    function _renderSchemaRow(tbody, item) {
+    function _renderSchemaRow(tbody, item, isFirst) {
       var tr = document.createElement('tr');
       var pr = item.ponto_realizado;
-
-      if (!item.visitado) {
-        tr.classList.add('row-nao-visitado');
-      } else if (pr) {
-        var paradaS  = pr.parada_s || 0;
-        var esperado = _getTempoEsperado(pr);
-        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
-        if (excessoS > 30 * 60) tr.classList.add('row-critico');
-        else if (excessoS > 0)  tr.classList.add('row-excesso');
-      }
-
-      var statusTag = item.visitado
-        ? _getStatusTag(pr, pr ? Math.max(0, (pr.parada_s || 0) - _getTempoEsperado(pr) - TOLERANCIA_S) : 0)
-        : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
+      var seq = pr ? pr.seq : null;
+      var _ov = _ovState(seq);
 
       var paradaS  = pr ? (pr.parada_s || 0) : 0;
       var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
       var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
 
+      if (_ov) {
+        if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
+      } else if (!item.visitado) {
+        tr.classList.add('row-nao-visitado');
+      } else if (pr) {
+        if (excessoS > 30 * 60) tr.classList.add('row-critico');
+        else if (excessoS > 0)  tr.classList.add('row-excesso');
+      }
+
+      var statusTag = _ov
+        ? _statusOverrideTag(_ov)
+        : item.visitado
+          ? _getStatusTag(pr, excessoS)
+          : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
+
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-      var excessoHtml = excessoS > 0
+      var excessoHtml = (!_ov && excessoS > 0)
         ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
         : '<span style="color:var(--text3);">—</span>';
 
-      var tipoTag = pr ? _buildTipoTag(pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
+      var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
 
       tr.innerHTML =
         '<td class="seq-cell">' + (item.ordem || '') + '</td>' +
         '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
-        '<td>' + statusTag + '</td>' +
+        _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
         '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+        _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, !!isFirst) +
         '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
         '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
         '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
@@ -228,18 +313,22 @@
       var tr = document.createElement('tr');
       var paradaS  = ponto.parada_s || 0;
       var excessoS = paradaS; // parada inteira é excesso — não deveria existir
+      var _ov = _ovState(ponto.seq);
 
       tr.style.fontStyle = 'italic';
 
       // Detecta tipo 42 mesmo quando proibido42 ainda não foi marcado (ex.: "Local Não Autorizado - 42")
       var tipoStr = String(ponto.tipo || '').trim();
-      var ehProibido = ponto.proibido42 ||
+      var ehProibido = !_ov && (ponto.proibido42 ||
         /\b42\b/.test(tipoStr) ||
-        tipoStr.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').indexOf('nao autorizado') !== -1;
+        tipoStr.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').indexOf('nao autorizado') !== -1);
 
       var tipoTag = _buildTipoTag(Object.assign({}, ponto, { proibido42: ehProibido }));
       var statusTag;
-      if (ehProibido) {
+      if (_ov) {
+        if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
+        statusTag = _statusOverrideTag(_ov);
+      } else if (ehProibido) {
         tr.classList.add('row-critico');
         statusTag = '<span class="tag tag-status-critico" title="Parada de ' + Math.round(paradaS/60) + ' min em local proibido"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg> Parada Irregular</span>';
       } else {
@@ -249,7 +338,7 @@
       }
 
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-      var excessoHtml = excessoS > 0
+      var excessoHtml = (!_ov && excessoS > 0)
         ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
         : '<span style="color:var(--text3);">—</span>';
 
@@ -257,8 +346,9 @@
         '<td class="seq-cell" style="color:var(--text3);">•</td>' +
         '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
-        '<td>' + statusTag + '</td>' +
+        _statusCell(ponto.seq, true, statusTag) +
         '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+        _comercialCells('', ponto.entrada, ponto.saida, false) +
         '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
         '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
         '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
@@ -521,6 +611,11 @@
     // ============================================================
 
     function resetUI() {
+      // Limpa ajustes manuais de status
+      _apoioState = {};
+      _lastTrip = null;
+      _lastComp = null;
+
       // Limpa tabela de eventos
       var tbodyPontos = document.getElementById('tbodyPontos');
       if (tbodyPontos) tbodyPontos.innerHTML = '';
@@ -705,6 +800,53 @@
       return m + 'min';
     }
 
+    // Extrai "HH:MM" de um timestamp ("YYYY-MM-DD HH:MM:SS" ou "HH:MM").
+    function _extractHHMM(ts) {
+      if (!ts) return null;
+      var m = String(ts).match(/(\d{1,2}):(\d{2})/);
+      return m ? (('0' + m[1]).slice(-2) + ':' + m[2]) : null;
+    }
+
+    // Diferença assinada (min) entre real e comercial. + = atraso; trata virada de meia-noite.
+    function _diffMin(realHHMM, schedHHMM) {
+      if (!realHHMM || !schedHHMM) return null;
+      var r = String(realHHMM).match(/(\d{1,2}):(\d{2})/);
+      var s = String(schedHHMM).match(/(\d{1,2}):(\d{2})/);
+      if (!r || !s) return null;
+      var rMin = parseInt(r[1], 10) * 60 + parseInt(r[2], 10);
+      var sMin = parseInt(s[1], 10) * 60 + parseInt(s[2], 10);
+      var d = ((rMin - sMin) % 1440 + 1440) % 1440;
+      if (d > 720) d -= 1440;
+      return d;
+    }
+
+    // Formata diferença assinada: "+33min" / "+1h47" / "no horário".
+    function _fmtDiff(min) {
+      if (min == null) return '—';
+      var abs = Math.abs(Math.round(min));
+      if (abs === 0) return 'no horário';
+      var sign = min > 0 ? '+' : '−';
+      if (abs < 60) return sign + abs + 'min';
+      var hh = Math.floor(abs / 60);
+      var mm = abs % 60;
+      return sign + hh + 'h' + (mm > 0 ? ('0' + mm).slice(-2) : '');
+    }
+
+    // Monta as duas células <td> (Comercial + Dif.).
+    // No 1º ponto (origem) a comparação é com a SAÍDA (partida); nos demais, com a entrada (chegada).
+    function _comercialCells(comercial, entradaReal, saidaReal, usarSaida) {
+      var com = comercial ? String(comercial).trim() : '';
+      var real = _extractHHMM(usarSaida ? saidaReal : entradaReal);
+      var dif = (com && real) ? _diffMin(real, com) : null;
+      var comCel = com
+        ? '<span style="color:#1565c0; font-family:monospace; font-size:11px;">' + _escHtml(com) + '</span>'
+        : '<span style="color:var(--text3);">—</span>';
+      var cor = dif == null ? 'var(--text3)' : dif > 0 ? 'var(--vermelho)' : dif < 0 ? 'var(--verde)' : 'var(--text2)';
+      var difCel = '<span style="color:' + cor + '; font-weight:' + (dif ? '600' : '400') + '; font-size:11px;">' + _fmtDiff(dif) + '</span>';
+      return '<td style="white-space:nowrap;">' + comCel + '</td>' +
+             '<td style="white-space:nowrap;">' + difCel + '</td>';
+    }
+
     function _setText(id, val) {
       var el = document.getElementById(id);
       if (el) el.textContent = String(val);
@@ -735,7 +877,9 @@
       renderAlertas,
       renderSummary,
       atualizarContadoresComparacao,
-      resetUI
+      resetUI,
+      toggleApoioStatus,
+      getApoioState
     };
   })();
 </script>

@@ -32,13 +32,15 @@ var ComparisonService = (() => {
       // Todos não visitados
       return esquemaPontos.map(function(ep) {
         return {
-          id_esquema:      ep.id_esquema,
-          ordem:           ep.ordem,
-          id_ponto:        ep.id_ponto,
-          nome_ponto:      ep.nome_ponto,
-          visitado:        false,
-          ponto_realizado: null,
-          status:          'Não visitado'
+          id_esquema:        ep.id_esquema,
+          ordem:             ep.ordem,
+          id_ponto:          ep.id_ponto,
+          nome_ponto:        ep.nome_ponto,
+          horario_comercial: ep.horario_comercial || '',
+          tempo_local:       ep.tempo_local || '',
+          visitado:          false,
+          ponto_realizado:   null,
+          status:            'Não visitado'
         };
       });
     }
@@ -59,13 +61,15 @@ var ComparisonService = (() => {
       var pontoRealizado = realizadosMap[chave] || null;
       var visitado = pontoRealizado !== null;
       return {
-        id_esquema:      ep.id_esquema,
-        ordem:           ep.ordem,
-        id_ponto:        ep.id_ponto,
-        nome_ponto:      ep.nome_ponto,
-        visitado:        visitado,
-        ponto_realizado: pontoRealizado,
-        status:          visitado ? 'Realizado' : 'Não visitado'
+        id_esquema:        ep.id_esquema,
+        ordem:             ep.ordem,
+        id_ponto:          ep.id_ponto,
+        nome_ponto:        ep.nome_ponto,
+        horario_comercial: ep.horario_comercial || '',
+        tempo_local:       ep.tempo_local || '',
+        visitado:          visitado,
+        ponto_realizado:   pontoRealizado,
+        status:            visitado ? 'Realizado' : 'Não visitado'
       };
     });
   }

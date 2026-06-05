@@ -139,9 +139,9 @@
   /* ── Combobox pesquisável de esquema ── */
   .esquema-combobox {
     position: relative;
-    min-width: 300px;
+    min-width: 220px;
     max-width: 480px;
-    flex: 1;
+    flex: 1 1 auto;
   }
   .esquema-combobox-input-wrap {
     position: relative;
@@ -253,11 +253,16 @@
   }
 
   .esquema-info {
+    flex-shrink: 0;
     font-size: 11px;
-    color: var(--text3);
+    font-weight: 600;
+    color: var(--text2);
+    background: var(--bg2, var(--bg));
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 4px 9px;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    line-height: 1.2;
   }
 
   /* ---- Badges ---- */
