@@ -36,6 +36,7 @@ var _osrmGeometry    = null;
 var _comercialTimes  = {};
 var _horStartIdx     = 0;
 var _customStopTimes = {};
+var _temposPermanencia = {};   // { codigoLocal: minutos } — vindo da aba TEMPO_PERMANENCIA
 var _legVia          = {};
 var _tipoViaVel      = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
 var _VIA_LABEL_TO_KEY = { 'BR': 'BR', 'Estadual': 'Est', 'Municipal': 'Mun', 'Urbana': 'Urb' };
@@ -78,7 +79,12 @@ function _stopTime(tipo) {
 
 function _getStopTime(idx, tipo) {
   var key = _seq[idx] ? _seq[idx].idPonto : idx;
-  return _customStopTimes[key] !== undefined ? _customStopTimes[key] : _stopTime(tipo);
+  // Hierarquia: 1º edição manual / tempo_local salvo no esquema
+  //             2º TEMPO_PERMANENCIA (limite por rodoviária)
+  //             3º padrão por tipo (15/20/5)
+  if (_customStopTimes[key] !== undefined)   return _customStopTimes[key];
+  if (_temposPermanencia[key] !== undefined) return _temposPermanencia[key];
+  return _stopTime(tipo);
 }
 
 // Haversine client-side (km) — mantido para uso eventual no mapa
@@ -1958,6 +1964,7 @@ window.onload = function() {
     .withSuccessHandler(function(d) {
       _esqs   = d.esquemas || [];
       _locais = d.locais   || [];
+      _temposPermanencia = d.temposPermanencia || {};
       _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
       doneLoading();
       initMap();

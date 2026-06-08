@@ -104,6 +104,70 @@ var SheetsService = (() => {
   }
 
   /**
+   * Lê a aba "TEMPO_PERMANENCIA" e retorna um mapa { codigoLocal: minutos }.
+   * Esse é o limite/padrão de tempo de parada por rodoviária, usado para
+   * pré-preencher a parada de cada ponto ao abrir um esquema.
+   *
+   * As colunas são localizadas pelo cabeçalho (linha 1), então a posição da
+   * coluna COD_LOCAL pode variar sem quebrar a leitura:
+   *   - "Tempo de Permanencia" (hh:mm)  → tempo
+   *   - "COD_LOCAL"            (código) → chave (= código na aba LOCAIS)
+   *
+   * @returns {Object<string, number>}  ex.: { "224": 30, "207": 30 }
+   */
+  function getTemposPermanencia() {
+    const ss = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = ss.getSheetByName('TEMPO_PERMANENCIA');
+    if (!sheet) return {}; // aba opcional
+
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastRow < 2 || lastCol < 2) return {};
+
+    // getDisplayValues → tempo já vem como string "00:30" (sem dor de cabeça
+    // com Date/fuso) e código como texto "207".
+    const values = sheet.getRange(1, 1, lastRow, lastCol).getDisplayValues();
+    const header = values[0].map(_normHeader);
+
+    let tempoCol = -1;
+    let codCol   = -1;
+    header.forEach((h, i) => {
+      if (codCol   === -1 && h.indexOf('cod')   !== -1) codCol   = i; // COD_LOCAL
+      if (tempoCol === -1 && h.indexOf('tempo') !== -1) tempoCol = i; // Tempo de Permanencia
+    });
+
+    // Sem a coluna de código (ainda não preenchida), a feature fica inativa.
+    if (tempoCol === -1 || codCol === -1) return {};
+
+    const map = {};
+    for (let r = 1; r < values.length; r++) {
+      const codigo = String(values[r][codCol] || '').trim();
+      const min    = _parseHHMMtoMin(values[r][tempoCol]);
+      if (codigo && min > 0) map[codigo] = min;
+    }
+    return map;
+  }
+
+  /** Normaliza cabeçalho: minúsculo, sem acento, sem espaços nas bordas. */
+  function _normHeader(h) {
+    return String(h || '').trim().toLowerCase()
+      .normalize('NFD').replace(/[̀-ͯ]/g, '');
+  }
+
+  /** Converte "00:30" → 30 (minutos). Aceita também número puro de minutos. */
+  function _parseHHMMtoMin(val) {
+    const s = String(val || '').trim();
+    if (!s) return 0;
+    if (s.indexOf(':') !== -1) {
+      const parts = s.split(':');
+      const h = parseInt(parts[0], 10) || 0;
+      const m = parseInt(parts[1], 10) || 0;
+      return h * 60 + m;
+    }
+    return parseInt(s, 10) || 0;
+  }
+
+  /**
    * Interpreta flags booleanas do CSV exportado.
    * O sistema usa 'T' (True), 'S' (Sim), '1' e 'Y' como verdadeiro.
    * Usa 'F', 'N', '0', '' como falso.
@@ -223,5 +287,5 @@ var SheetsService = (() => {
     return false;
   }
 
-  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, saveMotorista, updateMotoristaIbutton };
+  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, getTemposPermanencia, saveMotorista, updateMotoristaIbutton };
 })();

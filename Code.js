@@ -725,8 +725,9 @@ function getDadosManager() {
   try {
     EsquemasService.invalidateCache();
     return {
-      esquemas: EsquemasService.getEsquemas(),
-      locais:   SheetsService.getLocaisParaManager()
+      esquemas:          EsquemasService.getEsquemas(),
+      locais:            SheetsService.getLocaisParaManager(),
+      temposPermanencia: SheetsService.getTemposPermanencia()
     };
   } catch (e) {
     throw new Error('Erro ao carregar dados do manager: ' + e.message);
