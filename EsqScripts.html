@@ -1931,10 +1931,15 @@ function importarDeEsquema(idEsq) {
       // Importa dados específicos da ROTA (não do horário)
       _legVia = {};
       pontos.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
-      // tempo_local salvo é ignorado: a parada vem da aba TEMPO_PERMANENCIA
-      // (fonte viva) e, na ausência de cadastro, do padrão por tipo.
-      // _customStopTimes guarda apenas edições feitas na própria sessão.
+      // Carrega o tempo_local salvo APENAS para pontos SEM cadastro na aba
+      // TEMPO_PERMANENCIA (apoio, locais especiais) — esses precisam de parada
+      // própria persistida. Pontos da aba são governados por ela (fonte viva).
       _customStopTimes = {};
+      pontos.forEach(function(p) {
+        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
+          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+        }
+      });
       // Horários comerciais são específicos de cada horário — não importar
       _comercialTimes  = {};
       _osrmLegs        = undefined;
@@ -2293,9 +2298,14 @@ function carregarPontos(idEsq) {
         var t = _normalizeHHMM(p.horarioComercial);
         if (t) _comercialTimes[p.idPonto] = t;
       });
-      // tempo_local salvo é ignorado: parada vem da aba TEMPO_PERMANENCIA
-      // (> padrão por tipo). _customStopTimes só guarda edições da sessão.
+      // tempo_local salvo só para pontos SEM cadastro na aba (apoio/especiais);
+      // pontos da aba são governados por ela (fonte viva).
       _customStopTimes = {};
+      pontos.forEach(function(p) {
+        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
+          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+        }
+      });
       _legVia = {};
       pontos.forEach(function(p) {
         if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho;
