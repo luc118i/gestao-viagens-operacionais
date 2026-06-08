@@ -1932,7 +1932,13 @@ function importarDeEsquema(idEsq) {
       _legVia = {};
       pontos.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
       _customStopTimes = {};
-      pontos.forEach(function(p) { if (p.tempoLocal) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal); });
+      // tempo_local salvo só prevalece em pontos SEM cadastro na aba TEMPO_PERMANENCIA;
+      // pontos da aba são governados por ela (fonte viva).
+      pontos.forEach(function(p) {
+        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
+          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+        }
+      });
       // Horários comerciais são específicos de cada horário — não importar
       _comercialTimes  = {};
       _osrmLegs        = undefined;
@@ -2292,8 +2298,12 @@ function carregarPontos(idEsq) {
         if (t) _comercialTimes[p.idPonto] = t;
       });
       _customStopTimes = {};
+      // tempo_local salvo só prevalece em pontos SEM cadastro na aba TEMPO_PERMANENCIA
+      // (a aba é fonte viva e governa os pontos cadastrados).
       pontos.forEach(function(p) {
-        if (p.tempoLocal) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
+          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
+        }
       });
       _legVia = {};
       pontos.forEach(function(p) {
