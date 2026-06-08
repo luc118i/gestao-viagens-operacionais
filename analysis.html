@@ -80,6 +80,68 @@
     function getApoioState() { return _apoioState; }
 
     // ============================================================
+    //  Agrupamento por motorista (cores + cabeçalho de grupo)
+    // ============================================================
+    var GRUPO_CORES = ['#f47920','#1565c0','#22a96a','#8e24aa','#d94040','#0097a7','#c2185b','#5d4037'];
+    var _grupos = [];
+    var _lastGrupoIdx = null;
+
+    // Lê os vínculos do AppModule e monta as faixas de seq coloridas, ordenadas.
+    function _buildGruposMotorista() {
+      _grupos = [];
+      var vinc = (typeof AppModule !== 'undefined' && AppModule.getVinculos) ? (AppModule.getVinculos() || []) : [];
+      vinc.forEach(function(v, i) {
+        if (v.seqMin == null || v.seqMax == null) return;
+        _grupos.push({
+          idx:  i,
+          min:  Math.min(v.seqMin, v.seqMax),
+          max:  Math.max(v.seqMin, v.seqMax),
+          nome: v.nome || v.matricula || ('Motorista ' + (i + 1)),
+          mat:  (v.matricula && v.matricula !== '—') ? v.matricula : '',
+          ini:  v.ponto_inicio || '',
+          fim:  v.ponto_fim || '',
+          cor:  GRUPO_CORES[i % GRUPO_CORES.length]
+        });
+      });
+      _grupos.sort(function(a, b) { return a.min - b.min; });
+    }
+
+    function _grupoPorSeq(seq) {
+      if (seq == null) return null;
+      for (var i = 0; i < _grupos.length; i++) {
+        if (seq >= _grupos[i].min && seq <= _grupos[i].max) return _grupos[i];
+      }
+      return null;
+    }
+
+    /**
+     * Emite o cabeçalho do grupo quando o motorista muda e aplica a borda colorida no tr.
+     * Deve ser chamado ANTES de tbody.appendChild(tr). Pontos sem seq (não visitados)
+     * não alteram o agrupamento.
+     */
+    function _grupoDecorate(tbody, tr, seq) {
+      if (seq == null) return;
+      var g = _grupoPorSeq(seq);
+      var key = g ? g.idx : null;
+      if (key !== _lastGrupoIdx) {
+        _lastGrupoIdx = key;
+        if (g) {
+          var hr = document.createElement('tr');
+          hr.className = 'grupo-header-row';
+          var trechoTxt = (g.ini && g.fim) ? (g.ini + ' → ' + g.fim) : '';
+          hr.innerHTML = '<td colspan="10" style="padding:7px 12px;background:' + g.cor + '14;border-left:4px solid ' + g.cor + ';">' +
+            '<span style="display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:' + g.cor + ';">' +
+            '<span style="width:9px;height:9px;border-radius:50%;background:' + g.cor + ';display:inline-block;flex-shrink:0;"></span>' +
+            _escHtml(g.nome) + (g.mat ? ' · mat. ' + _escHtml(g.mat) : '') +
+            (trechoTxt ? '<span style="color:var(--text3);font-weight:500;margin-left:4px;">' + _escHtml(trechoTxt) + '</span>' : '') +
+            '</span></td>';
+          tbody.appendChild(hr);
+        }
+      }
+      if (g) tr.style.borderLeft = '4px solid ' + g.cor;
+    }
+
+    // ============================================================
     //  renderPontosTable — nova tabela de eventos (colunas: #, Ponto, Status, Parada, Excesso)
     // ============================================================
 
@@ -94,6 +156,8 @@
       tbody.innerHTML = '';
       _lastTrip = enrichedTrip || null;
       _lastComp = comparacao || null;
+      _buildGruposMotorista();
+      _lastGrupoIdx = null;
 
       // Mapa código → comparação
       const statusMap = {};
@@ -116,6 +180,7 @@
     function _renderEnrichedRows(tbody, enrichedTrip) {
       enrichedTrip.forEach(function(ponto, idx) {
         var tr = document.createElement('tr');
+        _grupoDecorate(tbody, tr, ponto.seq);
 
         var paradaS  = ponto.parada_s || 0;
         var esperado = _getTempoEsperado(ponto);
@@ -164,6 +229,7 @@
         var pr = item.ponto_realizado;
         var seq = pr ? pr.seq : null;
         var _ov = _ovState(seq);
+        _grupoDecorate(tbody, tr, seq);
 
         var paradaS  = pr ? (pr.parada_s || 0) : 0;
         var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
@@ -268,6 +334,7 @@
       var pr = item.ponto_realizado;
       var seq = pr ? pr.seq : null;
       var _ov = _ovState(seq);
+      _grupoDecorate(tbody, tr, seq);
 
       var paradaS  = pr ? (pr.parada_s || 0) : 0;
       var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
@@ -314,6 +381,7 @@
       var paradaS  = ponto.parada_s || 0;
       var excessoS = paradaS; // parada inteira é excesso — não deveria existir
       var _ov = _ovState(ponto.seq);
+      _grupoDecorate(tbody, tr, ponto.seq);
 
       tr.style.fontStyle = 'italic';
 

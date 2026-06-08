@@ -1074,11 +1074,19 @@
                   return v.matricula === mat;
                 })
               : -1;
+            var conflitoI = _trechoConflita(inicio, fim, existIdx);
+            if (conflitoI) {
+              UIModule.showToast('Trecho conflita com "' + (conflitoI.nome || conflitoI.matricula || '') + '" — pontos já vinculados a outro motorista.', 'error', 5000);
+              return;
+            }
+            var _ri = _computeSeqRange(inicio, fim, null, null);
             var vinculo = {
               matricula: mat || "—",
               nome: nome,
               ponto_inicio: inicio,
               ponto_fim: fim,
+              seqMin: _ri.min,
+              seqMax: _ri.max,
             };
             if (existIdx >= 0) {
               _vinculos[existIdx] = vinculo;
@@ -1088,6 +1096,7 @@
 
             _populaSelectMotoristaRelatorio();
             _renderVinculadosList();
+            _refreshEventos();
 
             var inicioNome = _nomePontoPorId(inicio);
             var fimNome = _nomePontoPorId(fim);
@@ -1305,12 +1314,17 @@
         if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
       }
 
+      var conflito = _trechoConflita(inicio, fim, -1);
+      if (conflito) { UIModule.showToast('Trecho conflita com "' + (conflito.nome || conflito.matricula || '') + '" — pontos já vinculados a outro motorista.', 'error', 5000); return; }
+
       // Confirma vínculo imediatamente (otimista)
-      _vinculos.push({ matricula: mat, nome: nome, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: d.seqMin != null ? d.seqMin : null, seqMax: d.seqMax != null ? d.seqMax : null });
+      var _r = _computeSeqRange(inicio, fim, d.seqMin, d.seqMax);
+      _vinculos.push({ matricula: mat, nome: nome, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: _r.min, seqMax: _r.max });
       _autoVinculoDataList.splice(idx, 1);
       _populaSelectMotoristaRelatorio();
       _atualizarPreviewRelatorio();
       _renderModalMotorista();
+      _refreshEventos();
       UIModule.showToast('Motorista "' + nome + '" vinculado.', 'success', 3000);
 
       // Salva na planilha em background (falha não bloqueia)
@@ -1331,9 +1345,7 @@
       if (!d) return;
       var pontos = _getPontosLista();
       var optsBase = '<option value="">— Selecione —</option>' +
-        pontos.map(function(p) {
-          return '<option value="' + _escHtml(p.valor) + '">' + _escHtml(p.label) + '</option>';
-        }).join('');
+        pontos.map(function(p) { return _optionPontoHtml(p, -1); }).join('');
 
       var selIni = document.getElementById('mCard_ini_' + idx);
       var selFim = document.getElementById('mCard_fim_' + idx);
@@ -1406,12 +1418,17 @@
         if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
       }
 
-      _vinculos.push({ matricula: mat, nome: nome || d.nomeCsv, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: d.seqMin != null ? d.seqMin : null, seqMax: d.seqMax != null ? d.seqMax : null });
+      var conflitoC = _trechoConflita(inicio, fim, -1);
+      if (conflitoC) { UIModule.showToast('Trecho conflita com "' + (conflitoC.nome || conflitoC.matricula || '') + '" — pontos já vinculados a outro motorista.', 'error', 5000); return; }
+
+      var _rc = _computeSeqRange(inicio, fim, d.seqMin, d.seqMax);
+      _vinculos.push({ matricula: mat, nome: nome || d.nomeCsv, nomeCsv: d.nomeCsv, ponto_inicio: inicio, ponto_fim: fim, seqMin: _rc.min, seqMax: _rc.max });
       _autoVinculoDataList.splice(idx, 1);
       _populaSelectMotoristaRelatorio();
       _atualizarPreviewRelatorio();
       UIModule.showToast('Motorista "' + (nome || d.nomeCsv) + '" vinculado.', 'success', 3000);
       _renderModalMotorista();
+      _refreshEventos();
 
       // Salva o iButton na planilha para reconhecimento automático nas próximas sessões
       if (d.nomeCsv && d.motorista && !d.motorista.ibutton) {
@@ -1510,9 +1527,7 @@
     function _popularSelectsManual() {
       var pontos = _getPontosLista();
       var optsBase = '<option value="">— Selecione —</option>' +
-        pontos.map(function(p) {
-          return '<option value="' + _escHtml(p.valor) + '">' + _escHtml(p.label) + '</option>';
-        }).join('');
+        pontos.map(function(p) { return _optionPontoHtml(p, -1); }).join('');
       var selIni = document.getElementById('mManual_ini');
       var selFim = document.getElementById('mManual_fim');
       if (selIni) selIni.innerHTML = optsBase;
@@ -1555,11 +1570,13 @@
     }
 
     function _vincularMotorista(mat, nome, base, inicio, fim, msg) {
-      _vinculos.push({ matricula: mat || '—', nome: nome, base: base || '', ponto_inicio: inicio, ponto_fim: fim });
+      var _r = _computeSeqRange(inicio, fim, null, null);
+      _vinculos.push({ matricula: mat || '—', nome: nome, base: base || '', ponto_inicio: inicio, ponto_fim: fim, seqMin: _r.min, seqMax: _r.max });
       _populaSelectMotoristaRelatorio();
       _atualizarPreviewRelatorio();
       UIModule.showToast(msg || ('"' + nome + '" vinculado com sucesso.'), 'success', 3000);
       _renderModalMotorista();
+      _refreshEventos();
     }
 
     function _confirmarManual() {
@@ -1577,6 +1594,9 @@
       if (!inicio || !fim) { UIModule.showToast('Selecione o ponto inicial e final.', 'error'); return; }
       var dup = mat ? _vinculos.find(function(v) { return v.matricula === mat; }) : null;
       if (dup) { UIModule.showToast('Este motorista já está vinculado.', 'warning'); return; }
+
+      var conflitoM = _trechoConflita(inicio, fim, -1);
+      if (conflitoM) { UIModule.showToast('Trecho conflita com "' + (conflitoM.nome || conflitoM.matricula || '') + '" — pontos já vinculados a outro motorista.', 'error', 5000); return; }
 
       var jaCadastrado = mat
         ? _motoristas.find(function(m) { return String(m.matricula).trim() === mat; })
@@ -2297,6 +2317,77 @@
                String(p.ponto  || '').trim() === key;
       });
       return found ? found.seq : null;
+    }
+
+    // ============================================================
+    //  EXCLUSIVIDADE DE TRECHO POR MOTORISTA
+    // ============================================================
+
+    /** Faixa de seq de um vínculo (usa seqMin/seqMax, ou deriva dos pontos). */
+    function _rangeDoVinculo(v) {
+      if (!v) return null;
+      var min = (v.seqMin != null) ? v.seqMin : _seqPorPonto(v.ponto_inicio);
+      var max = (v.seqMax != null) ? v.seqMax : _seqPorPonto(v.ponto_fim);
+      if (min == null || max == null) return null;
+      return { min: Math.min(min, max), max: Math.max(min, max) };
+    }
+
+    /**
+     * Vínculo que possui a seq no INTERIOR do seu trecho (extremos liberados p/ rendição).
+     * @param {number} seq
+     * @param {number} [excludeIdx]  índice de vínculo a ignorar (edição)
+     */
+    function _vinculoInteriorPorSeq(seq, excludeIdx) {
+      if (seq == null) return null;
+      for (var i = 0; i < _vinculos.length; i++) {
+        if (i === excludeIdx) continue;
+        var r = _rangeDoVinculo(_vinculos[i]);
+        if (r && seq > r.min && seq < r.max) return _vinculos[i];
+      }
+      return null;
+    }
+
+    /** Vínculo que bloqueia um ponto (pelo valor do option: codigo/nome/id). */
+    function _vinculoQueBloqueiaPonto(valorPonto, excludeIdx) {
+      return _vinculoInteriorPorSeq(_seqPorPonto(valorPonto), excludeIdx);
+    }
+
+    /**
+     * Retorna o vínculo conflitante se o trecho candidato sobrepõe o interior de
+     * outro trecho já vinculado. Extremos compartilhados (rendição) não conflitam.
+     */
+    function _trechoConflita(valIni, valFim, excludeIdx) {
+      var sa = _seqPorPonto(valIni), sb = _seqPorPonto(valFim);
+      if (sa == null || sb == null) return null;
+      var min = Math.min(sa, sb), max = Math.max(sa, sb);
+      for (var i = 0; i < _vinculos.length; i++) {
+        if (i === excludeIdx) continue;
+        var r = _rangeDoVinculo(_vinculos[i]);
+        if (r && r.min < max && min < r.max) return _vinculos[i]; // sobreposição de interior
+      }
+      return null;
+    }
+
+    /** Monta o <option> de um ponto, desabilitando quando já vinculado a outro motorista. */
+    function _optionPontoHtml(p, excludeIdx) {
+      var bloq = _vinculoQueBloqueiaPonto(p.valor, excludeIdx);
+      var dis  = bloq ? ' disabled' : '';
+      var suf  = bloq ? ' — já vinculado (' + _escHtml(bloq.nome || bloq.matricula || '') + ')' : '';
+      return '<option value="' + _escHtml(p.valor) + '"' + dis + '>' + _escHtml(p.label) + suf + '</option>';
+    }
+
+    /** Reaplica o agrupamento por motorista na tabela de eventos (se houver análise). */
+    function _refreshEventos() {
+      if (_enrichedTrip.length && _analysis && typeof _aplicarFiltroModo === 'function') {
+        _aplicarFiltroModo();
+      }
+    }
+
+    /** Faixa de seq a partir dos pontos selecionados (com fallback). */
+    function _computeSeqRange(inicio, fim, fbMin, fbMax) {
+      var a = _seqPorPonto(inicio), b = _seqPorPonto(fim);
+      if (a != null && b != null) return { min: Math.min(a, b), max: Math.max(a, b) };
+      return { min: (fbMin != null ? fbMin : null), max: (fbMax != null ? fbMax : null) };
     }
 
     /** Filtra esquema ao intervalo entre dois pontos (por id_ponto ou nome_ponto). */
