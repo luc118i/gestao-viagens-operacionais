@@ -61,6 +61,41 @@ var EsquemasService = (() => {
   }
 
   /**
+   * Retorna um mapa { id_esquema: nome_do_ponto_de_partida } para todos os
+   * esquemas, lendo a ESQUEMA_PONTOS uma única vez. Usado para agrupar os
+   * esquemas por terminal de origem na seleção.
+   * A "partida" é o primeiro ponto (menor ordem) que não seja garagem/
+   * fechamento; se todos forem, cai no primeiro ponto.
+   * @returns {Object<string,string>}
+   */
+  function getPartidasPorEsquema() {
+    var todos = _lerEsquemaPontos();
+    var byEsq = {};
+    todos.forEach(function(p) {
+      var id = String(p.id_esquema).trim();
+      if (!id) return;
+      (byEsq[id] = byEsq[id] || []).push(p);
+    });
+    var out = {};
+    Object.keys(byEsq).forEach(function(id) {
+      var pts = byEsq[id].sort(function(a, b) { return Number(a.ordem) - Number(b.ordem); });
+      out[id] = _partidaDoEsquema(pts);
+    });
+    return out;
+  }
+
+  /** Escolhe o ponto de partida: primeiro não-garagem/fechamento; senão, o primeiro. */
+  function _partidaDoEsquema(pontosOrdenados) {
+    for (var i = 0; i < pontosOrdenados.length; i++) {
+      var nome = String(pontosOrdenados[i].nome_ponto || '');
+      var tipo = String(pontosOrdenados[i].tipo || '');
+      if (/garagem/i.test(nome) || /fechamento/i.test(tipo)) continue;
+      return nome;
+    }
+    return pontosOrdenados.length ? String(pontosOrdenados[0].nome_ponto || '') : '';
+  }
+
+  /**
    * Limpa o cache de esquemas para forçar releitura na próxima chamada.
    */
   function invalidateCache() {
@@ -255,9 +290,10 @@ var EsquemasService = (() => {
   }
 
   return {
-    getEsquemas:        getEsquemas,
-    getPontosDoEsquema: getPontosDoEsquema,
-    invalidateCache:    invalidateCache
+    getEsquemas:           getEsquemas,
+    getPontosDoEsquema:    getPontosDoEsquema,
+    getPartidasPorEsquema: getPartidasPorEsquema,
+    invalidateCache:       invalidateCache
   };
 
 })();

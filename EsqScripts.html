@@ -2094,23 +2094,13 @@ function setupEsqSearch() {
   var inp  = document.getElementById('esqSearch');
   var drop = document.getElementById('esqDrop');
 
-  // focus programático (abrirModalEsquema) NÃO abre o dropdown quando vazio —
-  // só reabre se já havia texto (ex: usuário voltou ao modal após digitar algo).
-  // Click do usuário no input → sempre mostra todos os resultados.
-  inp.addEventListener('focus', function() {
-    if (this.value.trim()) renderEsqs(this.value);
-  });
-  inp.addEventListener('click', function() {
-    renderEsqs(this.value); // usuário clicou intencionalmente → mostra tudo
-  });
+  // Lista persistente agrupada por terminal de partida — sempre visível no
+  // modal e filtrada conforme o usuário digita.
+  inp.addEventListener('focus', function() { renderEsqs(this.value); });
+  inp.addEventListener('click', function() { renderEsqs(this.value); });
   inp.addEventListener('input', function() { renderEsqs(this.value); });
 
-  // blur fecha com delay — o mousedown no dropdown cancela o blur antes de fechar
-  inp.addEventListener('blur', function() {
-    setTimeout(function() { drop.classList.remove('open'); }, 160);
-  });
-
-  // mousedown no dropdown previne o blur do input, mantendo a lista visível ao clicar num item
+  // mousedown no item previne o blur do input, mantendo a seleção funcionando
   drop.addEventListener('mousedown', function(e) { e.preventDefault(); });
 
   document.getElementById('btnNovo').addEventListener('click', novoEsquema);
@@ -2132,19 +2122,40 @@ function renderEsqs(q) {
       || norm(e.nome_linha).includes(nq)
       || norm(e.horario || '').includes(nq)
       || norm(e.sentido || '').includes(nq)
+      || norm(e.partida || '').includes(nq)
       || (timeQ && (e.horario || '').startsWith(timeQ));
-  }).slice(0, 60);
+  });
 
-  drop.innerHTML = list.length
-    ? list.map(function(e) {
-        return '<div class="sdi" data-id="' + esc(e.id_esquema) + '">'
-          + '<div class="sdi-main">' + hl(e.id_esquema + ' — ' + e.nome_linha, q) + '</div>'
-          + '<div class="sdi-meta">'
-          + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
-          + esc(e.sentido || '')
-          + '</div></div>';
-      }).join('')
-    : '<div class="sd-empty">Nenhum resultado</div>';
+  if (!list.length) {
+    drop.innerHTML = '<div class="sd-empty">Nenhum resultado</div>';
+    drop.classList.add('open');
+    return;
+  }
+
+  // Agrupa por terminal de partida (1º ponto do esquema)
+  var groups = {};
+  list.forEach(function(e) {
+    var key = (e.partida && e.partida.trim()) ? e.partida.trim() : 'Sem partida definida';
+    (groups[key] = groups[key] || []).push(e);
+  });
+  var keys = Object.keys(groups).sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
+
+  drop.innerHTML = keys.map(function(gk) {
+    var items = groups[gk].sort(function(a, b) {
+      return norm(a.nome_linha).localeCompare(norm(b.nome_linha))
+          || String(a.horario || '').localeCompare(String(b.horario || ''));
+    });
+    return '<div class="esq-group-h">' + esc(gk)
+      + '<span class="esq-group-c">' + items.length + '</span></div>'
+      + items.map(function(e) {
+          return '<div class="sdi" data-id="' + esc(e.id_esquema) + '">'
+            + '<div class="sdi-main">' + hl(e.id_esquema + ' — ' + e.nome_linha, q) + '</div>'
+            + '<div class="sdi-meta">'
+            + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+            + esc(e.sentido || '')
+            + '</div></div>';
+        }).join('');
+  }).join('');
 
   drop.classList.add('open');
   drop.querySelectorAll('.sdi').forEach(function(el) {
@@ -2488,6 +2499,7 @@ function abrirModalEsquema() {
   var overlay = document.getElementById('esqModalOverlay');
   overlay.classList.remove('hidden');
   document.getElementById('btnFecharModalEsq').style.display = _sel ? '' : 'none';
+  renderEsqs(document.getElementById('esqSearch').value || '');
   document.getElementById('esqSearch').focus();
 }
 

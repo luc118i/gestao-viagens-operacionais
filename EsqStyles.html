@@ -988,9 +988,23 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 .esq-modal .sd {
   position: static; margin-top: 4px;
   border: 1.5px solid var(--border); border-radius: var(--r-lg);
-  box-shadow: none; max-height: 260px;
+  box-shadow: none; max-height: 52vh;
 }
 .esq-modal .sdi { padding: 11px 14px; }
+.esq-group-h {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 7px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 10px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-3);
+}
+.esq-group-c {
+  background: var(--brand-bg); color: var(--brand);
+  border-radius: 10px; padding: 1px 7px;
+  font-size: 10px; font-weight: 700;
+}
 .esq-modal .sdi-main { font-size: 14px; font-weight: 700; color: var(--text-1); }
 .esq-modal .sdi-meta { font-size: 12px; color: var(--text-2); margin-top: 3px; }
 .esq-search-wrap { position: relative; }

@@ -724,8 +724,13 @@ function doGet(e) {
 function getDadosManager() {
   try {
     EsquemasService.invalidateCache();
+    var esquemas = EsquemasService.getEsquemas();
+    var partidas = EsquemasService.getPartidasPorEsquema();
+    esquemas.forEach(function(e) {
+      e.partida = partidas[String(e.id_esquema).trim()] || '';
+    });
     return {
-      esquemas:          EsquemasService.getEsquemas(),
+      esquemas:          esquemas,
       locais:            SheetsService.getLocaisParaManager(),
       temposPermanencia: SheetsService.getTemposPermanencia()
     };
