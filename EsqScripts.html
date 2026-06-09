@@ -2667,12 +2667,12 @@ function _homeRowHtml(e) {
     +   '<span class="home-row-check">' + ico('check', 11) + '</span>'
     +   '<span class="home-row-id">#' + esc(e.id_esquema) + '</span>'
     +   '<span class="home-row-label">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</span>'
-    +   (vazio ? '<span class="home-card-nopts" style="flex-shrink:0;">sem pontos</span>' : _sentidoTag(e.sentido))
+    +   (vazio ? '<span class="home-card-nopts" style="flex-shrink:0;">sem pontos</span>' : '')
     + '</span>'
     + '<span class="home-row-hor">' + (e.horario ? esc(e.horario) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.partida ? esc(e.partida) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.fim     ? esc(e.fim)     : '—') + '</span>'
-    + '<span class="home-row-sent">' + esc(e.sentido || '—') + '</span>'
+    + '<span class="home-row-sent">' + _sentidoTag(e.sentido) + '</span>'
     + '<button class="home-card-del" title="Excluir" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">' + ico('x', 12) + '</button>'
     + '</div>';
 }
