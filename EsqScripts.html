@@ -3080,12 +3080,12 @@ function _htmlToPdfBlob(html) {
     wrapper.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;'
       + 'pointer-events:none;z-index:8999;';
 
-    // Usa @scope para conter o CSS do PDF dentro do wrapper,
-    // evitando que seletores globais (* body table etc.) afetem a página
-    // e causem o "tremor" visível durante o batch.
+    // CSS injetado diretamente (sem @scope — html2canvas não aplica estilos
+    // de regras @scope ao ler o DOM). O tremor visual é coberto pelo spinner
+    // de loading (z-index:9000) que está ativo durante todo o batch.
     var styleEl = document.createElement('style');
-    styleEl.textContent = '@scope (#' + wrapperId + ') { ' + styleMatch[1] + ' }';
-    document.head.appendChild(styleEl); // head para garantir que o browser aplica antes do render
+    styleEl.textContent = styleMatch[1];
+    document.head.appendChild(styleEl);
 
     // Injeta o corpo
     var content = document.createElement('div');
