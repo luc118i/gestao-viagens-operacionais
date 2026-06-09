@@ -909,22 +909,35 @@ var ReportService = (() => {
     paradas = paradas.filter(function(p) { return !p.codigo || !_extremos[String(p.codigo).trim()]; });
     excessos = excessos.filter(function(e) { return !e.codigo || !_extremos[String(e.codigo).trim()]; });
 
-    // Tempo esperado por ponto (do esquema operacional)
+    // Tempo esperado por ponto — prioridade: tempo_local do esquema (legado)
+    // > TEMPO_PERMANENCIA (aba, { codigo: minutos }) > fallback por tipo.
     var esqTLMap = {};
+    var tempoPerm = params.temposPermanencia || {};
     // Horário comercial por ponto (do esquema operacional) — usado para medir atraso
     var esqComercialMap = {};
     _esqOrd.forEach(function(ep) {
-      if (ep.id_ponto && ep.tempo_local) {
+      var idPonto = ep.id_ponto ? String(ep.id_ponto).trim() : '';
+      if (!idPonto) return;
+      // tempo_local salvo (pode ainda existir em esquemas antigos) — prioridade máxima
+      if (ep.tempo_local) {
         var parts = String(ep.tempo_local).trim().split(':');
         var tl = parts.length === 2
           ? (parseInt(parts[0], 10) || 0) * 60 + (parseInt(parts[1], 10) || 0)
           : parseFloat(ep.tempo_local) || 0;
-        if (tl > 0) esqTLMap[String(ep.id_ponto).trim()] = tl;
+        if (tl > 0) { esqTLMap[idPonto] = tl; }
       }
-      if (ep.id_ponto && ep.horario_comercial) {
-        esqComercialMap[String(ep.id_ponto).trim()] = String(ep.horario_comercial).trim();
+      // TEMPO_PERMANENCIA: usa se ainda não foi definido pelo tempo_local
+      if (esqTLMap[idPonto] === undefined && tempoPerm[idPonto] !== undefined) {
+        esqTLMap[idPonto] = tempoPerm[idPonto];
+      }
+      if (ep.horario_comercial) {
+        esqComercialMap[idPonto] = String(ep.horario_comercial).trim();
       }
     });
+
+    // Pontos que aparecem na viagem mas NÃO estão no esquema (fora de rota)
+    // também recebem o tempo da aba, se cadastrado.
+    // A busca abaixo cobre esse caso ao usar esqTLMap com fallback direto a tempoPerm.
 
     var tripForMap = payload.tripForMap || [];
     var tripLastIdx = tripForMap.length - 1;
@@ -1013,9 +1026,10 @@ var ReportService = (() => {
           var isApoio = !!pt.apoioManual; // ajuste manual: ponto de apoio legítimo
           // Ponto fora do esquema: tem parada, não é garagem e não consta no esquema (apoio nunca é "fora")
           var isForaEsquema = !isApoio && !isGaragem && paradaMin > 0 && !(codigo && esquemaIdSet[codigo]);
-          var esperadoMin = esqTLMap[codigo] != null ? esqTLMap[codigo]
-            : /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
-            : isGaragem ? 20
+          var esperadoMin = esqTLMap[codigo] != null    ? esqTLMap[codigo]
+            : (codigo && tempoPerm[codigo] != null)     ? tempoPerm[codigo]
+            : /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome)    ? 30
+            : isGaragem                                 ? 20
             : TEMPO_ESPERADO_PADRAO;
           var excessoMin = (isExtremo || isGaragem || isApoio) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
           var showInicioTag = isFirst && !isGaragem;

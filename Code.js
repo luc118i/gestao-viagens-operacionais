@@ -1046,6 +1046,10 @@ function getEsquemaPontos(idEsquema) {
  */
 function gerarRelatorio(params) {
   try {
+    // Injeta tempos da aba TEMPO_PERMANENCIA nos params — usado pelo ReportService
+    // para calcular excesso de parada por ponto (substitui tempo_local do esquema).
+    params.temposPermanencia = SheetsService.getTemposPermanencia();
+
     var payload = null;
 
     if (params.tipo === "MOTORISTA") {
