@@ -77,14 +77,16 @@ function _stopTime(tipo) {
   return STOP_DEFAULT;
 }
 
+var STOP_PADRAO_MIN = 30;  // padrão para pontos fora da aba TEMPO_PERMANENCIA
+
 function _getStopTime(idx, tipo) {
   var key = _seq[idx] ? _seq[idx].idPonto : idx;
-  // Hierarquia: 1º edição manual / tempo_local salvo no esquema
-  //             2º TEMPO_PERMANENCIA (limite por rodoviária)
-  //             3º padrão por tipo (15/20/5)
+  // Hierarquia: 1º edição manual feita na sessão
+  //             2º TEMPO_PERMANENCIA (aba)
+  //             3º 30 min fixo (tudo que não está na aba)
   if (_customStopTimes[key] !== undefined)   return _customStopTimes[key];
   if (_temposPermanencia[key] !== undefined) return _temposPermanencia[key];
-  return _stopTime(tipo);
+  return STOP_PADRAO_MIN;
 }
 
 // Haversine client-side (km) — mantido para uso eventual no mapa
@@ -1934,15 +1936,10 @@ function importarDeEsquema(idEsq) {
       // Importa dados específicos da ROTA (não do horário)
       _legVia = {};
       pontos.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
-      // Carrega o tempo_local salvo APENAS para pontos SEM cadastro na aba
-      // TEMPO_PERMANENCIA (apoio, locais especiais) — esses precisam de parada
-      // própria persistida. Pontos da aba são governados por ela (fonte viva).
+      // tempo_local não é mais usado: parada vem da aba TEMPO_PERMANENCIA e,
+      // fora dela, do padrão fixo de 30 min. _customStopTimes só guarda edições
+      // feitas na sessão.
       _customStopTimes = {};
-      pontos.forEach(function(p) {
-        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
-          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
-        }
-      });
       // Horários comerciais são específicos de cada horário — não importar
       _comercialTimes  = {};
       _osrmLegs        = undefined;
@@ -2315,14 +2312,9 @@ function carregarPontos(idEsq) {
         var t = _normalizeHHMM(p.horarioComercial);
         if (t) _comercialTimes[p.idPonto] = t;
       });
-      // tempo_local salvo só para pontos SEM cadastro na aba (apoio/especiais);
-      // pontos da aba são governados por ela (fonte viva).
+      // tempo_local não é mais usado como fallback: parada vem da aba e, fora
+      // dela, do padrão fixo de 30 min. _customStopTimes só guarda edições da sessão.
       _customStopTimes = {};
-      pontos.forEach(function(p) {
-        if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) {
-          _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal);
-        }
-      });
       _legVia = {};
       pontos.forEach(function(p) {
         if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho;
@@ -2882,8 +2874,7 @@ function _setupEsqStateLote(e, pts) {
   });
   _comercialTimes = {};
   pts.forEach(function(p) { var t = _normalizeHHMM(p.horarioComercial); if (t) _comercialTimes[p.idPonto] = t; });
-  _customStopTimes = {};
-  pts.forEach(function(p) { if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal); });
+  _customStopTimes = {};  // tempo_local não é mais fallback (aba → 30 min fixo)
   _legVia = {};
   pts.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
   _horStartIdx  = 0;
