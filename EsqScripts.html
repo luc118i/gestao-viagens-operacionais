@@ -3071,9 +3071,10 @@ function _htmlToPdfBlob(html) {
     var wrapperId = 'pdf_render_' + Date.now();
     var wrapper = document.createElement('div');
     wrapper.id = wrapperId;
-    // contain:strict isola layout/paint; pointer-events:none previne interação
-    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;'
-      + 'contain:strict;pointer-events:none;';
+    // position:fixed tira do fluxo normal (não afeta o layout da página).
+    // @scope já isola o CSS — contain foi removido pois contain:size causava
+    // height:0 no wrapper, cortando colunas e stat cards no PDF gerado.
+    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;pointer-events:none;';
 
     // Usa @scope para conter o CSS do PDF dentro do wrapper,
     // evitando que seletores globais (* body table etc.) afetem a página
