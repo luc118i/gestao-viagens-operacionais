@@ -2498,10 +2498,11 @@ function dirtySeq() {
 // ============================================================
 var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
 var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
-var _homeGroupBy   = 'regiao';
+var _homeGroupBy    = 'regiao';
+var _homeView       = 'grid';  // 'grid' | 'list'
 var _homeSelectMode = false;
-var _homeSelected   = {};   // { id_esquema: true }
-var _pdfLoteList    = null;  // lista de esquemas para o batch (null = todos)
+var _homeSelected   = {};      // { id_esquema: true }
+var _pdfLoteList    = null;    // lista de esquemas para o batch (null = todos)
 
 // Dimensões de agrupamento da home. keyOf(e) → rótulo do grupo; order (opcional)
 // define a ordem fixa das seções.
@@ -2515,6 +2516,7 @@ var HOME_GROUPS = {
 };
 
 function mostrarHome() {
+  try { var v = localStorage.getItem('vc_homeView'); if (v) setHomeView(v); } catch(e) {}
   renderHome();
   var h = document.getElementById('homeScreen');
   if (h) h.classList.add('open');
@@ -2538,6 +2540,16 @@ function setHomeGroup(g) {
   if (bar) bar.querySelectorAll('.home-gbtn').forEach(function(b) {
     b.classList.toggle('active', b.getAttribute('data-g') === g);
   });
+  renderHome();
+}
+
+function setHomeView(v) {
+  _homeView = v;
+  var gBtn = document.getElementById('homeBtnViewGrid');
+  var lBtn = document.getElementById('homeBtnViewList');
+  if (gBtn) gBtn.classList.toggle('active', v === 'grid');
+  if (lBtn) lBtn.classList.toggle('active', v === 'list');
+  try { localStorage.setItem('vc_homeView', v); } catch(e) {}
   renderHome();
 }
 
@@ -2570,26 +2582,33 @@ function renderHome() {
     return;
   }
 
+  var isList = (_homeView === 'list');
   body.innerHTML = keys.map(function(rk) {
     var items = groups[rk].sort(function(a, b) {
       return String(a.horario || '~').localeCompare(String(b.horario || '~'))
           || norm(a.nome_linha).localeCompare(norm(b.nome_linha));
     });
+    var innerHtml = isList
+      ? '<div class="home-list">'
+          + (isList ? '<div class="home-list-header"><span>Linha</span><span>Horário</span><span>Partida</span><span>Encerramento</span><span>Sentido</span></div>' : '')
+          + items.map(_homeRowHtml).join('')
+        + '</div>'
+      : '<div class="home-cards">' + items.map(_homeCardHtml).join('') + '</div>';
     return '<section class="home-region">'
       + '<div class="home-region-h"><span class="home-region-name">' + esc(rk) + '</span>'
       + '<span class="home-region-c">' + items.length + '</span></div>'
-      + '<div class="home-cards">' + items.map(_homeCardHtml).join('') + '</div>'
+      + innerHtml
       + '</section>';
   }).join('');
 
   body.classList.toggle('selecting', _homeSelectMode);
-  body.querySelectorAll('.home-card').forEach(function(el) {
+  body.querySelectorAll('.home-card, .home-row').forEach(function(el) {
     var id = el.getAttribute('data-id');
     if (_homeSelectMode && _homeSelected[id]) el.classList.add('selected');
     el.addEventListener('click', function() {
       var esq = _esqs.find(function(e) { return e.id_esquema === id; });
       if (_homeSelectMode) {
-        if (esq && esq.temPontos) _toggleHomeSel(id, el);  // sem pontos não é selecionável
+        if (esq && esq.temPontos) _toggleHomeSel(id, el);
         return;
       }
       if (esq) selecionarEsq(esq);
@@ -2615,6 +2634,25 @@ function _homeCardHtml(e) {
     + '<button class="home-card-del" title="Excluir esquema" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">'
     +   ico('x', 13)
     + '</button>'
+    + '</div>';
+}
+
+function _homeRowHtml(e) {
+  var cor   = _lineColor(e.nome_linha || e.id_esquema);
+  var vazio = !e.temPontos;
+  return '<div class="home-row' + (vazio ? ' no-points' : '') + '" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
+    + '<span class="home-row-check">' + ico('check', 12) + '</span>'
+    + '<span class="home-row-id">#' + esc(e.id_esquema) + '</span>'
+    + '<span class="home-row-name">'
+    +   (vazio ? '<span class="home-card-nopts">sem pontos</span> ' : '')
+    +   esc(e.nome_linha || ('Esquema #' + e.id_esquema))
+    +   ' ' + _sentidoTag(e.sentido)
+    + '</span>'
+    + '<span class="home-row-hor">' + (e.horario ? esc(e.horario) : '—') + '</span>'
+    + '<span class="home-row-loc">' + (e.partida ? esc(e.partida) : '—') + '</span>'
+    + '<span class="home-row-loc">' + (e.fim     ? esc(e.fim)     : '—') + '</span>'
+    + '<span class="home-row-sent">' + esc(e.sentido || '—') + '</span>'
+    + '<button class="home-card-del" title="Excluir esquema" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">' + ico('x', 12) + '</button>'
     + '</div>';
 }
 
