@@ -3068,13 +3068,19 @@ function _htmlToPdfBlob(html) {
     if (!styleMatch || !bodyMatch) { reject(new Error('HTML parse error')); return; }
 
     // Wrapper fora da área visível, largura A4 (794px ≈ 210mm a 96dpi)
+    var wrapperId = 'pdf_render_' + Date.now();
     var wrapper = document.createElement('div');
-    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;z-index:-999;overflow:visible;';
+    wrapper.id = wrapperId;
+    // contain:strict isola layout/paint; pointer-events:none previne interação
+    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;'
+      + 'contain:strict;pointer-events:none;';
 
-    // Injeta o CSS do PDF num <style> isolado dentro do wrapper
+    // Usa @scope para conter o CSS do PDF dentro do wrapper,
+    // evitando que seletores globais (* body table etc.) afetem a página
+    // e causem o "tremor" visível durante o batch.
     var styleEl = document.createElement('style');
-    styleEl.textContent = styleMatch[1];
-    wrapper.appendChild(styleEl);
+    styleEl.textContent = '@scope (#' + wrapperId + ') { ' + styleMatch[1] + ' }';
+    document.head.appendChild(styleEl); // head para garantir que o browser aplica antes do render
 
     // Injeta o corpo
     var content = document.createElement('div');
@@ -3095,10 +3101,12 @@ function _htmlToPdfBlob(html) {
         jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
         pagebreak:   { mode: ['css', 'legacy'] }
       }).from(el).outputPdf('blob').then(function(blob) {
-        if (wrapper.parentNode) document.body.removeChild(wrapper);
+        if (styleEl.parentNode)  styleEl.parentNode.removeChild(styleEl);
+        if (wrapper.parentNode)  document.body.removeChild(wrapper);
         resolve(blob);
       }).catch(function(err) {
-        if (wrapper.parentNode) document.body.removeChild(wrapper);
+        if (styleEl.parentNode)  styleEl.parentNode.removeChild(styleEl);
+        if (wrapper.parentNode)  document.body.removeChild(wrapper);
         reject(err);
       });
     }, 400);
