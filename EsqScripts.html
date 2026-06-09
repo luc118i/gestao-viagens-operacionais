@@ -2499,7 +2499,8 @@ function dirtySeq() {
 var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
 var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
 var _homeGroupBy    = 'regiao';
-var _homeView       = 'grid';  // 'grid' | 'list'
+var _homeView       = 'grid';   // 'grid' | 'list'
+var _homeHideEmpty  = false;    // ocultar esquemas sem pontos
 var _homeSelectMode = false;
 var _homeSelected   = {};      // { id_esquema: true }
 var _pdfLoteList    = null;    // lista de esquemas para o batch (null = todos)
@@ -2517,6 +2518,10 @@ var HOME_GROUPS = {
 
 function mostrarHome() {
   try { var v = localStorage.getItem('vc_homeView'); if (v) setHomeView(v); } catch(e) {}
+  try {
+    var he = localStorage.getItem('vc_homeHideEmpty');
+    if (he === '1' && !_homeHideEmpty) toggleHideEmpty();
+  } catch(e) {}
   renderHome();
   var h = document.getElementById('homeScreen');
   if (h) h.classList.add('open');
@@ -2543,6 +2548,14 @@ function setHomeGroup(g) {
   renderHome();
 }
 
+function toggleHideEmpty() {
+  _homeHideEmpty = !_homeHideEmpty;
+  var btn = document.getElementById('homeBtnHideEmpty');
+  if (btn) btn.classList.toggle('active', _homeHideEmpty);
+  try { localStorage.setItem('vc_homeHideEmpty', _homeHideEmpty ? '1' : ''); } catch(e) {}
+  renderHome();
+}
+
 function setHomeView(v) {
   _homeView = v;
   var gBtn = document.getElementById('homeBtnViewGrid');
@@ -2560,10 +2573,11 @@ function renderHome() {
   var cfg = HOME_GROUPS[_homeGroupBy] || HOME_GROUPS.regiao;
 
   var groups = {};
-  _esqs.forEach(function(e) {
-    var k = cfg.keyOf(e) || '—';
-    (groups[k] = groups[k] || []).push(e);
-  });
+  (_homeHideEmpty ? _esqs.filter(function(e) { return e.temPontos; }) : _esqs)
+    .forEach(function(e) {
+      var k = cfg.keyOf(e) || '—';
+      (groups[k] = groups[k] || []).push(e);
+    });
 
   // Ordena as seções: ordem fixa da dimensão (se houver) e depois o resto A→Z
   var present = Object.keys(groups);
