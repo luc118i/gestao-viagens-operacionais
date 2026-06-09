@@ -2605,7 +2605,6 @@ function renderHome() {
     var innerHtml = isList
       ? '<div class="home-list">'
           + '<div class="home-list-header">'
-          +   '<span></span><span></span>'
           +   '<span>Linha</span>'
           +   '<span style="text-align:center;">Hor.</span>'
           +   '<span>Partida</span>'
@@ -2663,18 +2662,18 @@ function _homeRowHtml(e) {
   var cor   = _lineColor(e.nome_linha || e.id_esquema);
   var vazio = !e.temPontos;
   return '<div class="home-row' + (vazio ? ' no-points' : '') + '" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
-    + '<span class="home-row-check">' + ico('check', 12) + '</span>'
-    + '<span class="home-row-id">#' + esc(e.id_esquema) + '</span>'
+    // Coluna LINHA: check + id + nome (tudo junto)
     + '<span class="home-row-name">'
-    +   (vazio ? '<span class="home-card-nopts">sem pontos</span> ' : '')
-    +   esc(e.nome_linha || ('Esquema #' + e.id_esquema))
-    +   ' ' + _sentidoTag(e.sentido)
+    +   '<span class="home-row-check">' + ico('check', 11) + '</span>'
+    +   '<span class="home-row-id">#' + esc(e.id_esquema) + '</span>'
+    +   '<span class="home-row-label">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</span>'
+    +   (vazio ? '<span class="home-card-nopts" style="flex-shrink:0;">sem pontos</span>' : _sentidoTag(e.sentido))
     + '</span>'
     + '<span class="home-row-hor">' + (e.horario ? esc(e.horario) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.partida ? esc(e.partida) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.fim     ? esc(e.fim)     : '—') + '</span>'
     + '<span class="home-row-sent">' + esc(e.sentido || '—') + '</span>'
-    + '<button class="home-card-del" title="Excluir esquema" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">' + ico('x', 12) + '</button>'
+    + '<button class="home-card-del" title="Excluir" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">' + ico('x', 12) + '</button>'
     + '</div>';
 }
 

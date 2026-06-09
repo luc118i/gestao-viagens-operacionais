@@ -1108,22 +1108,22 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 
 /* Vista em lista */
 .home-list { width: 100%; border: 1.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
-/* Colunas compartilhadas: check(22) id(44) nome(1fr) hor(80) partida(1fr) fim(1fr) sentido(80) del(28) */
+/* Colunas: linha(2fr) hor(72px) partida(1fr) fim(1fr) sentido(72px) del(28px) */
 .home-list-header,
 .home-row {
   display: grid;
-  grid-template-columns: 22px 44px 1fr 80px 1fr 1fr 80px 28px;
-  align-items: center; gap: 0 10px;
+  grid-template-columns: 2fr 72px 1fr 1fr 72px 28px;
+  align-items: center; gap: 0 12px;
   padding: 0 14px;
 }
 .home-list-header {
-  height: 36px; background: var(--surface-2);
+  height: 34px; background: var(--surface-2);
   border-bottom: 1.5px solid var(--border);
   font-size: 10px; font-weight: 800; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--text-3);
 }
 .home-row {
-  min-height: 44px; padding-top: 10px; padding-bottom: 10px;
+  min-height: 44px; padding-top: 9px; padding-bottom: 9px;
   border-bottom: 1px solid var(--border);
   border-left: 4px solid transparent;
   cursor: pointer; background: var(--surface); position: relative;
@@ -1132,25 +1132,27 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 .home-row:last-child { border-bottom: none; }
 .home-row:hover { background: var(--brand-bg); }
 .home-row.selected { background: var(--brand-bg); border-left-color: var(--brand) !important; }
+/* Célula LINHA: check + id + label dentro do mesmo flex */
+.home-row-name {
+  display: flex; align-items: center; gap: 7px;
+  overflow: hidden; min-width: 0;
+}
 .home-row-check {
-  display: none; align-items: center; justify-content: center;
+  display: none; align-items: center; justify-content: center; flex-shrink: 0;
   width: 18px; height: 18px; border-radius: 50%;
-  border: 2px solid var(--border-2); background: var(--surface); color: #fff; flex-shrink: 0;
+  border: 2px solid var(--border-2); background: var(--surface); color: #fff;
 }
 .home-body.selecting .home-row .home-row-check { display: inline-flex; }
 .home-row.selected .home-row-check { background: var(--brand); border-color: var(--brand); }
-.home-row-id   { font-size: 11px; font-weight: 700; color: var(--text-4); white-space: nowrap; }
-.home-row-name { font-size: 13px; font-weight: 600; color: var(--text-1);
-                 display: flex; align-items: center; gap: 6px;
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-row-hor  { font-size: 13px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; text-align: center; }
-.home-row-loc  { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.home-row-sent { font-size: 11px; color: var(--text-3); }
-/* botão del na linha — ocupa o slot da coluna del (28px) */
-.home-row .home-card-del {
-  position: static; display: none;
-  width: 24px; height: 24px; justify-self: center;
-}
+.home-row-id    { font-size: 11px; font-weight: 700; color: var(--text-4); white-space: nowrap; flex-shrink: 0; }
+.home-row-label { font-size: 13px; font-weight: 600; color: var(--text-1);
+                  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-row-hor   { font-size: 13px; font-weight: 700; color: var(--brand);
+                  font-variant-numeric: tabular-nums; text-align: center; }
+.home-row-loc   { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-row-sent  { font-size: 11px; color: var(--text-3); }
+/* botão del na linha */
+.home-row .home-card-del { position: static; display: none; width: 24px; height: 24px; justify-self: center; }
 .home-row:hover .home-card-del { display: inline-flex; }
 .home-body.selecting .home-row.no-points { cursor: not-allowed; }
 .home-body.selecting .home-row.no-points .home-row-check { display: none; }
