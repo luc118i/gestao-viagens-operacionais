@@ -1108,17 +1108,23 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 
 /* Vista em lista */
 .home-list { width: 100%; border: 1.5px solid var(--border); border-radius: var(--r-lg); overflow: hidden; }
+/* Colunas compartilhadas: check(22) id(44) nome(1fr) hor(80) partida(1fr) fim(1fr) sentido(80) del(28) */
+.home-list-header,
+.home-row {
+  display: grid;
+  grid-template-columns: 22px 44px 1fr 80px 1fr 1fr 80px 28px;
+  align-items: center; gap: 0 10px;
+  padding: 0 14px;
+}
 .home-list-header {
-  display: grid; grid-template-columns: 1fr 80px 1fr 1fr 80px;
-  padding: 8px 14px; background: var(--surface-2);
+  height: 36px; background: var(--surface-2);
   border-bottom: 1.5px solid var(--border);
   font-size: 10px; font-weight: 800; text-transform: uppercase;
   letter-spacing: 0.06em; color: var(--text-3);
 }
 .home-row {
-  display: grid; grid-template-columns: 22px 44px 1fr 80px 1fr 1fr 80px;
-  align-items: center; gap: 0 10px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  min-height: 44px; padding-top: 10px; padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
   border-left: 4px solid transparent;
   cursor: pointer; background: var(--surface); position: relative;
   transition: background-color var(--t-fast) var(--ease);
@@ -1140,8 +1146,11 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 .home-row-hor  { font-size: 13px; font-weight: 700; color: var(--brand); font-variant-numeric: tabular-nums; text-align: center; }
 .home-row-loc  { font-size: 11px; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .home-row-sent { font-size: 11px; color: var(--text-3); }
-/* botão del na linha */
-.home-row .home-card-del { position: static; display: none; margin-left: auto; }
+/* botão del na linha — ocupa o slot da coluna del (28px) */
+.home-row .home-card-del {
+  position: static; display: none;
+  width: 24px; height: 24px; justify-self: center;
+}
 .home-row:hover .home-card-del { display: inline-flex; }
 .home-body.selecting .home-row.no-points { cursor: not-allowed; }
 .home-body.selecting .home-row.no-points .home-row-check { display: none; }

@@ -2604,7 +2604,15 @@ function renderHome() {
     });
     var innerHtml = isList
       ? '<div class="home-list">'
-          + (isList ? '<div class="home-list-header"><span>Linha</span><span>Horário</span><span>Partida</span><span>Encerramento</span><span>Sentido</span></div>' : '')
+          + '<div class="home-list-header">'
+          +   '<span></span><span></span>'
+          +   '<span>Linha</span>'
+          +   '<span style="text-align:center;">Hor.</span>'
+          +   '<span>Partida</span>'
+          +   '<span>Encerramento</span>'
+          +   '<span>Sentido</span>'
+          +   '<span></span>'
+          + '</div>'
           + items.map(_homeRowHtml).join('')
         + '</div>'
       : '<div class="home-cards">' + items.map(_homeCardHtml).join('') + '</div>';
