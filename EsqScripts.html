@@ -2910,34 +2910,47 @@ function _restoreEsqState(s) {
 
 function _htmlToPdfBlob(html) {
   return new Promise(function(resolve, reject) {
-    var iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:fixed;left:-99999px;top:0;width:900px;height:1200px;border:0;';
-    iframe.onload = function() {
-      setTimeout(function() {
-        try {
-          var doc = iframe.contentDocument;
-          var el  = doc.querySelector('.body') || doc.body;
-          html2pdf().set({
-            margin:      [10, 12, 16, 12],
-            image:       { type: 'jpeg', quality: 0.95 },
-            html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
-            jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
-            pagebreak:   { mode: ['css', 'legacy'] }
-          }).from(el).outputPdf('blob').then(function(blob) {
-            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-            resolve(blob);
-          }).catch(function(err) {
-            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-            reject(err);
-          });
-        } catch (e) {
-          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
-          reject(e);
-        }
-      }, 60);
-    };
-    document.body.appendChild(iframe);
-    iframe.srcdoc = html;
+    // Extrai <style> e <body> do documento completo e injeta no documento
+    // principal — html2canvas só lê estilos computados do documento pai.
+    var styleMatch = html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
+    var bodyMatch  = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+    if (!styleMatch || !bodyMatch) { reject(new Error('HTML parse error')); return; }
+
+    // Wrapper fora da área visível, largura A4 (794px ≈ 210mm a 96dpi)
+    var wrapper = document.createElement('div');
+    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;z-index:-999;overflow:visible;';
+
+    // Injeta o CSS do PDF num <style> isolado dentro do wrapper
+    var styleEl = document.createElement('style');
+    styleEl.textContent = styleMatch[1];
+    wrapper.appendChild(styleEl);
+
+    // Injeta o corpo
+    var content = document.createElement('div');
+    content.innerHTML = bodyMatch[1];
+    wrapper.appendChild(content);
+
+    document.body.appendChild(wrapper);
+
+    // Aguarda 400ms para o browser aplicar layout e fontes
+    setTimeout(function() {
+      var el = wrapper.querySelector('.body') || content;
+      html2pdf().set({
+        margin:      [10, 12, 16, 12],
+        image:       { type: 'jpeg', quality: 0.96 },
+        html2canvas: { scale: 2, useCORS: true, allowTaint: true,
+                       backgroundColor: '#ffffff', logging: false,
+                       windowWidth: 794 },
+        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak:   { mode: ['css', 'legacy'] }
+      }).from(el).outputPdf('blob').then(function(blob) {
+        if (wrapper.parentNode) document.body.removeChild(wrapper);
+        resolve(blob);
+      }).catch(function(err) {
+        if (wrapper.parentNode) document.body.removeChild(wrapper);
+        reject(err);
+      });
+    }, 400);
   });
 }
 
