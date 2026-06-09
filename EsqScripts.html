@@ -2611,7 +2611,11 @@ function _homeCardHtml(e) {
     + '<div class="home-card-meta">'
     +   (e.partida ? '<span class="home-card-loc">' + ico('send', 10)    + ' ' + esc(e.partida) + '</span>' : '')
     +   (e.fim     ? '<span class="home-card-loc">' + ico('map-pin', 10) + ' ' + esc(e.fim)     + '</span>' : '')
-    + '</div></div>';
+    + '</div>'
+    + '<button class="home-card-del" title="Excluir esquema" onclick="confirmarExclusao(event,\'' + esc(e.id_esquema) + '\',\'' + esc(e.nome_linha || e.id_esquema) + '\')">'
+    +   ico('x', 13)
+    + '</button>'
+    + '</div>';
 }
 
 function _sentidoTag(s) {
@@ -2636,6 +2640,58 @@ function _lineColor(key) {
   var s = String(key || ''), h = 0;
   for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; }
   return 'hsl(' + (h % 360) + ', 62%, 52%)';
+}
+
+// ============================================================
+//  Exclusão de esquema
+// ============================================================
+function confirmarExclusao(ev, idEsquema, nomeLinha) {
+  ev.stopPropagation(); // não abre o esquema ao clicar na lixeira
+  var ex = document.getElementById('homeDelOverlay');
+  if (ex) ex.remove();
+
+  var modal =
+    '<div id="homeDelOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:400px;max-width:92vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">'
+          + ico('alert-triangle', 15) + ' Excluir Esquema</div>'
+        + '<button onclick="document.getElementById(\'homeDelOverlay\').remove()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:20px;">'
+        + '<p style="font-size:13px;color:#3a3f52;margin:0 0 6px;">Tem certeza que deseja excluir:</p>'
+        + '<p style="font-size:14px;font-weight:700;color:#1a1d23;margin:0 0 14px;">' + esc(nomeLinha) + ' <span style="color:#9aa0ad;font-weight:400;">(#' + esc(idEsquema) + ')</span></p>'
+        + '<p style="font-size:12px;color:#e05050;margin:0;">Esta ação também remove todos os pontos configurados e <strong>não pode ser desfeita</strong>.</p>'
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;gap:8px;justify-content:flex-end;">'
+        + '<button onclick="document.getElementById(\'homeDelOverlay\').remove()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="_executarExclusao(\'' + esc(idEsquema) + '\',\'' + esc(nomeLinha) + '\')" style="padding:8px 18px;border:none;border-radius:6px;background:#e05050;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Excluir</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('homeDelOverlay').addEventListener('click', function(e) {
+    if (e.target === this) this.remove();
+  });
+}
+
+function _executarExclusao(idEsquema, nomeLinha) {
+  var overlay = document.getElementById('homeDelOverlay');
+  if (overlay) overlay.remove();
+  loading('Excluindo esquema…');
+  google.script.run
+    .withSuccessHandler(function() {
+      doneLoading();
+      _esqs = _esqs.filter(function(e) { return e.id_esquema !== idEsquema; });
+      if (_sel && _sel.id_esquema === idEsquema) { _sel = null; _seq = []; _seqDirt = false; }
+      delete _homeSelected[idEsquema];
+      renderHome();
+      toast('Esquema "' + nomeLinha + '" excluído.', 'success', 3500);
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao excluir: ' + (e.message || e), 'error');
+    })
+    .excluirEsquema(idEsquema);
 }
 
 // ============================================================

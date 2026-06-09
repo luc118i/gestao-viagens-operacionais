@@ -747,6 +747,56 @@ function doGet(e) {
 }
 
 /**
+ * Exclui um esquema da aba ESQUEMAS e todos os seus pontos de ESQUEMA_PONTOS.
+ * @param {string} idEsquema
+ * @returns {{ excluido: number, pontosExcluidos: number }}
+ */
+function excluirEsquema(idEsquema) {
+  try {
+    var ss  = SpreadsheetApp.getActiveSpreadsheet();
+    var id  = String(idEsquema).trim();
+    if (!id) throw new Error('ID do esquema não informado.');
+
+    // --- Aba ESQUEMAS ---
+    var shEsq     = ss.getSheetByName('ESQUEMAS');
+    var excluido  = 0;
+    if (shEsq) {
+      var lastRow = shEsq.getLastRow();
+      if (lastRow >= 2) {
+        var vals = shEsq.getRange(2, 1, lastRow - 1, 1).getValues();
+        for (var i = vals.length - 1; i >= 0; i--) {
+          if (String(vals[i][0]).trim() === id) {
+            shEsq.deleteRow(i + 2);
+            excluido++;
+          }
+        }
+      }
+    }
+
+    // --- Aba ESQUEMA_PONTOS ---
+    var shPts         = ss.getSheetByName('ESQUEMA_PONTOS');
+    var pontosExcluidos = 0;
+    if (shPts) {
+      var lastPtRow = shPts.getLastRow();
+      if (lastPtRow >= 2) {
+        var ptVals = shPts.getRange(2, 1, lastPtRow - 1, 1).getValues();
+        for (var j = ptVals.length - 1; j >= 0; j--) {
+          if (String(ptVals[j][0]).trim() === id) {
+            shPts.deleteRow(j + 2);
+            pontosExcluidos++;
+          }
+        }
+      }
+    }
+
+    EsquemasService.invalidateCache();
+    return { excluido: excluido, pontosExcluidos: pontosExcluidos };
+  } catch (e) {
+    throw new Error('Erro ao excluir esquema: ' + e.message);
+  }
+}
+
+/**
  * Retorna esquemas (fresh) + locais com coordenadas para a Web App de gestão.
  * @returns {{ esquemas: Array, locais: Array }}
  */

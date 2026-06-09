@@ -1092,6 +1092,21 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 .home-card.selected { border-color: var(--brand) !important; background: var(--brand-bg); }
 .home-card.selected .home-card-check { background: var(--brand); border-color: var(--brand); }
 
+/* Botão de exclusão no card */
+.home-card { position: relative; }
+.home-card-del {
+  position: absolute; top: 8px; right: 8px;
+  display: none; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 1.5px solid #fca5a5; background: #fff;
+  color: #e05050; cursor: pointer;
+  transition: background-color var(--t-fast) var(--ease),
+              border-color     var(--t-fast) var(--ease);
+}
+.home-card-del:hover { background: #fee2e2; border-color: #e05050; }
+.home-card:hover .home-card-del { display: inline-flex; }
+.home-body.selecting .home-card-del { display: none !important; }
+
 /* Esquema sem pontos na ESQUEMA_PONTOS — fora do batch de PDF */
 .home-card.no-points { opacity: 0.62; }
 .home-card-nopts {
