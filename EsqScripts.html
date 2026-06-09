@@ -2498,7 +2498,7 @@ function dirtySeq() {
 // ============================================================
 var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
 var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
-var _homeGroupBy    = 'regiao';
+var _homeGroupKeys  = ['regiao'];  // array ordenado de chaves ativas
 var _homeView       = 'grid';   // 'grid' | 'list'
 var _homeHideEmpty  = false;    // ocultar esquemas sem pontos
 var _homeSelectMode = false;
@@ -2522,6 +2522,7 @@ function mostrarHome() {
     var he = localStorage.getItem('vc_homeHideEmpty');
     if (he === '1' && !_homeHideEmpty) toggleHideEmpty();
   } catch(e) {}
+  _updateGroupBar();
   renderHome();
   var h = document.getElementById('homeScreen');
   if (h) h.classList.add('open');
@@ -2540,12 +2541,38 @@ function novoEsquemaHome() {
 
 function setHomeGroup(g) {
   if (!HOME_GROUPS[g]) return;
-  _homeGroupBy = g;
-  var bar = document.getElementById('homeGroupBar');
-  if (bar) bar.querySelectorAll('.home-gbtn').forEach(function(b) {
-    b.classList.toggle('active', b.getAttribute('data-g') === g);
-  });
+  var idx = _homeGroupKeys.indexOf(g);
+  if (idx !== -1) {
+    // já está ativo: remove (mas mantém ao menos 1)
+    if (_homeGroupKeys.length > 1) _homeGroupKeys.splice(idx, 1);
+  } else {
+    _homeGroupKeys.push(g);
+  }
+  _updateGroupBar();
   renderHome();
+}
+
+function _updateGroupBar() {
+  var bar = document.getElementById('homeGroupBar');
+  if (!bar) return;
+  bar.querySelectorAll('.home-gbtn').forEach(function(b) {
+    var g   = b.getAttribute('data-g');
+    var idx = _homeGroupKeys.indexOf(g);
+    var badge = b.querySelector('.home-gbtn-badge');
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'home-gbtn-badge';
+      b.appendChild(badge);
+    }
+    if (idx !== -1) {
+      b.classList.add('active');
+      badge.textContent = _homeGroupKeys.length > 1 ? (idx + 1) : '';
+      badge.style.display = _homeGroupKeys.length > 1 ? '' : 'none';
+    } else {
+      b.classList.remove('active');
+      badge.style.display = 'none';
+    }
+  });
 }
 
 function toggleHideEmpty() {
@@ -2566,61 +2593,71 @@ function setHomeView(v) {
   renderHome();
 }
 
+function _sortedGroupKeys(groups, cfg) {
+  var present = Object.keys(groups);
+  if (!cfg.order) return present.sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
+  var fixed = cfg.order.filter(function(k) { return groups[k]; });
+  var rest  = present.filter(function(k) { return cfg.order.indexOf(k) === -1; })
+                     .sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
+  return fixed.concat(rest);
+}
+
+function _sortItems(items) {
+  return items.sort(function(a, b) {
+    return String(a.horario || '~').localeCompare(String(b.horario || '~'))
+        || norm(a.nome_linha).localeCompare(norm(b.nome_linha));
+  });
+}
+
+var _LIST_HEADER = '<div class="home-list-header">'
+  + '<span>Linha</span><span style="text-align:center;">Hor.</span>'
+  + '<span>Partida</span><span>Encerramento</span><span>Sentido</span><span></span>'
+  + '</div>';
+
+function _renderItems(items, isList) {
+  return isList
+    ? '<div class="home-list">' + _LIST_HEADER + _sortItems(items).map(_homeRowHtml).join('') + '</div>'
+    : '<div class="home-cards">' + _sortItems(items).map(_homeCardHtml).join('') + '</div>';
+}
+
+function _renderGroups(esqs, keys, depth, isList) {
+  // keys: array de chaves de agrupamento restantes
+  if (!keys.length) return _renderItems(esqs, isList);
+  var cfg    = HOME_GROUPS[keys[0]] || HOME_GROUPS.regiao;
+  var rest   = keys.slice(1);
+  var groups = {};
+  esqs.forEach(function(e) {
+    var k = cfg.keyOf(e) || '—';
+    (groups[k] = groups[k] || []).push(e);
+  });
+  var sorted = _sortedGroupKeys(groups, cfg);
+  if (!sorted.length) return '<div class="home-empty">Nenhum esquema.</div>';
+  return sorted.map(function(rk) {
+    var inner = _renderGroups(groups[rk], rest, depth + 1, isList);
+    var cls   = depth === 0 ? 'home-region' : 'home-subregion';
+    var hcls  = depth === 0 ? 'home-region-h' : 'home-subregion-h';
+    return '<section class="' + cls + '">'
+      + '<div class="' + hcls + '"><span class="home-region-name">' + esc(rk) + '</span>'
+      + '<span class="home-region-c">' + groups[rk].length + '</span></div>'
+      + inner
+      + '</section>';
+  }).join('');
+}
+
 function renderHome() {
   var body = document.getElementById('homeBody');
   if (!body) return;
 
-  var cfg = HOME_GROUPS[_homeGroupBy] || HOME_GROUPS.regiao;
+  var esqs = _homeHideEmpty ? _esqs.filter(function(e) { return e.temPontos; }) : _esqs;
 
-  var groups = {};
-  (_homeHideEmpty ? _esqs.filter(function(e) { return e.temPontos; }) : _esqs)
-    .forEach(function(e) {
-      var k = cfg.keyOf(e) || '—';
-      (groups[k] = groups[k] || []).push(e);
-    });
-
-  // Ordena as seções: ordem fixa da dimensão (se houver) e depois o resto A→Z
-  var present = Object.keys(groups);
-  var keys;
-  if (cfg.order) {
-    var fixed = cfg.order.filter(function(k) { return groups[k]; });
-    var rest  = present.filter(function(k) { return cfg.order.indexOf(k) === -1; })
-                       .sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
-    keys = fixed.concat(rest);
-  } else {
-    keys = present.sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
-  }
-
-  if (!keys.length) {
+  if (!esqs.length) {
     body.innerHTML = '<div class="home-empty">Nenhum esquema cadastrado.</div>';
+    body.classList.toggle('selecting', _homeSelectMode);
     return;
   }
 
   var isList = (_homeView === 'list');
-  body.innerHTML = keys.map(function(rk) {
-    var items = groups[rk].sort(function(a, b) {
-      return String(a.horario || '~').localeCompare(String(b.horario || '~'))
-          || norm(a.nome_linha).localeCompare(norm(b.nome_linha));
-    });
-    var innerHtml = isList
-      ? '<div class="home-list">'
-          + '<div class="home-list-header">'
-          +   '<span>Linha</span>'
-          +   '<span style="text-align:center;">Hor.</span>'
-          +   '<span>Partida</span>'
-          +   '<span>Encerramento</span>'
-          +   '<span>Sentido</span>'
-          +   '<span></span>'
-          + '</div>'
-          + items.map(_homeRowHtml).join('')
-        + '</div>'
-      : '<div class="home-cards">' + items.map(_homeCardHtml).join('') + '</div>';
-    return '<section class="home-region">'
-      + '<div class="home-region-h"><span class="home-region-name">' + esc(rk) + '</span>'
-      + '<span class="home-region-c">' + items.length + '</span></div>'
-      + innerHtml
-      + '</section>';
-  }).join('');
+  body.innerHTML = _renderGroups(esqs, _homeGroupKeys, 0, isList);
 
   body.classList.toggle('selecting', _homeSelectMode);
   body.querySelectorAll('.home-card, .home-row').forEach(function(el) {
