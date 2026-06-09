@@ -1071,6 +1071,26 @@ tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; 
 }
 .home-gbtn:hover { border-color: var(--border-2); }
 .home-gbtn.active { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+/* Seleção múltipla (estilo pasta de arquivos) */
+.home-selbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--surface); border: 1.5px solid var(--brand); border-radius: var(--r-lg);
+  padding: 10px 14px; margin-bottom: 18px;
+  position: sticky; top: 8px; z-index: 6; box-shadow: var(--shadow-md);
+}
+.home-selbar-count { font-size: 13px; font-weight: 700; color: var(--text-1); }
+.home-selbar-actions { display: flex; align-items: center; gap: 8px; }
+.home-card-check {
+  display: none; align-items: center; justify-content: center;
+  width: 18px; height: 18px; border-radius: 50%;
+  border: 2px solid var(--border-2); background: var(--surface); color: #fff; flex-shrink: 0;
+}
+.home-body.selecting .home-card { cursor: pointer; }
+.home-body.selecting .home-card-check { display: inline-flex; }
+.home-body.selecting .home-card:hover { border-color: var(--brand); }
+.home-card.selected { border-color: var(--brand) !important; background: var(--brand-bg); }
+.home-card.selected .home-card-check { background: var(--brand); border-color: var(--brand); }
 .esq-modal .sdi-main { font-size: 14px; font-weight: 700; color: var(--text-1); }
 .esq-modal .sdi-meta { font-size: 12px; color: var(--text-2); margin-top: 3px; }
 .esq-search-wrap { position: relative; }

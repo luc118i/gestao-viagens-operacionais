@@ -2507,6 +2507,9 @@ function dirtySeq() {
 var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
 var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
 var _homeGroupBy   = 'regiao';
+var _homeSelectMode = false;
+var _homeSelected   = {};   // { id_esquema: true }
+var _pdfLoteList    = null;  // lista de esquemas para o batch (null = todos)
 
 // Dimensões de agrupamento da home. keyOf(e) → rótulo do grupo; order (opcional)
 // define a ordem fixa das seções.
@@ -2587,9 +2590,12 @@ function renderHome() {
       + '</section>';
   }).join('');
 
+  body.classList.toggle('selecting', _homeSelectMode);
   body.querySelectorAll('.home-card').forEach(function(el) {
+    var id = el.getAttribute('data-id');
+    if (_homeSelectMode && _homeSelected[id]) el.classList.add('selected');
     el.addEventListener('click', function() {
-      var id  = el.getAttribute('data-id');
+      if (_homeSelectMode) { _toggleHomeSel(id, el); return; }
       var esq = _esqs.find(function(e) { return e.id_esquema === id; });
       if (esq) selecionarEsq(esq);
     });
@@ -2600,6 +2606,7 @@ function _homeCardHtml(e) {
   var cor = _lineColor(e.nome_linha || e.id_esquema);
   return '<div class="home-card" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
     + '<div class="home-card-top">'
+    +   '<span class="home-card-check">' + ico('check', 12) + '</span>'
     +   '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
     +   _sentidoTag(e.sentido)
     + '</div>'
@@ -2636,6 +2643,60 @@ function _lineColor(key) {
 }
 
 // ============================================================
+//  Seleção múltipla de esquemas (estilo "pasta de arquivos")
+// ============================================================
+function toggleHomeSelectMode() {
+  _homeSelectMode = !_homeSelectMode;
+  if (!_homeSelectMode) _homeSelected = {};
+  _updateHomeSelUI();
+  renderHome();
+}
+
+function _toggleHomeSel(id, el) {
+  if (_homeSelected[id]) { delete _homeSelected[id]; el.classList.remove('selected'); }
+  else { _homeSelected[id] = true; el.classList.add('selected'); }
+  _updateHomeSelCount();
+}
+
+function homeSelectAll() {
+  _esqs.forEach(function(e) { _homeSelected[e.id_esquema] = true; });
+  renderHome();
+  _updateHomeSelCount();
+}
+
+function homeSelectClear() {
+  _homeSelected = {};
+  renderHome();
+  _updateHomeSelCount();
+}
+
+function _selectedEsqList() {
+  return _esqs.filter(function(e) { return _homeSelected[e.id_esquema]; });
+}
+
+function baixarPdfsSelecionados() {
+  var lista = _selectedEsqList();
+  if (!lista.length) { toast('Selecione ao menos um esquema.', 'error'); return; }
+  abrirModalPdfLote(lista);
+}
+
+function _updateHomeSelUI() {
+  var bar = document.getElementById('homeSelBar');
+  var btn = document.getElementById('homeBtnSelect');
+  if (bar) bar.style.display = _homeSelectMode ? 'flex' : 'none';
+  if (btn) btn.textContent = _homeSelectMode ? 'Cancelar' : 'Selecionar';
+  _updateHomeSelCount();
+}
+
+function _updateHomeSelCount() {
+  var n = Object.keys(_homeSelected).length;
+  var c = document.getElementById('homeSelCount');
+  if (c) c.textContent = n + (n === 1 ? ' selecionado' : ' selecionados');
+  var d = document.getElementById('homeSelDownload');
+  if (d) d.textContent = 'Baixar PDFs (' + n + ')';
+}
+
+// ============================================================
 //  PDFs em lote (home) — um arquivo por esquema, dentro de um .zip
 // ============================================================
 function _loadPdfPrefs() {
@@ -2653,10 +2714,11 @@ function _savePdfPrefs() {
   } catch (e) {}
 }
 
-function abrirModalPdfLote() {
+function abrirModalPdfLote(lista) {
   var ex = document.getElementById('pdfLoteOverlay');
   if (ex) ex.remove();
-  var n = _esqs.length;
+  _pdfLoteList = (lista && lista.length) ? lista : _esqs.slice();
+  var n = _pdfLoteList.length;
 
   var colDefs = [
     { key:'chegada',   label:'Chegada'            },
@@ -2741,7 +2803,7 @@ function gerarPdfsLote() {
   _pdfMode = mEl ? mEl.value : 'normal';
   _savePdfPrefs();
 
-  var esqList = _esqs.slice();
+  var esqList = (_pdfLoteList && _pdfLoteList.length) ? _pdfLoteList.slice() : _esqs.slice();
   fecharModalPdfLote();
   if (!esqList.length) { toast('Nenhum esquema para gerar.', 'error'); return; }
 

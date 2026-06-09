@@ -7,6 +7,7 @@
         <div class="home-sub">Selecione um esquema por região ou busque direto</div>
       </div>
       <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-ghost" id="homeBtnSelect" onclick="toggleHomeSelectMode()">Selecionar</button>
         <button class="btn btn-ghost" id="homeBtnPdfs" onclick="abrirModalPdfLote()">Baixar PDFs</button>
         <button class="btn btn-dark" id="homeBtnNovo" onclick="novoEsquemaHome()">+ Novo Esquema</button>
       </div>
@@ -18,6 +19,15 @@
         <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
       </svg>
       <input type="text" class="home-search" placeholder="Buscar por código, linha, horário…" readonly />
+    </div>
+
+    <div class="home-selbar" id="homeSelBar" style="display:none;">
+      <span class="home-selbar-count" id="homeSelCount">0 selecionados</span>
+      <div class="home-selbar-actions">
+        <button class="home-gbtn" onclick="homeSelectAll()">Selecionar todos</button>
+        <button class="home-gbtn" onclick="homeSelectClear()">Limpar</button>
+        <button class="btn btn-dark btn-sm" id="homeSelDownload" onclick="baixarPdfsSelecionados()">Baixar PDFs (0)</button>
+      </div>
     </div>
 
     <div class="home-groupbar" id="homeGroupBar">
