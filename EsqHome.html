@@ -17,6 +17,16 @@
       <input type="text" class="home-search" placeholder="Buscar por código, linha, horário…" readonly />
     </div>
 
+    <div class="home-groupbar" id="homeGroupBar">
+      <span class="home-groupbar-label">Agrupar por</span>
+      <button class="home-gbtn active" data-g="regiao"  onclick="setHomeGroup('regiao')">Região</button>
+      <button class="home-gbtn"        data-g="horario" onclick="setHomeGroup('horario')">Horário</button>
+      <button class="home-gbtn"        data-g="partida" onclick="setHomeGroup('partida')">Partida</button>
+      <button class="home-gbtn"        data-g="fim"     onclick="setHomeGroup('fim')">Encerramento</button>
+      <button class="home-gbtn"        data-g="linha"   onclick="setHomeGroup('linha')">Linha</button>
+      <button class="home-gbtn"        data-g="sentido" onclick="setHomeGroup('sentido')">Sentido</button>
+    </div>
+
     <div id="homeBody" class="home-body"></div>
   </div>
 </div>

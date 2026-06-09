@@ -2500,7 +2500,20 @@ function dirtySeq() {
 // ============================================================
 //  Home — seleção por região (cards)
 // ============================================================
-var REGIOES_ORDEM = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
+var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
+var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
+var _homeGroupBy   = 'regiao';
+
+// Dimensões de agrupamento da home. keyOf(e) → rótulo do grupo; order (opcional)
+// define a ordem fixa das seções.
+var HOME_GROUPS = {
+  regiao:  { order: REGIOES_ORDEM.concat('Outros'), keyOf: function(e){ return (e.regiao  && e.regiao.trim())  ? e.regiao.trim()  : 'Outros'; } },
+  horario: { order: PERIODOS_ORDEM,                 keyOf: function(e){ return _periodoDe(e.horario); } },
+  partida: { keyOf: function(e){ return (e.partida && String(e.partida).trim()) ? String(e.partida).trim() : 'Sem partida'; } },
+  fim:     { keyOf: function(e){ return (e.fim     && String(e.fim).trim())     ? String(e.fim).trim()     : 'Sem encerramento'; } },
+  linha:   { keyOf: function(e){ return (e.nome_linha && String(e.nome_linha).trim()) ? String(e.nome_linha).trim() : '—'; } },
+  sentido: { order: ['Ida', 'Volta', 'Circular'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } }
+};
 
 function mostrarHome() {
   renderHome();
@@ -2519,18 +2532,39 @@ function novoEsquemaHome() {
   novoEsquema();
 }
 
+function setHomeGroup(g) {
+  if (!HOME_GROUPS[g]) return;
+  _homeGroupBy = g;
+  var bar = document.getElementById('homeGroupBar');
+  if (bar) bar.querySelectorAll('.home-gbtn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-g') === g);
+  });
+  renderHome();
+}
+
 function renderHome() {
   var body = document.getElementById('homeBody');
   if (!body) return;
 
+  var cfg = HOME_GROUPS[_homeGroupBy] || HOME_GROUPS.regiao;
+
   var groups = {};
   _esqs.forEach(function(e) {
-    var r = (e.regiao && e.regiao.trim()) ? e.regiao.trim() : 'Outros';
-    (groups[r] = groups[r] || []).push(e);
+    var k = cfg.keyOf(e) || '—';
+    (groups[k] = groups[k] || []).push(e);
   });
 
-  var keys = REGIOES_ORDEM.filter(function(k) { return groups[k]; });
-  if (groups['Outros']) keys.push('Outros');
+  // Ordena as seções: ordem fixa da dimensão (se houver) e depois o resto A→Z
+  var present = Object.keys(groups);
+  var keys;
+  if (cfg.order) {
+    var fixed = cfg.order.filter(function(k) { return groups[k]; });
+    var rest  = present.filter(function(k) { return cfg.order.indexOf(k) === -1; })
+                       .sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
+    keys = fixed.concat(rest);
+  } else {
+    keys = present.sort(function(a, b) { return a.localeCompare(b, 'pt-BR'); });
+  }
 
   if (!keys.length) {
     body.innerHTML = '<div class="home-empty">Nenhum esquema cadastrado.</div>';
@@ -2539,9 +2573,8 @@ function renderHome() {
 
   body.innerHTML = keys.map(function(rk) {
     var items = groups[rk].sort(function(a, b) {
-      return norm(a.partida || '').localeCompare(norm(b.partida || ''))
-          || norm(a.nome_linha).localeCompare(norm(b.nome_linha))
-          || String(a.horario || '').localeCompare(String(b.horario || ''));
+      return String(a.horario || '~').localeCompare(String(b.horario || '~'))
+          || norm(a.nome_linha).localeCompare(norm(b.nome_linha));
     });
     return '<section class="home-region">'
       + '<div class="home-region-h"><span class="home-region-name">' + esc(rk) + '</span>'
@@ -2560,16 +2593,42 @@ function renderHome() {
 }
 
 function _homeCardHtml(e) {
-  return '<div class="home-card" data-id="' + esc(e.id_esquema) + '">'
+  var cor = _lineColor(e.nome_linha || e.id_esquema);
+  return '<div class="home-card" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
     + '<div class="home-card-top">'
-    + '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
-    + (e.horario ? '<span class="home-card-hor">' + esc(e.horario) + '</span>' : '')
+    +   '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
+    +   _sentidoTag(e.sentido)
     + '</div>'
     + '<div class="home-card-name">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</div>'
+    + (e.horario ? '<div class="home-card-hor-row">' + ico('clock', 12) + ' <strong>' + esc(e.horario) + '</strong></div>' : '')
     + '<div class="home-card-meta">'
-    + (e.partida ? '<span class="home-card-part">' + ico('map-pin', 11) + ' ' + esc(e.partida) + '</span>' : '')
-    + (e.sentido ? '<span class="home-card-sent">' + esc(e.sentido) + '</span>' : '')
+    +   (e.partida ? '<span class="home-card-loc">' + ico('send', 10)    + ' ' + esc(e.partida) + '</span>' : '')
+    +   (e.fim     ? '<span class="home-card-loc">' + ico('map-pin', 10) + ' ' + esc(e.fim)     + '</span>' : '')
     + '</div></div>';
+}
+
+function _sentidoTag(s) {
+  var t = String(s || '').toLowerCase();
+  var cls = t.indexOf('volta') !== -1 ? 'tag-volta'
+          : t.indexOf('circular') !== -1 ? 'tag-circular'
+          : 'tag-ida';
+  return '<span class="home-tag ' + cls + '">' + esc(s || '—') + '</span>';
+}
+
+function _periodoDe(hhmm) {
+  var h = parseInt(String(hhmm || '').split(':')[0], 10);
+  if (isNaN(h)) return 'Sem horário';
+  if (h < 6)  return 'Madrugada (00–05)';
+  if (h < 12) return 'Manhã (06–11)';
+  if (h < 18) return 'Tarde (12–17)';
+  return 'Noite (18–23)';
+}
+
+// Cor determinística por linha (mesma linha → mesma cor)
+function _lineColor(key) {
+  var s = String(key || ''), h = 0;
+  for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; }
+  return 'hsl(' + (h % 360) + ', 62%, 52%)';
 }
 
 function abrirModalEsquema() {

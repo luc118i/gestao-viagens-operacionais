@@ -61,14 +61,13 @@ var EsquemasService = (() => {
   }
 
   /**
-   * Retorna um mapa { id_esquema: nome_do_ponto_de_partida } para todos os
-   * esquemas, lendo a ESQUEMA_PONTOS uma única vez. Usado para agrupar os
-   * esquemas por terminal de origem na seleção.
-   * A "partida" é o primeiro ponto (menor ordem) que não seja garagem/
-   * fechamento; se todos forem, cai no primeiro ponto.
-   * @returns {Object<string,string>}
+   * Retorna um mapa { id_esquema: { partida:{nome,idPonto}, fim:{nome,idPonto} } }
+   * para todos os esquemas, lendo a ESQUEMA_PONTOS uma única vez. Usado para
+   * agrupar os esquemas por terminal de origem / encerramento na home.
+   * Partida = primeiro ponto não-garagem; fim = último ponto não-garagem.
+   * @returns {Object<string,{partida:Object, fim:Object}>}
    */
-  function getPartidasPorEsquema() {
+  function getTerminaisPorEsquema() {
     var todos = _lerEsquemaPontos();
     var byEsq = {};
     todos.forEach(function(p) {
@@ -78,17 +77,18 @@ var EsquemasService = (() => {
     });
     var out = {};
     Object.keys(byEsq).forEach(function(id) {
-      var pts = byEsq[id].sort(function(a, b) { return Number(a.ordem) - Number(b.ordem); });
-      var p = _partidaDoEsquema(pts);
+      var pts  = byEsq[id].sort(function(a, b) { return Number(a.ordem) - Number(b.ordem); });
+      var pIni = _partidaDoEsquema(pts);
+      var pFim = _encerramentoDoEsquema(pts);
       out[id] = {
-        nome:    p ? String(p.nome_ponto || '') : '',
-        idPonto: p ? String(p.id_ponto  || '') : ''
+        partida: { nome: pIni ? String(pIni.nome_ponto || '') : '', idPonto: pIni ? String(pIni.id_ponto || '') : '' },
+        fim:     { nome: pFim ? String(pFim.nome_ponto || '') : '', idPonto: pFim ? String(pFim.id_ponto || '') : '' }
       };
     });
     return out;
   }
 
-  /** Escolhe o ponto de partida: primeiro não-garagem/fechamento; senão, o primeiro. */
+  /** Primeiro ponto não-garagem/fechamento; senão, o primeiro. */
   function _partidaDoEsquema(pontosOrdenados) {
     for (var i = 0; i < pontosOrdenados.length; i++) {
       var nome = String(pontosOrdenados[i].nome_ponto || '');
@@ -97,6 +97,17 @@ var EsquemasService = (() => {
       return pontosOrdenados[i];
     }
     return pontosOrdenados.length ? pontosOrdenados[0] : null;
+  }
+
+  /** Último ponto não-garagem/fechamento; senão, o último. */
+  function _encerramentoDoEsquema(pontosOrdenados) {
+    for (var i = pontosOrdenados.length - 1; i >= 0; i--) {
+      var nome = String(pontosOrdenados[i].nome_ponto || '');
+      var tipo = String(pontosOrdenados[i].tipo || '');
+      if (/garagem/i.test(nome) || /fechamento/i.test(tipo)) continue;
+      return pontosOrdenados[i];
+    }
+    return pontosOrdenados.length ? pontosOrdenados[pontosOrdenados.length - 1] : null;
   }
 
   /**
@@ -294,10 +305,10 @@ var EsquemasService = (() => {
   }
 
   return {
-    getEsquemas:           getEsquemas,
-    getPontosDoEsquema:    getPontosDoEsquema,
-    getPartidasPorEsquema: getPartidasPorEsquema,
-    invalidateCache:       invalidateCache
+    getEsquemas:            getEsquemas,
+    getPontosDoEsquema:     getPontosDoEsquema,
+    getTerminaisPorEsquema: getTerminaisPorEsquema,
+    invalidateCache:        invalidateCache
   };
 
 })();

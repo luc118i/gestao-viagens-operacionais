@@ -724,18 +724,20 @@ function doGet(e) {
 function getDadosManager() {
   try {
     EsquemasService.invalidateCache();
-    var esquemas = EsquemasService.getEsquemas();
-    var partidas = EsquemasService.getPartidasPorEsquema();
-    var locais   = SheetsService.getLocaisParaManager();
+    var esquemas  = EsquemasService.getEsquemas();
+    var terminais = EsquemasService.getTerminaisPorEsquema();
+    var locais    = SheetsService.getLocaisParaManager();
 
     // Mapa código → local (para pegar lat/lng do ponto de partida)
     var locMap = {};
     locais.forEach(function(l) { locMap[String(l.codigo).trim()] = l; });
 
     esquemas.forEach(function(e) {
-      var info = partidas[String(e.id_esquema).trim()] || { nome: '', idPonto: '' };
-      e.partida = info.nome;
-      var loc = info.idPonto ? locMap[String(info.idPonto).trim()] : null;
+      var t = terminais[String(e.id_esquema).trim()]
+            || { partida: { nome: '', idPonto: '' }, fim: { nome: '', idPonto: '' } };
+      e.partida = t.partida.nome;
+      e.fim     = t.fim.nome;
+      var loc = t.partida.idPonto ? locMap[String(t.partida.idPonto).trim()] : null;
       e.regiao = (loc && loc.lat != null && loc.lng != null)
         ? GeoUtils.regiaoPorCoord(loc.lat, loc.lng)
         : '';
