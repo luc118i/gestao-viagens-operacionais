@@ -3071,10 +3071,14 @@ function _htmlToPdfBlob(html) {
     var wrapperId = 'pdf_render_' + Date.now();
     var wrapper = document.createElement('div');
     wrapper.id = wrapperId;
-    // position:fixed tira do fluxo normal (não afeta o layout da página).
-    // @scope já isola o CSS — contain foi removido pois contain:size causava
-    // height:0 no wrapper, cortando colunas e stat cards no PDF gerado.
-    wrapper.style.cssText = 'position:fixed;left:-9999px;top:0;width:794px;background:#fff;pointer-events:none;';
+    // position:fixed left:0 top:0 → getBoundingClientRect retorna coords válidas
+    // para o html2canvas (left:-9999 causava canvas vazio pois a translação
+    // mapeava todo o conteúdo fora dos 794px do canvas).
+    // z-index:8999 coloca o wrapper ABAIXO do spinner de loading (z-index:9000)
+    // que está ativo durante o batch, ocultando o wrapper do usuário.
+    // @scope isola o CSS do PDF para não vazar estilos (body, *, table…) ao app.
+    wrapper.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;'
+      + 'pointer-events:none;z-index:8999;';
 
     // Usa @scope para conter o CSS do PDF dentro do wrapper,
     // evitando que seletores globais (* body table etc.) afetem a página
