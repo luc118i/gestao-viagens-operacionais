@@ -764,8 +764,9 @@ function getDadosManager() {
     esquemas.forEach(function(e) {
       var t = terminais[String(e.id_esquema).trim()]
             || { partida: { nome: '', idPonto: '' }, fim: { nome: '', idPonto: '' } };
-      e.partida = t.partida.nome;
-      e.fim     = t.fim.nome;
+      e.partida   = t.partida.nome;
+      e.fim       = t.fim.nome;
+      e.temPontos = !!terminais[String(e.id_esquema).trim()];
       var loc = t.partida.idPonto ? locMap[String(t.partida.idPonto).trim()] : null;
       e.regiao = (loc && loc.lat != null && loc.lng != null)
         ? GeoUtils.regiaoPorCoord(loc.lat, loc.lng)

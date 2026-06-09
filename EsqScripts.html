@@ -2595,20 +2595,24 @@ function renderHome() {
     var id = el.getAttribute('data-id');
     if (_homeSelectMode && _homeSelected[id]) el.classList.add('selected');
     el.addEventListener('click', function() {
-      if (_homeSelectMode) { _toggleHomeSel(id, el); return; }
       var esq = _esqs.find(function(e) { return e.id_esquema === id; });
+      if (_homeSelectMode) {
+        if (esq && esq.temPontos) _toggleHomeSel(id, el);  // sem pontos não é selecionável
+        return;
+      }
       if (esq) selecionarEsq(esq);
     });
   });
 }
 
 function _homeCardHtml(e) {
-  var cor = _lineColor(e.nome_linha || e.id_esquema);
-  return '<div class="home-card" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
+  var cor   = _lineColor(e.nome_linha || e.id_esquema);
+  var vazio = !e.temPontos;
+  return '<div class="home-card' + (vazio ? ' no-points' : '') + '" data-id="' + esc(e.id_esquema) + '" style="border-left-color:' + cor + ';">'
     + '<div class="home-card-top">'
     +   '<span class="home-card-check">' + ico('check', 12) + '</span>'
     +   '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
-    +   _sentidoTag(e.sentido)
+    +   (vazio ? '<span class="home-card-nopts">sem pontos</span>' : _sentidoTag(e.sentido))
     + '</div>'
     + '<div class="home-card-name">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</div>'
     + (e.horario ? '<div class="home-card-hor-row">' + ico('clock', 12) + ' <strong>' + esc(e.horario) + '</strong></div>' : '')
@@ -2659,7 +2663,7 @@ function _toggleHomeSel(id, el) {
 }
 
 function homeSelectAll() {
-  _esqs.forEach(function(e) { _homeSelected[e.id_esquema] = true; });
+  _esqs.forEach(function(e) { if (e.temPontos) _homeSelected[e.id_esquema] = true; });
   renderHome();
   _updateHomeSelCount();
 }
@@ -2717,7 +2721,7 @@ function _savePdfPrefs() {
 function abrirModalPdfLote(lista) {
   var ex = document.getElementById('pdfLoteOverlay');
   if (ex) ex.remove();
-  _pdfLoteList = (lista && lista.length) ? lista : _esqs.slice();
+  _pdfLoteList = (lista && lista.length) ? lista : _esqs.filter(function(e) { return e.temPontos; });
   var n = _pdfLoteList.length;
 
   var colDefs = [
@@ -2803,7 +2807,8 @@ function gerarPdfsLote() {
   _pdfMode = mEl ? mEl.value : 'normal';
   _savePdfPrefs();
 
-  var esqList = (_pdfLoteList && _pdfLoteList.length) ? _pdfLoteList.slice() : _esqs.slice();
+  var esqList = ((_pdfLoteList && _pdfLoteList.length) ? _pdfLoteList : _esqs)
+                  .filter(function(e) { return e.temPontos; });
   fecharModalPdfLote();
   if (!esqList.length) { toast('Nenhum esquema para gerar.', 'error'); return; }
 
