@@ -726,12 +726,24 @@ function getDadosManager() {
     EsquemasService.invalidateCache();
     var esquemas = EsquemasService.getEsquemas();
     var partidas = EsquemasService.getPartidasPorEsquema();
+    var locais   = SheetsService.getLocaisParaManager();
+
+    // Mapa código → local (para pegar lat/lng do ponto de partida)
+    var locMap = {};
+    locais.forEach(function(l) { locMap[String(l.codigo).trim()] = l; });
+
     esquemas.forEach(function(e) {
-      e.partida = partidas[String(e.id_esquema).trim()] || '';
+      var info = partidas[String(e.id_esquema).trim()] || { nome: '', idPonto: '' };
+      e.partida = info.nome;
+      var loc = info.idPonto ? locMap[String(info.idPonto).trim()] : null;
+      e.regiao = (loc && loc.lat != null && loc.lng != null)
+        ? GeoUtils.regiaoPorCoord(loc.lat, loc.lng)
+        : '';
     });
+
     return {
       esquemas:          esquemas,
-      locais:            SheetsService.getLocaisParaManager(),
+      locais:            locais,
       temposPermanencia: SheetsService.getTemposPermanencia()
     };
   } catch (e) {

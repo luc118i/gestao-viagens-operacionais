@@ -1977,7 +1977,7 @@ window.onload = function() {
       initMap();
       setupEsqSearch();
       setupPtSearch();
-      abrirModalEsquema();
+      mostrarHome();
       toast('Pronto — ' + _esqs.length + ' esquemas carregados', 'success', 3000);
     })
     .withFailureHandler(function(e) {
@@ -2169,6 +2169,7 @@ function renderEsqs(q) {
 }
 
 function selecionarEsq(esq) {
+  esconderHome();
   _isNovo = false;
   _sel    = esq;
   document.getElementById('esqSearch').value = esq.id_esquema + ' — ' + esq.nome_linha;
@@ -2207,6 +2208,7 @@ function _updateHdrEsq(esq) {
 }
 
 function novoEsquema() {
+  esconderHome();
   _isNovo = true; _sel = null; _seq = []; _seqDirt = false;
   _osrmLegs = undefined; _osrmSeqKey = ''; _osrmGeometry = null;
   _comercialTimes = {}; _customStopTimes = {}; _legVia = {}; _horStartIdx = 0; _osrmStatus = 'pending';
@@ -2495,10 +2497,86 @@ function dirtySeq() {
 // ============================================================
 //  Modal de esquema
 // ============================================================
+// ============================================================
+//  Home — seleção por região (cards)
+// ============================================================
+var REGIOES_ORDEM = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
+
+function mostrarHome() {
+  renderHome();
+  var h = document.getElementById('homeScreen');
+  if (h) h.classList.add('open');
+}
+
+function esconderHome() {
+  var h = document.getElementById('homeScreen');
+  if (h) h.classList.remove('open');
+}
+
+function novoEsquemaHome() {
+  esconderHome();
+  abrirModalEsquema();
+  novoEsquema();
+}
+
+function renderHome() {
+  var body = document.getElementById('homeBody');
+  if (!body) return;
+
+  var groups = {};
+  _esqs.forEach(function(e) {
+    var r = (e.regiao && e.regiao.trim()) ? e.regiao.trim() : 'Outros';
+    (groups[r] = groups[r] || []).push(e);
+  });
+
+  var keys = REGIOES_ORDEM.filter(function(k) { return groups[k]; });
+  if (groups['Outros']) keys.push('Outros');
+
+  if (!keys.length) {
+    body.innerHTML = '<div class="home-empty">Nenhum esquema cadastrado.</div>';
+    return;
+  }
+
+  body.innerHTML = keys.map(function(rk) {
+    var items = groups[rk].sort(function(a, b) {
+      return norm(a.partida || '').localeCompare(norm(b.partida || ''))
+          || norm(a.nome_linha).localeCompare(norm(b.nome_linha))
+          || String(a.horario || '').localeCompare(String(b.horario || ''));
+    });
+    return '<section class="home-region">'
+      + '<div class="home-region-h"><span class="home-region-name">' + esc(rk) + '</span>'
+      + '<span class="home-region-c">' + items.length + '</span></div>'
+      + '<div class="home-cards">' + items.map(_homeCardHtml).join('') + '</div>'
+      + '</section>';
+  }).join('');
+
+  body.querySelectorAll('.home-card').forEach(function(el) {
+    el.addEventListener('click', function() {
+      var id  = el.getAttribute('data-id');
+      var esq = _esqs.find(function(e) { return e.id_esquema === id; });
+      if (esq) selecionarEsq(esq);
+    });
+  });
+}
+
+function _homeCardHtml(e) {
+  return '<div class="home-card" data-id="' + esc(e.id_esquema) + '">'
+    + '<div class="home-card-top">'
+    + '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
+    + (e.horario ? '<span class="home-card-hor">' + esc(e.horario) + '</span>' : '')
+    + '</div>'
+    + '<div class="home-card-name">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</div>'
+    + '<div class="home-card-meta">'
+    + (e.partida ? '<span class="home-card-part">' + ico('map-pin', 11) + ' ' + esc(e.partida) + '</span>' : '')
+    + (e.sentido ? '<span class="home-card-sent">' + esc(e.sentido) + '</span>' : '')
+    + '</div></div>';
+}
+
 function abrirModalEsquema() {
   var overlay = document.getElementById('esqModalOverlay');
   overlay.classList.remove('hidden');
-  document.getElementById('btnFecharModalEsq').style.display = _sel ? '' : 'none';
+  // Sempre fechável: a home é o fallback ao cancelar a busca.
+  document.getElementById('btnFecharModalEsq').style.display = '';
   renderEsqs(document.getElementById('esqSearch').value || '');
   document.getElementById('esqSearch').focus();
 }
@@ -2513,6 +2591,8 @@ function fecharModalEsquema() {
     document.getElementById('btnSalvEsq').textContent = 'Atualizar Esquema';
   }
   document.getElementById('esqModalOverlay').classList.add('hidden');
+  // Sem esquema ativo (cancelou busca/criação) → volta para a home.
+  if (!_sel) mostrarHome();
 }
 
 // ── Viagem de Volta ──────────────────────────────────────────

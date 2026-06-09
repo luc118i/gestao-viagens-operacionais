@@ -79,7 +79,11 @@ var EsquemasService = (() => {
     var out = {};
     Object.keys(byEsq).forEach(function(id) {
       var pts = byEsq[id].sort(function(a, b) { return Number(a.ordem) - Number(b.ordem); });
-      out[id] = _partidaDoEsquema(pts);
+      var p = _partidaDoEsquema(pts);
+      out[id] = {
+        nome:    p ? String(p.nome_ponto || '') : '',
+        idPonto: p ? String(p.id_ponto  || '') : ''
+      };
     });
     return out;
   }
@@ -90,9 +94,9 @@ var EsquemasService = (() => {
       var nome = String(pontosOrdenados[i].nome_ponto || '');
       var tipo = String(pontosOrdenados[i].tipo || '');
       if (/garagem/i.test(nome) || /fechamento/i.test(tipo)) continue;
-      return nome;
+      return pontosOrdenados[i];
     }
-    return pontosOrdenados.length ? String(pontosOrdenados[0].nome_ponto || '') : '';
+    return pontosOrdenados.length ? pontosOrdenados[0] : null;
   }
 
   /**

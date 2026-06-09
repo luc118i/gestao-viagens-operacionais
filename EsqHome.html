@@ -1,0 +1,22 @@
+<!-- Home: seleção de esquema com cards agrupados por região -->
+<div id="homeScreen" class="home-screen">
+  <div class="home-inner">
+    <div class="home-head">
+      <div>
+        <div class="home-title">Esquemas Operacionais</div>
+        <div class="home-sub">Selecione um esquema por região ou busque direto</div>
+      </div>
+      <button class="btn btn-dark" id="homeBtnNovo" onclick="novoEsquemaHome()">+ Novo Esquema</button>
+    </div>
+
+    <div class="home-search-wrap" onclick="abrirModalEsquema()" title="Buscar esquema">
+      <svg class="home-s-ico" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" stroke-width="1.6"/>
+        <path d="M13 13L17 17" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      <input type="text" class="home-search" placeholder="Buscar por código, linha, horário…" readonly />
+    </div>
+
+    <div id="homeBody" class="home-body"></div>
+  </div>
+</div>

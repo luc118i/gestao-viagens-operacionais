@@ -50,5 +50,53 @@ var GeoUtils = (() => {
     return Math.round(total * 100) / 100;
   }
 
-  return { haversineKm, totalRouteKm };
+  // Centroides aproximados das 27 UFs (lat, lng). Usados para classificar a
+  // macro-região de um ponto pela coordenada (UF do centroide mais próximo).
+  const UF_CENTROIDES = {
+    AC: [-9.0, -70.5],  AM: [-4.1, -64.6],  RR: [2.0, -61.4],   AP: [1.0, -52.0],
+    PA: [-3.9, -52.5],  RO: [-10.9, -62.8], TO: [-10.2, -48.3],
+    MA: [-5.0, -45.3],  PI: [-7.7, -42.7],  CE: [-5.1, -39.6],  RN: [-5.8, -36.6],
+    PB: [-7.2, -36.7],  PE: [-8.4, -37.9],  AL: [-9.6, -36.7],  SE: [-10.6, -37.4],
+    BA: [-12.5, -41.7],
+    MG: [-18.5, -44.5], ES: [-19.5, -40.6], RJ: [-22.2, -42.7], SP: [-22.2, -48.7],
+    PR: [-24.7, -51.7], SC: [-27.2, -50.5], RS: [-29.7, -53.3],
+    MT: [-13.0, -55.9], MS: [-20.5, -54.5], GO: [-16.0, -49.6], DF: [-15.8, -47.9]
+  };
+
+  const UF_REGIAO = {
+    AC: 'Norte', AM: 'Norte', RR: 'Norte', AP: 'Norte', PA: 'Norte', RO: 'Norte', TO: 'Norte',
+    MA: 'Nordeste', PI: 'Nordeste', CE: 'Nordeste', RN: 'Nordeste', PB: 'Nordeste',
+    PE: 'Nordeste', AL: 'Nordeste', SE: 'Nordeste', BA: 'Nordeste',
+    MT: 'Centro-Oeste', MS: 'Centro-Oeste', GO: 'Centro-Oeste', DF: 'Centro-Oeste',
+    MG: 'Sudeste', ES: 'Sudeste', RJ: 'Sudeste', SP: 'Sudeste',
+    PR: 'Sul', SC: 'Sul', RS: 'Sul'
+  };
+
+  /**
+   * Retorna a UF cujo centroide está mais próximo da coordenada dada.
+   * @returns {string} sigla da UF, ou '' se a coordenada for inválida
+   */
+  function ufPorCoord(lat, lng) {
+    const la = parseFloat(lat), lo = parseFloat(lng);
+    if (!isFinite(la) || !isFinite(lo) || (la === 0 && lo === 0)) return '';
+    let best = '', bestD = Infinity;
+    for (const uf in UF_CENTROIDES) {
+      const c = UF_CENTROIDES[uf];
+      const d = haversineKm(la, lo, c[0], c[1]);
+      if (d < bestD) { bestD = d; best = uf; }
+    }
+    return best;
+  }
+
+  /**
+   * Classifica a macro-região (Norte/Nordeste/Centro-Oeste/Sudeste/Sul) de uma
+   * coordenada, via UF mais próxima.
+   * @returns {string} nome da região, ou '' se inválido
+   */
+  function regiaoPorCoord(lat, lng) {
+    const uf = ufPorCoord(lat, lng);
+    return uf ? UF_REGIAO[uf] : '';
+  }
+
+  return { haversineKm, totalRouteKm, ufPorCoord, regiaoPorCoord };
 })();
