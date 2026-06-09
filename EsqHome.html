@@ -6,7 +6,10 @@
         <div class="home-title">Esquemas Operacionais</div>
         <div class="home-sub">Selecione um esquema por região ou busque direto</div>
       </div>
-      <button class="btn btn-dark" id="homeBtnNovo" onclick="novoEsquemaHome()">+ Novo Esquema</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button class="btn btn-ghost" id="homeBtnPdfs" onclick="abrirModalPdfLote()">Baixar PDFs</button>
+        <button class="btn btn-dark" id="homeBtnNovo" onclick="novoEsquemaHome()">+ Novo Esquema</button>
+      </div>
     </div>
 
     <div class="home-search-wrap" onclick="abrirModalEsquema()" title="Buscar esquema">

@@ -127,6 +127,35 @@ function getPontosEsquemaParaFormulario(idEsquema) {
 }
 
 /**
+ * Retorna os pontos de TODOS os esquemas (mesmo formato camelCase de
+ * getPontosEsquemaParaFormulario), em uma única leitura. Usado na geração de
+ * PDFs em lote.
+ * @returns {Object<string, Array>}  { id_esquema: [ {idPonto, nomePonto, ...} ] }
+ */
+function getTodosPontosParaFormulario() {
+  try {
+    var by      = EsquemasService.getPontosTodosEsquemas();
+    var distVia = _lerTipoViaDistancias_();
+    var out = {};
+    Object.keys(by).forEach(function(id) {
+      var result = by[id].map(function(p) {
+        return { idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '', horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '' };
+      });
+      for (var i = 0; i < result.length - 1; i++) {
+        if (!result[i].tipoTrecho) {
+          var norm = _normPair_(result[i].idPonto, result[i + 1].idPonto);
+          result[i].tipoTrecho = distVia[norm[0] + ':' + norm[1]] || '';
+        }
+      }
+      out[id] = result;
+    });
+    return out;
+  } catch (e) {
+    throw new Error('Erro ao ler pontos de todos os esquemas: ' + (e.message || e));
+  }
+}
+
+/**
  * Retorna o número de pontos de cada esquema informado.
  * @param {string[]} ids  — array de id_esquema
  * @returns {Object}      — { id_esquema: count }

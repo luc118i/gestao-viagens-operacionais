@@ -111,6 +111,25 @@ var EsquemasService = (() => {
   }
 
   /**
+   * Retorna todos os pontos de todos os esquemas, agrupados por id_esquema e
+   * ordenados por ORDEM, lendo a ESQUEMA_PONTOS uma única vez.
+   * @returns {Object<string, Array>}
+   */
+  function getPontosTodosEsquemas() {
+    var todos = _lerEsquemaPontos();
+    var by = {};
+    todos.forEach(function(p) {
+      var id = String(p.id_esquema).trim();
+      if (!id) return;
+      (by[id] = by[id] || []).push(p);
+    });
+    Object.keys(by).forEach(function(id) {
+      by[id].sort(function(a, b) { return Number(a.ordem) - Number(b.ordem); });
+    });
+    return by;
+  }
+
+  /**
    * Limpa o cache de esquemas para forçar releitura na próxima chamada.
    */
   function invalidateCache() {
@@ -307,6 +326,7 @@ var EsquemasService = (() => {
   return {
     getEsquemas:            getEsquemas,
     getPontosDoEsquema:     getPontosDoEsquema,
+    getPontosTodosEsquemas: getPontosTodosEsquemas,
     getTerminaisPorEsquema: getTerminaisPorEsquema,
     invalidateCache:        invalidateCache
   };

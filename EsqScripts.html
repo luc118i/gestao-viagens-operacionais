@@ -1610,6 +1610,7 @@ function gerarPdfComOpcoes() {
   var sEl = document.getElementById('pdfSubtitleInput');
   _pdfTitle    = tEl ? tEl.value.trim() : '';
   _pdfSubtitle = sEl ? sEl.value.trim() : '';
+  _savePdfPrefs();
   fecharModalPdf();
   imprimirHorario();
 }
@@ -1617,7 +1618,7 @@ function gerarPdfComOpcoes() {
 // ============================================================
 //  Gera PDF em nova janela
 // ============================================================
-function imprimirHorario() {
+function imprimirHorario(returnHtml) {
   if (!_sel || !_seq.length) return;
   var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
   var c        = _calcHorario(osrmLegs);
@@ -1796,7 +1797,7 @@ function imprimirHorario() {
     + '</div>'
     + '<div class="pfooter-right" id="pfPageInfo">Gerado em ' + pe(genDate) + '</div>'
     + '</div>';
-  html += '<script>'
+  if (!returnHtml) html += '<script>'
     + 'window.onload = function() {'
     +   'try {'
     +     'var PX    = 96 / 25.4;'                                        // px por mm a 96 DPI (CSS pixels)
@@ -1830,6 +1831,8 @@ function imprimirHorario() {
     + '};'
     + '<\/script>';
   html += '</body></html>';
+
+  if (returnHtml) return html;
 
   var w = window.open('', '_blank', 'width=1000,height=760');
   if (!w) { toast('Popup bloqueado. Permita popups para este site.', 'error'); return; }
@@ -1974,6 +1977,7 @@ window.onload = function() {
       _temposPermanencia = d.temposPermanencia || {};
       _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
       doneLoading();
+      _loadPdfPrefs();
       initMap();
       setupEsqSearch();
       setupPtSearch();
@@ -2629,6 +2633,268 @@ function _lineColor(key) {
   var s = String(key || ''), h = 0;
   for (var i = 0; i < s.length; i++) { h = (h * 31 + s.charCodeAt(i)) >>> 0; }
   return 'hsl(' + (h % 360) + ', 62%, 52%)';
+}
+
+// ============================================================
+//  PDFs em lote (home) — um arquivo por esquema, dentro de um .zip
+// ============================================================
+function _loadPdfPrefs() {
+  try {
+    var c = JSON.parse(localStorage.getItem('vc_pdfCols') || 'null');
+    if (c) _pdfCols = c;
+    var m = localStorage.getItem('vc_pdfMode');
+    if (m) _pdfMode = m;
+  } catch (e) {}
+}
+function _savePdfPrefs() {
+  try {
+    localStorage.setItem('vc_pdfCols', JSON.stringify(_pdfCols));
+    localStorage.setItem('vc_pdfMode', _pdfMode);
+  } catch (e) {}
+}
+
+function abrirModalPdfLote() {
+  var ex = document.getElementById('pdfLoteOverlay');
+  if (ex) ex.remove();
+  var n = _esqs.length;
+
+  var colDefs = [
+    { key:'chegada',   label:'Chegada'            },
+    { key:'parada',    label:'Parada'             },
+    { key:'saida',     label:'Saída'              },
+    { key:'desl',      label:'Temp. Deslocamento' },
+    { key:'comercial', label:'Comercial'          },
+    { key:'dif',       label:'Dif.'               }
+  ];
+  var comDisabled = (_pdfMode === 'comercial');
+  var disabledKeys = { comercial:true, dif:true };
+  var checks = colDefs.map(function(c) {
+    var isDisabled = comDisabled && disabledKeys[c.key];
+    return '<label id="pdfLoteColLabel_' + c.key + '" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;'
+      + (isDisabled ? 'opacity:0.4;pointer-events:none;' : '') + '">'
+      + '<input type="checkbox" id="pdfLoteCol_' + c.key + '"' + (_pdfCols[c.key] ? ' checked' : '')
+      + ' style="width:14px;height:14px;accent-color:#f47920;cursor:pointer;">' + c.label + '</label>';
+  }).join('');
+
+  var modal =
+    '<div id="pdfLoteOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:460px;max-width:94vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;">Baixar PDFs em lote</div>'
+        + '<button onclick="fecharModalPdfLote()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x',16) + '</button>'
+      + '</div>'
+      + '<div style="padding:20px 22px;">'
+        + '<div style="font-size:12px;color:#5a6070;margin-bottom:16px;line-height:1.5;">Gera <strong>' + n + '</strong> PDFs (um por esquema) num arquivo <strong>.zip</strong>. Distâncias vêm do cache; esquemas sem cache usam o tempo mínimo por trecho.</div>'
+        + '<div style="margin-bottom:16px;">'
+          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Modo</div>'
+          + '<div style="display:flex;gap:8px;">'
+            + '<label id="pdfLoteModeNormalLabel" onclick="pdfLoteModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode !== 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode !== 'comercial' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLoteMode" value="normal"' + (_pdfMode !== 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal</label>'
+            + '<label id="pdfLoteModeComercialLabel" onclick="pdfLoteModeSelect(\'comercial\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'comercial' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLoteMode" value="comercial"' + (_pdfMode === 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Hor. Comercial</label>'
+          + '</div>'
+        + '</div>'
+        + '<div>'
+          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
+          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
+        + '</div>'
+      + '</div>'
+      + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
+        + '<button onclick="fecharModalPdfLote()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="gerarPdfsLote()" style="padding:8px 20px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">' + ico('arrow-down',13) + ' Gerar ' + n + ' PDFs</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('pdfLoteOverlay').addEventListener('click', function(e) { if (e.target === this) fecharModalPdfLote(); });
+}
+
+function fecharModalPdfLote() {
+  var m = document.getElementById('pdfLoteOverlay');
+  if (m) m.remove();
+}
+
+function pdfLoteModeSelect(mode) {
+  var isCom = (mode === 'comercial');
+  var nLbl = document.getElementById('pdfLoteModeNormalLabel');
+  var cLbl = document.getElementById('pdfLoteModeComercialLabel');
+  if (nLbl) { nLbl.style.borderColor = isCom ? '#d4d8e8' : '#f47920'; nLbl.style.background = isCom ? '#fff' : '#fff8f0'; }
+  if (cLbl) { cLbl.style.borderColor = isCom ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom ? '#fff8f0' : '#fff'; }
+  var nr = document.querySelector('input[name="pdfLoteMode"][value="normal"]');
+  var cr = document.querySelector('input[name="pdfLoteMode"][value="comercial"]');
+  if (nr) nr.checked = !isCom;
+  if (cr) cr.checked =  isCom;
+  ['comercial','dif'].forEach(function(k) {
+    var lbl = document.getElementById('pdfLoteColLabel_' + k);
+    if (lbl) { lbl.style.opacity = isCom ? '0.4' : ''; lbl.style.pointerEvents = isCom ? 'none' : ''; }
+  });
+}
+
+function gerarPdfsLote() {
+  if (typeof html2pdf === 'undefined' || typeof JSZip === 'undefined') {
+    toast('Bibliotecas de PDF não carregaram. Recarregue a página.', 'error'); return;
+  }
+  ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
+    var el = document.getElementById('pdfLoteCol_' + k);
+    if (el) _pdfCols[k] = el.checked;
+  });
+  var mEl = document.querySelector('input[name="pdfLoteMode"]:checked');
+  _pdfMode = mEl ? mEl.value : 'normal';
+  _savePdfPrefs();
+
+  var esqList = _esqs.slice();
+  fecharModalPdfLote();
+  if (!esqList.length) { toast('Nenhum esquema para gerar.', 'error'); return; }
+
+  loading('Preparando dados…');
+  google.script.run
+    .withSuccessHandler(function(pontosByEsq) {
+      pontosByEsq = pontosByEsq || {};
+      var seen = {}, allPairs = [];
+      esqList.forEach(function(e) {
+        var pts = (pontosByEsq[e.id_esquema] || []).filter(function(p) {
+          var l = _lMap[String(p.idPonto)]; return l && l.lat && l.lng;
+        });
+        for (var i = 0; i < pts.length - 1; i++) {
+          var a = pts[i].idPonto, b = pts[i + 1].idPonto;
+          var k = a <= b ? a + ':' + b : b + ':' + a;
+          if (!seen[k]) { seen[k] = 1; allPairs.push({ a: a, b: b }); }
+        }
+      });
+      if (!allPairs.length) { _processLote(esqList, pontosByEsq, {}); return; }
+      google.script.run
+        .withSuccessHandler(function(cacheMap) { _processLote(esqList, pontosByEsq, cacheMap || {}); })
+        .withFailureHandler(function() { _processLote(esqList, pontosByEsq, {}); })
+        .getDistanciasCached(allPairs);
+    })
+    .withFailureHandler(function(e) { doneLoading(); toast('Erro ao carregar pontos: ' + (e.message || e), 'error'); })
+    .getTodosPontosParaFormulario();
+}
+
+function _processLote(esqList, pontosByEsq, cacheMap) {
+  var snap = _snapshotEsqState();
+  var zip  = new JSZip();
+  var idx = 0, ok = 0, fail = 0;
+
+  function finish() {
+    _restoreEsqState(snap);
+    if (!ok) { doneLoading(); toast('Nenhum PDF foi gerado.', 'error'); return; }
+    loading('Compactando ' + ok + ' PDFs…');
+    zip.generateAsync({ type: 'blob' }).then(function(blob) {
+      doneLoading();
+      _baixarBlob(blob, 'esquemas_pdfs.zip');
+      toast(ok + ' PDFs gerados' + (fail ? (' · ' + fail + ' falharam') : ''), 'success', 4500);
+    }).catch(function() { doneLoading(); toast('Erro ao compactar os PDFs.', 'error'); });
+  }
+
+  function next() {
+    if (idx >= esqList.length) return finish();
+    var e   = esqList[idx];
+    loading('Gerando PDF ' + (idx + 1) + '/' + esqList.length + '…');
+    var pts = pontosByEsq[e.id_esquema] || [];
+    if (!pts.length) { fail++; idx++; return setTimeout(next, 0); }
+    try {
+      _setupEsqStateLote(e, pts);
+      _restoreHorConfig(e);
+      _osrmLegs   = _legsFromCacheMap(cacheMap);
+      _osrmStatus = (_osrmLegs && _osrmLegs.some(function(l) { return l; })) ? 'cache' : 'unavailable';
+      var html = imprimirHorario(true);
+      if (!html) { fail++; idx++; return setTimeout(next, 0); }
+      _htmlToPdfBlob(html).then(function(blob) {
+        zip.file(_loteFilename(e), blob); ok++; idx++; setTimeout(next, 0);
+      }).catch(function() { fail++; idx++; setTimeout(next, 0); });
+    } catch (err) { fail++; idx++; setTimeout(next, 0); }
+  }
+  next();
+}
+
+function _setupEsqStateLote(e, pts) {
+  _sel = e;
+  _seq = pts.map(function(p) {
+    var l = _lMap[String(p.idPonto)] || {};
+    return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '', lat: l.lat || null, lng: l.lng || null, isNew: false };
+  });
+  _comercialTimes = {};
+  pts.forEach(function(p) { var t = _normalizeHHMM(p.horarioComercial); if (t) _comercialTimes[p.idPonto] = t; });
+  _customStopTimes = {};
+  pts.forEach(function(p) { if (p.tempoLocal && _temposPermanencia[p.idPonto] === undefined) _customStopTimes[p.idPonto] = Math.round(+p.tempoLocal); });
+  _legVia = {};
+  pts.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
+  _horStartIdx  = 0;
+  _osrmGeometry = null;
+}
+
+function _legsFromCacheMap(cacheMap) {
+  var pts = _seq.filter(function(p) { return p.lat && p.lng; });
+  if (pts.length < 2) return null;
+  function nk(a, b) { return a <= b ? a + ':' + b : b + ':' + a; }
+  return pts.slice(0, -1).map(function(pt, i) {
+    var ent = cacheMap[nk(pt.idPonto, pts[i + 1].idPonto)];
+    var km  = ent && ent.km > 0 ? ent.km : 0;
+    if (km > 0 && ent.tipoVia && !_legVia[pt.idPonto]) _legVia[pt.idPonto] = ent.tipoVia;
+    return km > 0 ? { distKm: km, durationMin: 0 } : null;
+  });
+}
+
+function _snapshotEsqState() {
+  return {
+    sel: _sel, seq: _seq, com: _comercialTimes, cst: _customStopTimes, lv: _legVia,
+    hsi: _horStartIdx, legs: _osrmLegs, st: _osrmStatus, geo: _osrmGeometry,
+    partida: (document.getElementById('horHoraPartida') || {}).value,
+    vel:     (document.getElementById('horVelMedia')   || {}).value
+  };
+}
+function _restoreEsqState(s) {
+  _sel = s.sel; _seq = s.seq; _comercialTimes = s.com; _customStopTimes = s.cst; _legVia = s.lv;
+  _horStartIdx = s.hsi; _osrmLegs = s.legs; _osrmStatus = s.st; _osrmGeometry = s.geo;
+  var hp = document.getElementById('horHoraPartida'); if (hp && s.partida != null) hp.value = s.partida;
+  var hv = document.getElementById('horVelMedia');    if (hv && s.vel != null)     hv.value = s.vel;
+}
+
+function _htmlToPdfBlob(html) {
+  return new Promise(function(resolve, reject) {
+    var iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:fixed;left:-99999px;top:0;width:900px;height:1200px;border:0;';
+    iframe.onload = function() {
+      setTimeout(function() {
+        try {
+          var doc = iframe.contentDocument;
+          var el  = doc.querySelector('.body') || doc.body;
+          html2pdf().set({
+            margin:      [10, 12, 16, 12],
+            image:       { type: 'jpeg', quality: 0.95 },
+            html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff' },
+            jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
+            pagebreak:   { mode: ['css', 'legacy'] }
+          }).from(el).outputPdf('blob').then(function(blob) {
+            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            resolve(blob);
+          }).catch(function(err) {
+            if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+            reject(err);
+          });
+        } catch (e) {
+          if (iframe.parentNode) iframe.parentNode.removeChild(iframe);
+          reject(e);
+        }
+      }, 60);
+    };
+    document.body.appendChild(iframe);
+    iframe.srcdoc = html;
+  });
+}
+
+function _loteFilename(e) {
+  var base = (e.horario || '').replace(':', 'h') + ' - ' + (e.nome_linha || ('Esquema ' + e.id_esquema)) + ' (' + e.id_esquema + ')';
+  base = base.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
+  return (base || ('esquema_' + e.id_esquema)) + '.pdf';
+}
+
+function _baixarBlob(blob, filename) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  setTimeout(function() { document.body.removeChild(a); URL.revokeObjectURL(url); }, 1000);
 }
 
 function abrirModalEsquema() {
