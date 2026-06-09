@@ -2513,7 +2513,7 @@ var HOME_GROUPS = {
   partida: { keyOf: function(e){ return (e.partida && String(e.partida).trim()) ? String(e.partida).trim() : 'Sem partida'; } },
   fim:     { keyOf: function(e){ return (e.fim     && String(e.fim).trim())     ? String(e.fim).trim()     : 'Sem encerramento'; } },
   linha:   { keyOf: function(e){ return (e.nome_linha && String(e.nome_linha).trim()) ? String(e.nome_linha).trim() : '—'; } },
-  sentido: { order: ['Ida', 'Volta', 'Circular'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } }
+  sentido: { order: ['Ida', 'Volta'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } }
 };
 
 function mostrarHome() {
@@ -2717,7 +2717,6 @@ function _homeRowHtml(e) {
 function _sentidoTag(s) {
   var t = String(s || '').toLowerCase();
   var cls = t.indexOf('volta') !== -1 ? 'tag-volta'
-          : t.indexOf('circular') !== -1 ? 'tag-circular'
           : 'tag-ida';
   return '<span class="home-tag ' + cls + '">' + esc(s || '—') + '</span>';
 }
@@ -3159,7 +3158,7 @@ function iniciarViagemVolta() {
 
   // Pré-preenche o modal
   var sentAtual = _sel.sentido || 'Ida';
-  var sentVolta = sentAtual === 'Ida' ? 'Volta' : sentAtual === 'Volta' ? 'Ida' : 'Circular';
+  var sentVolta = sentAtual === 'Volta' ? 'Ida' : 'Volta';
   document.getElementById('fNome').value  = _sel.nome_linha || '';
   document.getElementById('fHor').value   = '';
   document.getElementById('fSent').value  = sentVolta;
