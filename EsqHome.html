@@ -18,6 +18,7 @@
         <button class="home-view-btn" id="homeBtnHideEmpty" onclick="toggleHideEmpty()" title="Ocultar esquemas sem pontos">
           <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
+        <button class="btn btn-ghost" id="homeBtnMassa" onclick="abrirModalMassa()">Ferramentas em massa</button>
         <button class="btn btn-ghost" id="homeBtnSelect" onclick="toggleHomeSelectMode()">Selecionar</button>
         <button class="btn btn-ghost" id="homeBtnPdfs" onclick="abrirModalPdfLote()">Baixar PDFs</button>
         <button class="btn btn-dark" id="homeBtnNovo" onclick="novoEsquemaHome()">+ Novo Esquema</button>
@@ -37,6 +38,7 @@
       <div class="home-selbar-actions">
         <button class="home-gbtn" onclick="homeSelectAll()">Selecionar todos</button>
         <button class="home-gbtn" onclick="homeSelectClear()">Limpar</button>
+        <button class="btn btn-ghost btn-sm" id="homeSelAnalise" onclick="analisarSelecionados()">Analisar grupo (0)</button>
         <button class="btn btn-dark btn-sm" id="homeSelDownload" onclick="baixarPdfsSelecionados()">Baixar PDFs (0)</button>
       </div>
     </div>
@@ -49,6 +51,20 @@
       <button class="home-gbtn"        data-g="fim"     onclick="setHomeGroup('fim')">Encerramento</button>
       <button class="home-gbtn"        data-g="linha"   onclick="setHomeGroup('linha')">Linha</button>
       <button class="home-gbtn"        data-g="sentido" onclick="setHomeGroup('sentido')">Sentido</button>
+      <button class="home-gbtn"        data-g="local"   onclick="setHomeGroup('local')">Local</button>
+    </div>
+
+    <!-- Busca por local: só aparece no modo "Local". Autocomplete sobre os
+         locais cadastrados; ao selecionar, lista as linhas que passam por ele. -->
+    <div class="home-localfilter" id="homeLocalFilter" style="display:none;">
+      <svg class="home-localfilter-ico" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path d="M9 3a6 6 0 104.47 10.03l3.25 3.25a1 1 0 001.42-1.42l-3.25-3.25A6 6 0 009 3zm0 2a4 4 0 110 8 4 4 0 010-8z" fill="currentColor"/>
+      </svg>
+      <input type="text" id="homeLocalInput" class="home-localfilter-input"
+             placeholder="Buscar local cadastrado… (ex: Pirapora)"
+             autocomplete="off" oninput="onHomeLocalInput(this.value)"
+             onfocus="renderLocalSuggestions()" />
+      <div class="home-localdrop" id="homeLocalDrop"></div>
     </div>
 
     <div id="homeBody" class="home-body"></div>

@@ -171,6 +171,32 @@ function getContagemPontosEsquemas(ids) {
 }
 
 /**
+ * Converte uma lista de HTMLs (um por esquema) em PDFs reais e devolve cada um
+ * em base64. Usa o conversor nativo do Google (Utilities.newBlob →
+ * getAs('application/pdf')), confiável para HTML/CSS server-side. O rodapé NÃO é
+ * incluído aqui — o cliente o carimba em todas as páginas via pdf-lib, já que o
+ * conversor do Google não fixa rodapé por página.
+ *
+ * @param {Array<{name:string, html:string}>} items
+ * @returns {Array<{name:string, b64:string}>}  PDFs (nomes únicos) em base64.
+ */
+function gerarPdfsEsquemas(items) {
+  if (!items || !items.length) throw new Error('Nenhum esquema para gerar.');
+  var usados = {};  // evita nomes repetidos no zip final
+  return items.map(function(it, i) {
+    var nome = String(it.name || ('esquema_' + (i + 1) + '.pdf')).replace(/[\\/:*?"<>|]/g, '-');
+    if (!/\.pdf$/i.test(nome)) nome += '.pdf';
+    var aberto = nome.replace(/\.pdf$/i, ''), n = 1, unico = nome;
+    while (usados[unico.toLowerCase()]) { n++; unico = aberto + ' (' + n + ').pdf'; }
+    usados[unico.toLowerCase()] = true;
+    var pdf = Utilities
+      .newBlob(it.html || '', 'text/html', unico.replace(/\.pdf$/i, '.html'))
+      .getAs('application/pdf');
+    return { name: unico, b64: Utilities.base64Encode(pdf.getBytes()) };
+  });
+}
+
+/**
  * Substitui toda a sequência de pontos de um esquema na aba ESQUEMA_PONTOS.
  * Apaga as linhas existentes do esquema e reinsere com ORDEM 1,2,3...
  * @param {string} idEsquema
@@ -222,6 +248,666 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     return true;
   } catch (e) {
     throw new Error('Erro ao salvar sequência: ' + e.message);
+  }
+}
+
+// ============================================================
+//  ANÁLISE DE ESQUEMA — regras determinísticas + IA (Groq)
+//  Aponta o que está fora do comum num esquema (ex.: encerramento
+//  incompatível com o nome da linha, ponto sem coordenada, etc.).
+// ============================================================
+
+/**
+ * Analisa um esquema: regras locais + (opcional) IA via Groq.
+ * @param {string} idEsquema
+ * @param {boolean} usarIA
+ * @returns {{ idEsquema, nomeLinha, regras:Array, ia:Object|null }}
+ */
+function analisarEsquema(idEsquema, usarIA) {
+  try {
+    var esq = null;
+    EsquemasService.getEsquemas().forEach(function(e) {
+      if (String(e.id_esquema).trim() === String(idEsquema).trim()) esq = e;
+    });
+    if (!esq) throw new Error('Esquema não encontrado.');
+
+    var pontos = EsquemasService.getPontosDoEsquema(idEsquema) || [];
+    var locMap = {};
+    SheetsService.getLocaisParaManager().forEach(function(l) { locMap[String(l.codigo).trim()] = l; });
+
+    var resultado = {
+      idEsquema: idEsquema,
+      nomeLinha: esq.nome_linha,
+      regras: _analisarRegras_(esq, pontos, locMap),
+      ia: null
+    };
+    if (usarIA) {
+      try { resultado.ia = _chamarGroq_(_resumoEsquema_(esq, pontos, locMap)); }
+      catch (e) { resultado.ia = { erro: String(e.message || e) }; }
+    }
+    return resultado;
+  } catch (e) {
+    throw new Error('Erro ao analisar esquema: ' + (e.message || e));
+  }
+}
+
+/**
+ * Analisa vários esquemas em conjunto, numa única chamada de IA, para detectar
+ * inconsistências ENTRE as linhas (mesmo local com horários divergentes,
+ * partida/encerramento incoerentes, pontos cadastrados de formas diferentes…).
+ * As regras determinísticas continuam rodando por esquema e voltam agregadas.
+ * @param {string[]} idsEsquema
+ * @param {boolean} usarIA
+ * @returns {{quantidade:number, esquemas:Array, regras:Array, ia:Object}}
+ */
+function analisarEsquemasEmGrupo(idsEsquema, usarIA) {
+  try {
+    var ids = (idsEsquema || []).map(function(x) { return String(x).trim(); }).filter(Boolean);
+    if (!ids.length) throw new Error('Nenhum esquema selecionado.');
+
+    var locMap = {};
+    SheetsService.getLocaisParaManager().forEach(function(l) { locMap[String(l.codigo).trim()] = l; });
+
+    var todos = EsquemasService.getEsquemas();
+    var porId = {};
+    todos.forEach(function(e) { porId[String(e.id_esquema).trim()] = e; });
+
+    var itens = [];           // { esq, pontos }
+    var regrasAgreg = [];     // [{ idEsquema, nomeLinha, regras:[…] }]
+    ids.forEach(function(id) {
+      var esq = porId[id];
+      if (!esq) return;
+      var pontos = EsquemasService.getPontosDoEsquema(id) || [];
+      itens.push({ esq: esq, pontos: pontos });
+      regrasAgreg.push({
+        idEsquema: id,
+        nomeLinha: esq.nome_linha,
+        regras: _analisarRegras_(esq, pontos, locMap)
+      });
+    });
+    if (!itens.length) throw new Error('Nenhum dos esquemas selecionados foi encontrado.');
+
+    var resultado = {
+      quantidade: itens.length,
+      esquemas: itens.map(function(it) { return { idEsquema: it.esq.id_esquema, nomeLinha: it.esq.nome_linha }; }),
+      regras: regrasAgreg,
+      ia: null
+    };
+    if (usarIA) {
+      try { resultado.ia = _chamarGroqGrupo_(_resumoGrupo_(itens, locMap)); }
+      catch (e) { resultado.ia = { erro: String(e.message || e) }; }
+    }
+    return resultado;
+  } catch (e) {
+    throw new Error('Erro ao analisar grupo: ' + (e.message || e));
+  }
+}
+
+/** Monta o resumo textual de vários esquemas para a IA comparar entre si. */
+function _resumoGrupo_(itens, locMap) {
+  var blocos = itens.map(function(it, idx) {
+    return '=== ESQUEMA ' + (idx + 1) + ' (#' + it.esq.id_esquema + ') ===\n' + _resumoEsquema_(it.esq, it.pontos, locMap);
+  }).join('\n\n');
+  return 'Total de esquemas no grupo: ' + itens.length + '\n\n' + blocos;
+}
+
+/** Chama a Groq para a análise comparativa de um grupo de esquemas. */
+function _chamarGroqGrupo_(resumo) {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('GROQ_API_KEY');
+  if (!key) return { erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
+  var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
+  var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe vários esquemas de viagem (cada um com sua sequência de paradas) e deve compará-los ENTRE SI, apontando APENAS o que está claramente fora do comum: '
+    + 'um mesmo local (mesmo código) aparecendo com horários comerciais divergentes em linhas diferentes; partidas/encerramentos incoerentes com o nome da linha; cidades fora de ordem geográfica; o mesmo ponto cadastrado de formas diferentes; desvios grandes; e qualquer inconsistência relevante entre os esquemas. '
+    + 'Organize a resposta em bullets curtos, agrupando por tema e sempre citando os esquemas (pelo #) envolvidos. Se os esquemas forem coerentes entre si, diga que não encontrou inconsistências. Não invente dados que não estão no resumo.';
+  var payload = {
+    model: model, temperature: 0.2, max_tokens: 1200,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: resumo }]
+  };
+  var res = UrlFetchApp.fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + key },
+    payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code !== 200) return { erro: 'Groq HTTP ' + code + ': ' + String(body).slice(0, 300) };
+  var data = JSON.parse(body);
+  var texto = (data && data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : '';
+  return { texto: String(texto || '').trim(), model: model };
+}
+
+/** Normaliza: maiúsculo, sem acento. */
+function _upNorm_(s) { return String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, ''); }
+
+/** Extrai os dois extremos do nome da linha (ex.: "NATAL X SAO PAULO VIA APODI" → [NATAL, SAO PAULO]). */
+function _linhaEndpoints_(nomeLinha) {
+  var s = _upNorm_(nomeLinha).replace(/\([^)]*\)/g, ' ').replace(/\bVIA\b[\s\S]*/, ' ');
+  var parts = s.split(/\s+[X\-]\s+/).map(function(t) { return t.trim(); }).filter(Boolean);
+  if (parts.length < 2) return [];
+  return [parts[0], parts[parts.length - 1]];
+}
+
+/** Regras determinísticas de anomalia. Retorna [{nivel, tipo, msg}]. */
+function _analisarRegras_(esq, pontos, locMap) {
+  var out = [];
+  var eps = _linhaEndpoints_(esq.nome_linha);
+
+  var reais = pontos.filter(function(p) { return !/garagem/i.test(p.nome_ponto || '') && !/fechamento/i.test(p.tipo || ''); });
+  var prim = reais[0], ult = reais[reais.length - 1];
+  if (eps.length === 2 && prim && ult) {
+    var nP = _upNorm_(prim.nome_ponto), nU = _upNorm_(ult.nome_ponto);
+    if (!eps.some(function(c) { return nP.indexOf(c) !== -1; }))
+      out.push({ nivel: 'alto', tipo: 'partida', msg: 'Partida "' + prim.nome_ponto + '" não corresponde aos extremos da linha (' + eps.join(' / ') + ').' });
+    if (!eps.some(function(c) { return nU.indexOf(c) !== -1; }))
+      out.push({ nivel: 'alto', tipo: 'encerramento', msg: 'Encerramento "' + ult.nome_ponto + '" não corresponde aos extremos da linha (' + eps.join(' / ') + ').' });
+  }
+
+  var semCoord = [];
+  pontos.forEach(function(p) {
+    var l = locMap[String(p.id_ponto).trim()];
+    if (!l) out.push({ nivel: 'medio', tipo: 'cadastro', msg: 'Ponto "' + (p.nome_ponto || p.id_ponto) + '" (cód ' + p.id_ponto + ') não está na base LOCAIS.' });
+    else if (l.lat == null || l.lng == null) semCoord.push(p.nome_ponto || p.id_ponto);
+  });
+  if (semCoord.length)
+    out.push({ nivel: 'medio', tipo: 'coordenada', msg: semCoord.length + ' ponto(s) sem coordenada (ficam fora do mapa e do cálculo): ' + semCoord.slice(0, 5).join(', ') + (semCoord.length > 5 ? '…' : '') });
+
+  for (var i = 1; i < pontos.length; i++) {
+    if (String(pontos[i - 1].id_ponto).trim() === String(pontos[i].id_ponto).trim())
+      out.push({ nivel: 'alto', tipo: 'duplicado', msg: 'Ponto repetido em sequência: "' + (pontos[i].nome_ponto || pontos[i].id_ponto) + '" (posições ' + i + ' e ' + (i + 1) + ').' });
+  }
+  return out;
+}
+
+/** Monta o resumo textual do esquema para a IA. */
+function _resumoEsquema_(esq, pontos, locMap) {
+  var linhas = pontos.map(function(p, i) {
+    var l = locMap[String(p.id_ponto).trim()] || {};
+    var coord = (l.lat != null && l.lng != null) ? (Number(l.lat).toFixed(4) + ',' + Number(l.lng).toFixed(4)) : 'SEM COORD';
+    var hc = p.horario_comercial ? (' | comercial ' + p.horario_comercial) : '';
+    return (i + 1) + '. ' + (p.nome_ponto || p.id_ponto) + ' [cód ' + p.id_ponto + ' | ' + coord + (p.tipo ? ' | ' + p.tipo : '') + hc + ']';
+  }).join('\n');
+  return 'Linha: ' + esq.nome_linha
+    + '\nHorário de partida: ' + (esq.horario || '?')
+    + '\nSentido: ' + (esq.sentido || '?')
+    + '\nTotal de pontos: ' + pontos.length
+    + '\n\nSequência de paradas (em ordem):\n' + linhas;
+}
+
+/** Chama a Groq (API compatível com OpenAI) via UrlFetchApp. */
+function _chamarGroq_(resumo) {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('GROQ_API_KEY');
+  if (!key) return { erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
+  var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
+  var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe a sequência de paradas de um esquema de viagem e aponta APENAS o que está claramente fora do comum: '
+    + 'encerramento ou partida incompatível com o nome da linha; cidades fora de ordem geográfica; desvios grandes; paradas que não fazem sentido para o trajeto; possíveis erros de cadastro. '
+    + 'Responda em português, com bullets curtos e diretos, citando a posição do ponto. Se estiver tudo coerente, diga que não encontrou anomalias. Não invente dados que não estão no resumo.';
+  var payload = {
+    model: model, temperature: 0.2, max_tokens: 800,
+    messages: [{ role: 'system', content: sys }, { role: 'user', content: resumo }]
+  };
+  var res = UrlFetchApp.fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + key },
+    payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code !== 200) return { erro: 'Groq HTTP ' + code + ': ' + String(body).slice(0, 300) };
+  var data = JSON.parse(body);
+  var texto = (data && data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : '';
+  return { texto: String(texto || '').trim(), model: model };
+}
+
+// ============================================================
+//  AJUSTE DE ROTA — sobreposição de distância/tempo por trecho A→B
+//  Guardado por par de pontos (cod_a, cod_b) na aba ROTAS_AJUSTADAS.
+//  Vale para TODA linha que tem A e B consecutivos (nos dois sentidos),
+//  sem reescrever esquema: o cálculo de horário consulta o ajuste.
+// ============================================================
+
+var _ROTAS_SHEET = 'ROTAS_AJUSTADAS';
+var _ROTAS_HEADER = ['cod_a', 'cod_b', 'nome_a', 'nome_b', 'distancia_km', 'tempo_min', 'via_coords', 'motivo', 'ativo', 'data'];
+
+/** Retorna (criando se preciso) a aba de rotas ajustadas, com cabeçalho. */
+function _getRotasSheet_(criar) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(_ROTAS_SHEET);
+  if (!sheet && criar) {
+    sheet = ss.insertSheet(_ROTAS_SHEET);
+    sheet.getRange(1, 1, 1, _ROTAS_HEADER.length).setValues([_ROTAS_HEADER]);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+/**
+ * Lê todos os ajustes de rota ativos.
+ * @returns {Array<{codA,codB,nomeA,nomeB,km,min,viaCoords,motivo}>}
+ */
+function getRotasAjustadas() {
+  try {
+    var sheet = _getRotasSheet_(false);
+    if (!sheet) return [];
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    var data = sheet.getRange(2, 1, lastRow - 1, _ROTAS_HEADER.length).getValues();
+    var out = [];
+    data.forEach(function(r) {
+      var codA = String(r[0]).trim(), codB = String(r[1]).trim();
+      if (!codA || !codB) return;
+      var ativo = String(r[8]).trim().toUpperCase();
+      if (ativo === 'F' || ativo === 'N' || ativo === '0') return; // inativo
+      out.push({
+        codA: codA, codB: codB,
+        nomeA: String(r[2] || '').trim(), nomeB: String(r[3] || '').trim(),
+        km:  Number(r[4]) || 0,
+        min: Number(r[5]) || 0,
+        viaCoords: String(r[6] || ''),
+        motivo: String(r[7] || '').trim()
+      });
+    });
+    return out;
+  } catch (e) {
+    throw new Error('Erro ao ler rotas ajustadas: ' + (e.message || e));
+  }
+}
+
+/**
+ * Cria/atualiza o ajuste de um trecho (chave = cod_a + cod_b).
+ * @param {{codA,codB,nomeA,nomeB,km,min,viaCoords,motivo}} d
+ * @returns {{codA,codB}}
+ */
+function salvarRotaAjustada(d) {
+  try {
+    d = d || {};
+    var codA = String(d.codA || '').trim();
+    var codB = String(d.codB || '').trim();
+    if (!codA || !codB) throw new Error('Os pontos A e B são obrigatórios.');
+    if (codA === codB)  throw new Error('A e B não podem ser o mesmo ponto.');
+    var km  = Number(String(d.km).replace(',', '.'));
+    var min = Number(String(d.min).replace(',', '.'));
+    if (!(km > 0) && !(min > 0)) throw new Error('Informe a distância (km) e/ou o tempo (min).');
+
+    var sheet = _getRotasSheet_(true);
+    var row = [codA, codB, String(d.nomeA || ''), String(d.nomeB || ''),
+              km > 0 ? km : '', min > 0 ? min : '', String(d.viaCoords || ''),
+              String(d.motivo || ''), 'T', Utilities.formatDate(new Date(), ss_tz_(), 'yyyy-MM-dd HH:mm:ss')];
+
+    // Procura linha existente do mesmo trecho
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var keys = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      for (var i = 0; i < keys.length; i++) {
+        if (String(keys[i][0]).trim() === codA && String(keys[i][1]).trim() === codB) {
+          sheet.getRange(i + 2, 1, 1, row.length).setValues([row]);
+          return { codA: codA, codB: codB };
+        }
+      }
+    }
+    sheet.appendRow(row);
+    return { codA: codA, codB: codB };
+  } catch (e) {
+    throw new Error('Erro ao salvar ajuste de rota: ' + (e.message || e));
+  }
+}
+
+/** Remove o ajuste de um trecho. */
+function excluirRotaAjustada(codA, codB) {
+  try {
+    codA = String(codA).trim(); codB = String(codB).trim();
+    var sheet = _getRotasSheet_(false);
+    if (!sheet) return false;
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return false;
+    var keys = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (var i = keys.length - 1; i >= 0; i--) {
+      if (String(keys[i][0]).trim() === codA && String(keys[i][1]).trim() === codB) {
+        sheet.deleteRow(i + 2);
+        return true;
+      }
+    }
+    return false;
+  } catch (e) {
+    throw new Error('Erro ao excluir ajuste de rota: ' + (e.message || e));
+  }
+}
+
+/** Fuso da planilha (helper). */
+function ss_tz_() {
+  try { return SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(); }
+  catch (e) { return 'America/Sao_Paulo'; }
+}
+
+// ============================================================
+//  EDIÇÃO EM MASSA — substituir ponto / inserir entre pontos
+//  Todas as operações suportam dry-run (aplicar=false) para preview.
+//  Leitura e escrita em bloco: 1 getValues + 1 setValues.
+// ============================================================
+
+/**
+ * Lê toda a aba ESQUEMA_PONTOS (cols A..H) agrupada e ordenada por esquema.
+ * @returns {{ byEsq: Object<string,Array>, order: string[] }}
+ */
+function _bulkLerPontos_(sheet) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { byEsq: {}, order: [] };
+  var data  = sheet.getRange(2, 1, lastRow - 1, 8).getValues();
+  var byEsq = {}, order = [];
+  data.forEach(function(r) {
+    var esq = String(r[0]).trim();
+    if (!esq) return;
+    if (!byEsq[esq]) { byEsq[esq] = []; order.push(esq); }
+    byEsq[esq].push({
+      ordem: Number(r[1]) || 0,
+      cod:   String(r[2]).trim(),
+      nome:  String(r[3]).trim(),
+      tipo:  r[4], hc: r[5], tl: r[6], tt: r[7]
+    });
+  });
+  Object.keys(byEsq).forEach(function(k) {
+    byEsq[k].sort(function(a, b) { return a.ordem - b.ordem; });
+  });
+  return { byEsq: byEsq, order: order };
+}
+
+/**
+ * Reescreve a aba ESQUEMA_PONTOS inteira a partir do mapa, renumerando ORDEM.
+ */
+function _bulkEscreverPontos_(sheet, byEsq, order) {
+  var out = [];
+  order.forEach(function(esq) {
+    byEsq[esq].forEach(function(p, idx) {
+      out.push([esq, idx + 1, p.cod, p.nome, p.tipo || '', p.hc || '', p.tl !== '' ? p.tl : '', p.tt || '']);
+    });
+  });
+  var lastRow = sheet.getLastRow();
+  if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, 8).clearContent();
+  if (out.length)  sheet.getRange(2, 1, out.length, 8).setValues(out);
+}
+
+/**
+ * Substitui o ponto X pelo ponto Y em TODOS os esquemas que contêm X.
+ * Esquemas que já contêm Y são pulados (evita parada duplicada).
+ * In-place: preserva ordem, tempos e tipo de trecho das linhas alteradas.
+ * @param {string} codX  código do ponto a remover
+ * @param {string} codY  código do ponto destino
+ * @param {string} nomeY nome do ponto destino
+ * @param {boolean} aplicar  false = dry-run (preview), true = grava
+ * @returns {{ applied: string[], skipped: Array<{id:string,motivo:string}> }}
+ */
+function substituirPontoEmMassa(codX, codY, nomeY, aplicar) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
+    if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
+
+    codX = String(codX).trim();
+    codY = String(codY).trim();
+    if (!codX || !codY) throw new Error('Pontos de origem e destino são obrigatórios.');
+    if (codX === codY)  throw new Error('Os pontos de origem e destino são iguais.');
+
+    var d = _bulkLerPontos_(sheet);
+    var applied = [], skipped = [];
+
+    d.order.forEach(function(esq) {
+      var pts  = d.byEsq[esq];
+      if (!pts.some(function(p) { return p.cod === codX; })) return; // não tem X
+      if (pts.some(function(p) { return p.cod === codY; })) {
+        skipped.push({ id: esq, motivo: 'já contém o ponto destino' });
+        return;
+      }
+      if (aplicar) {
+        pts.forEach(function(p) { if (p.cod === codX) { p.cod = codY; p.nome = String(nomeY || codY); } });
+      }
+      applied.push(esq);
+    });
+
+    if (aplicar && applied.length) {
+      _bulkEscreverPontos_(sheet, d.byEsq, d.order);
+      EsquemasService.invalidateCache();
+      _colorirEsquemaPontos_(sheet);
+    }
+    return { applied: applied, skipped: skipped };
+  } catch (e) {
+    throw new Error('Erro ao substituir ponto: ' + (e.message || e));
+  }
+}
+
+/**
+ * Insere um ou mais pontos entre A e B em todos os esquemas onde A e B são
+ * paradas CONSECUTIVAS. Trata os dois sentidos: A→B insere na ordem dada;
+ * B→A (volta) insere na ordem espelhada. O tipo de trecho dos novos legs
+ * herda o tipo_trecho do trecho A→B original.
+ * @param {string} codA
+ * @param {string} codB
+ * @param {Array<{cod:string,nome:string,tipo?:string}>} novos
+ * @param {boolean} aplicar  false = dry-run (preview), true = grava
+ * @returns {{ applied: string[], skipped: Array<{id:string,motivo:string}> }}
+ */
+function inserirEntrePontosEmMassa(codA, codB, novos, aplicar) {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
+    if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
+
+    codA = String(codA).trim();
+    codB = String(codB).trim();
+    if (!codA || !codB) throw new Error('Os pontos A e B são obrigatórios.');
+    if (codA === codB)  throw new Error('Os pontos A e B são iguais.');
+    novos = (novos || []).map(function(n) {
+      return { cod: String(n.cod).trim(), nome: String(n.nome || n.cod).trim(), tipo: n.tipo || '' };
+    }).filter(function(n) { return n.cod; });
+    if (!novos.length) throw new Error('Nenhum ponto para inserir.');
+
+    var d = _bulkLerPontos_(sheet);
+    var applied = [], skipped = [];
+
+    d.order.forEach(function(esq) {
+      var pts = d.byEsq[esq];
+      var res = [], changed = false;
+      for (var i = 0; i < pts.length; i++) {
+        res.push(pts[i]);
+        var cur = pts[i], nxt = pts[i + 1];
+        if (!nxt) continue;
+        var seq = null;
+        if (cur.cod === codA && nxt.cod === codB) seq = novos;                 // ida
+        else if (cur.cod === codB && nxt.cod === codA) seq = novos.slice().reverse(); // volta
+        if (seq) {
+          seq.forEach(function(n) {
+            res.push({ ordem: 0, cod: n.cod, nome: n.nome, tipo: n.tipo, hc: '', tl: '', tt: cur.tt });
+          });
+          changed = true;
+        }
+      }
+      if (changed) { if (aplicar) d.byEsq[esq] = res; applied.push(esq); }
+    });
+
+    if (aplicar && applied.length) {
+      _bulkEscreverPontos_(sheet, d.byEsq, d.order);
+      EsquemasService.invalidateCache();
+      _colorirEsquemaPontos_(sheet);
+    }
+    return { applied: applied, skipped: skipped };
+  } catch (e) {
+    throw new Error('Erro ao inserir pontos: ' + (e.message || e));
+  }
+}
+
+// ============================================================
+//  CADASTRO DE LOCAL (aba LOCAIS) — novo ponto
+// ============================================================
+
+/**
+ * Retorna o maior código numérico da aba LOCAIS + 1, como sugestão de código
+ * para um novo ponto. Códigos não numéricos são ignorados no cálculo.
+ * @returns {string}
+ */
+function getProximoCodigoLocal() {
+  try {
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('LOCAIS');
+    if (!sheet) return '1';
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return '1';
+    var col = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    var max = 0;
+    col.forEach(function(r) {
+      var n = parseInt(String(r[0]).trim(), 10);
+      if (!isNaN(n) && n > max) max = n;
+    });
+    return String(max + 1);
+  } catch (e) {
+    return '';
+  }
+}
+
+/** Converte booleano do formulário em flag 'T'/'F' (convenção do exportador). */
+function _boolFlag_(v) { return v ? 'T' : 'F'; }
+
+/** Número ou '' (não grava 0 indevido em campos vazios). */
+function _numOrEmpty_(v) {
+  if (v === null || v === undefined || String(v).trim() === '') return '';
+  var n = Number(String(v).replace(',', '.'));
+  return isNaN(n) ? '' : n;
+}
+
+/**
+ * Cadastra um novo ponto na aba LOCAIS (26 colunas, A..Z).
+ * Valida que o código não existe e que descrição foi informada.
+ * @param {Object} d  campos do formulário
+ * @returns {{ codigo:string, descricao:string, tipo:string, lat:(number|null), lng:(number|null) }}
+ */
+function cadastrarLocal(d) {
+  try {
+    d = d || {};
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('LOCAIS');
+    if (!sheet) throw new Error('Aba "LOCAIS" não encontrada.');
+
+    var codigo = String(d.codigo || '').trim();
+    var descricao = String(d.descricao || '').trim();
+    if (!codigo)    throw new Error('O código é obrigatório.');
+    if (!descricao) throw new Error('A descrição é obrigatória.');
+
+    // Valida duplicidade de código
+    var lastRow = sheet.getLastRow();
+    if (lastRow >= 2) {
+      var cods = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+      for (var i = 0; i < cods.length; i++) {
+        if (String(cods[i][0]).trim() === codigo) {
+          throw new Error('Já existe um local com o código ' + codigo + '.');
+        }
+      }
+    }
+
+    var lat = _numOrEmpty_(d.latitude);
+    var lng = _numOrEmpty_(d.longitude);
+
+    // Monta a linha na ordem das colunas A..Z (0..25)
+    var row = [];
+    row[0]  = codigo;                              // Código
+    row[1]  = String(d.codEmb || '').trim();       // Cód. Emb.
+    row[2]  = String(d.descResumida || '').trim(); // Desc. Resumida
+    row[3]  = descricao;                           // Descrição
+    row[4]  = String(d.unidade || '').trim();      // Unidade Empresarial
+    row[5]  = String(d.tipo || '').trim();         // Tipo
+    row[6]  = _numOrEmpty_(d.ajusteHorario);       // Ajuste Horário
+    row[7]  = _numOrEmpty_(d.raio);                // Raio
+    row[8]  = _numOrEmpty_(d.raioAdvert);          // Raio Advert.
+    row[9]  = _numOrEmpty_(d.vel);                 // Vel.
+    row[10] = String(d.grupoPc || '').trim();      // Grupo PC.
+    row[11] = _numOrEmpty_(d.distVel);             // Dist. uso vel.
+    row[12] = String(d.codigoExterno || '').trim();// Código externo
+    row[13] = _boolFlag_(d.ativo);                 // Ativo
+    row[14] = _boolFlag_(d.pedagio);               // Pedágio
+    row[15] = _boolFlag_(d.rodoviaria);            // Rodoviária
+    row[16] = _boolFlag_(d.suspensao);             // Suspensão
+    row[17] = _boolFlag_(d.garagem);               // Garagem
+    row[18] = _boolFlag_(d.online);                // Online
+    row[19] = _boolFlag_(d.auxiliar);              // Auxiliar
+    row[20] = _boolFlag_(d.seletivo);              // Seletivo
+    row[21] = _boolFlag_(d.pontoVel);              // Ponto Vel.
+    row[22] = _boolFlag_(d.areaVel);               // Area Vel.
+    row[23] = String(d.direcoes || '').trim();     // Direções
+    row[24] = lat;                                 // Latitude
+    row[25] = lng;                                 // Longitude
+
+    sheet.appendRow(row);
+
+    return {
+      codigo:    codigo,
+      descricao: descricao,
+      tipo:      row[5],
+      lat:       lat === '' ? null : lat,
+      lng:       lng === '' ? null : lng
+    };
+  } catch (e) {
+    throw new Error('Erro ao cadastrar local: ' + (e.message || e));
+  }
+}
+
+/**
+ * Importa vários locais de uma vez (vindos de um CSV parseado no cliente).
+ * Cada linha é um array na ordem das colunas da aba LOCAIS (até 29 colunas).
+ * - Código inédito: insere.
+ * - Código já existente: atualiza in-place se atualizar=true; senão pula.
+ * - Código repetido no próprio arquivo: pula a 2ª ocorrência.
+ * @param {Array<Array>} rows
+ * @param {boolean} atualizar  true = sobrescreve existentes com os dados do CSV
+ * @returns {{ imported:string[], updated:string[], skipped:Array<{codigo:string,motivo:string}> }}
+ */
+function importarLocais(rows, atualizar) {
+  try {
+    rows = rows || [];
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('LOCAIS');
+    if (!sheet) throw new Error('Aba "LOCAIS" não encontrada.');
+
+    var lastRow = sheet.getLastRow();
+    var lastCol = sheet.getLastColumn();
+    var width   = Math.max(lastCol, 29);
+
+    // Lê toda a base atual (para localizar e atualizar linhas existentes)
+    var data = lastRow >= 2 ? sheet.getRange(2, 1, lastRow - 1, width).getValues() : [];
+    var idxByCod = {};
+    data.forEach(function(r, i) { var c = String(r[0]).trim(); if (c) idxByCod[c] = i; });
+
+    var imported = [], updated = [], skipped = [], seen = {}, toAppend = [];
+
+    rows.forEach(function(r) {
+      var cod = String((r && r[0] != null ? r[0] : '')).trim();
+      if (!cod)      { skipped.push({ codigo: '(vazio)', motivo: 'sem código' }); return; }
+      if (seen[cod]) { skipped.push({ codigo: cod, motivo: 'repetido no arquivo' }); return; }
+      seen[cod] = true;
+
+      if (idxByCod[cod] !== undefined) {
+        if (!atualizar) { skipped.push({ codigo: cod, motivo: 'já existe na base' }); return; }
+        // Sobrescreve as primeiras 29 colunas, preservando colunas extras à direita
+        var row = data[idxByCod[cod]];
+        for (var k = 0; k < 29; k++) { row[k] = (r[k] !== undefined && r[k] !== null) ? r[k] : ''; }
+        updated.push(cod);
+      } else {
+        var a = r.slice();
+        while (a.length < width) a.push('');
+        toAppend.push(a);
+        imported.push(cod);
+      }
+    });
+
+    // Grava as atualizações (reescreve o bloco de dados existente)
+    if (updated.length && data.length) {
+      sheet.getRange(2, 1, data.length, width).setValues(data);
+    }
+    // Anexa os novos
+    if (toAppend.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, width).setValues(toAppend);
+    }
+
+    return { imported: imported, updated: updated, skipped: skipped };
+  } catch (e) {
+    throw new Error('Erro ao importar locais: ' + (e.message || e));
   }
 }
 
@@ -716,7 +1402,10 @@ function doGet(e) {
 
   if (page === 'manager') {
     try {
-      return HtmlService.createTemplateFromFile('EsquemasManager')
+      var mgr = HtmlService.createTemplateFromFile('EsquemasManager');
+      mgr.webAppUrl  = ScriptApp.getService().getUrl();
+      mgr.initialEsq = String(params.esq || '').trim();
+      return mgr
         .evaluate()
         .setTitle('Gestão de Esquemas · Viação Catedral')
         .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL)
@@ -805,6 +1494,7 @@ function getDadosManager() {
     EsquemasService.invalidateCache();
     var esquemas  = EsquemasService.getEsquemas();
     var terminais = EsquemasService.getTerminaisPorEsquema();
+    var pontosPorEsq = EsquemasService.getPontosTodosEsquemas();
     var locais    = SheetsService.getLocaisParaManager();
 
     // Mapa código → local (para pegar lat/lng do ponto de partida)
@@ -814,19 +1504,38 @@ function getDadosManager() {
     esquemas.forEach(function(e) {
       var t = terminais[String(e.id_esquema).trim()]
             || { partida: { nome: '', idPonto: '' }, fim: { nome: '', idPonto: '' } };
-      e.partida   = t.partida.nome;
-      e.fim       = t.fim.nome;
+      // Nome exibido = o que está guardado no esquema (nome_ponto); a base LOCAIS
+      // é só fallback quando o nome guardado está vazio. Isso evita exibir um nome
+      // divergente quando o código do ponto aponta para outro local na base.
+      var locP = t.partida.idPonto ? locMap[String(t.partida.idPonto).trim()] : null;
+      var locF = t.fim.idPonto     ? locMap[String(t.fim.idPonto).trim()]     : null;
+      e.partida   = t.partida.nome || (locP && locP.descricao) || '';
+      e.fim       = t.fim.nome     || (locF && locF.descricao) || '';
       e.temPontos = !!terminais[String(e.id_esquema).trim()];
-      var loc = t.partida.idPonto ? locMap[String(t.partida.idPonto).trim()] : null;
-      e.regiao = (loc && loc.lat != null && loc.lng != null)
-        ? GeoUtils.regiaoPorCoord(loc.lat, loc.lng)
+      e.regiao = (locP && locP.lat != null && locP.lng != null)
+        ? GeoUtils.regiaoPorCoord(locP.lat, locP.lng)
         : '';
+
+      // Paradas distintas do esquema (para agrupar/buscar por local).
+      // Lista de { cod, nome } na ordem da viagem, sem repetições (por código).
+      var pts  = pontosPorEsq[String(e.id_esquema).trim()] || [];
+      var seen = {};
+      e.paradas = [];
+      pts.forEach(function(p) {
+        var cod  = String(p.id_ponto || '').trim();
+        if (!cod || seen[cod]) return;
+        seen[cod] = true;
+        var locP2 = locMap[cod];
+        var nome  = String(p.nome_ponto || (locP2 && locP2.descricao) || cod).trim();
+        e.paradas.push({ cod: cod, nome: nome });
+      });
     });
 
     return {
       esquemas:          esquemas,
       locais:            locais,
-      temposPermanencia: SheetsService.getTemposPermanencia()
+      temposPermanencia: SheetsService.getTemposPermanencia(),
+      rotasAjustadas:    getRotasAjustadas()
     };
   } catch (e) {
     throw new Error('Erro ao carregar dados do manager: ' + e.message);

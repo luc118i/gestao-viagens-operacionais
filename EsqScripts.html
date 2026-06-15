@@ -37,6 +37,8 @@ var _comercialTimes  = {};
 var _horStartIdx     = 0;
 var _customStopTimes = {};
 var _temposPermanencia = {};   // { codigoLocal: minutos } — vindo da aba TEMPO_PERMANENCIA
+var _rotasAjust      = {};     // { "codA|codB": {km,min,motivo} } — ajustes de rota (2 sentidos)
+var _rotasAjustList  = [];     // lista crua de ajustes (para a aba de gestão)
 var _legVia          = {};
 var _tipoViaVel      = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
 var _VIA_LABEL_TO_KEY = { 'BR': 'BR', 'Estadual': 'Est', 'Municipal': 'Mun', 'Urbana': 'Urb' };
@@ -310,7 +312,9 @@ function saveHorConfig() {
 function _restoreHorConfig(esq) {
   var cfg = null;
   try { cfg = JSON.parse(localStorage.getItem('vc_horcfg_' + esq.id_esquema) || 'null'); } catch(e) {}
-  var partida = (cfg && cfg.partida) ? cfg.partida : (esq.horario || '00:00');
+  // Prioriza o horário real do esquema; o partida salvo no navegador é só fallback
+  // (evita abrir a linha com uma hora antiga e divergente guardada no localStorage).
+  var partida = (esq.horario && String(esq.horario).trim()) ? esq.horario : ((cfg && cfg.partida) || '00:00');
   var via     = (cfg && cfg.via)     ? cfg.via     : 'BR';
   if (cfg && cfg.viaVel) {
     Object.keys(cfg.viaVel).forEach(function(k) { _tipoViaVel[k] = cfg.viaVel[k]; });
@@ -389,6 +393,22 @@ function toggleView(v) {
 // ============================================================
 //  Cálculo de horário
 // ============================================================
+// ── Ajustes de rota (sobreposição de km/tempo por trecho) ────
+function _setRotasAjust(list) {
+  _rotasAjustList = list || [];
+  _rotasAjust = {};
+  _rotasAjustList.forEach(function(a) {
+    var rec = { km: a.km || 0, min: a.min || 0, motivo: a.motivo || '' };
+    // Vale nos dois sentidos (ida e volta) com o mesmo km/tempo.
+    _rotasAjust[a.codA + '|' + a.codB] = rec;
+    _rotasAjust[a.codB + '|' + a.codA] = rec;
+  });
+}
+// Retorna o ajuste do trecho codA→codB (ou null).
+function _rotaAjustada(codA, codB) {
+  return _rotasAjust[String(codA) + '|' + String(codB)] || null;
+}
+
 function _calcHorario(osrmLegs) {
   var vel      = parseFloat(document.getElementById('horVelMedia').value) || 80;
   var partida  = document.getElementById('horHoraPartida').value || '00:00';
@@ -413,17 +433,27 @@ function _calcHorario(osrmLegs) {
       var prev = _seq[i - 1];
       var legViaType = _legVia[prev.idPonto];
       var legVel = legViaType ? (_tipoViaVel[legViaType] || vel) : vel;
-      var pRank = osrmOk ? coordRank[i - 1] : undefined;
-      var cRank = osrmOk ? coordRank[i]     : undefined;
-      var leg   = (osrmOk && pRank !== undefined && cRank !== undefined
-                   && cRank === pRank + 1) ? osrmLegs[pRank] : null;
-      if (leg) {
-        dist = leg.distKm; distSource = 'osrm';
-        tv   = Math.max(Math.round((leg.distKm / legVel) * 60), MIN_LEG_TV);
-        timeSource = 'vel';
+      // Ajuste de rota tem prioridade: sobrepõe km/tempo do trecho (ex.: desvio).
+      var adj = _rotaAjustada(prev.idPonto, p.idPonto);
+      if (adj) {
+        dist = adj.km > 0 ? adj.km : 0;
+        distSource = 'ajuste';
+        tv = adj.min > 0 ? Math.round(adj.min)
+                         : Math.max(Math.round((dist / legVel) * 60), MIN_LEG_TV);
+        timeSource = 'ajuste';
       } else {
-        dist = 0; distSource = 'none';
-        tv   = MIN_LEG_TV; timeSource = 'min';
+        var pRank = osrmOk ? coordRank[i - 1] : undefined;
+        var cRank = osrmOk ? coordRank[i]     : undefined;
+        var leg   = (osrmOk && pRank !== undefined && cRank !== undefined
+                     && cRank === pRank + 1) ? osrmLegs[pRank] : null;
+        if (leg) {
+          dist = leg.distKm; distSource = 'osrm';
+          tv   = Math.max(Math.round((leg.distKm / legVel) * 60), MIN_LEG_TV);
+          timeSource = 'vel';
+        } else {
+          dist = 0; distSource = 'none';
+          tv   = MIN_LEG_TV; timeSource = 'min';
+        }
       }
     }
 
@@ -1620,7 +1650,7 @@ function gerarPdfComOpcoes() {
 // ============================================================
 //  Gera PDF em nova janela
 // ============================================================
-function imprimirHorario(returnHtml) {
+function imprimirHorario(returnHtml, forServer) {
   if (!_sel || !_seq.length) return;
   var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
   var c        = _calcHorario(osrmLegs);
@@ -1633,7 +1663,9 @@ function imprimirHorario(returnHtml) {
   var startIdx  = Math.min(_horStartIdx, c.pontos.length - 1);
   var cols      = _pdfCols;
   var _sentStr  = _sel.sentido ? ' (' + _sel.sentido + ')' : '';
-  var title     = _pdfTitle    || ((_sel.horario || '00:00').replace(':', 'h') + ' - ' + _sel.nome_linha + ' (' + _sel.id_esquema + ')' + _sentStr);
+  // Título sem o código de sequência do esquema (ex.: "(158)"). O código de
+  // linha (ex.: "(RNSP00530460)") já vem embutido em nome_linha quando existe.
+  var title     = _pdfTitle    || ((_sel.horario || '00:00').replace(':', 'h') + ' - ' + _sel.nome_linha + _sentStr);
   var subtitle  = _pdfSubtitle || '';
 
   function pe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1657,8 +1689,14 @@ function imprimirHorario(returnHtml) {
   }
 
   var thead = activeCols.map(function(col) {
-    return '<th style="text-align:' + col.align + ';">' + col.label + '</th>';
+    return '<th bgcolor="#f0f2f8" style="text-align:' + col.align + ';">' + col.label + '</th>';
   }).join('');
+
+  // Badge de partida: o conversor de PDF do servidor não renderiza SVG inline,
+  // então no modo forServer usamos um símbolo de texto no lugar do ícone.
+  var startBadge = forServer
+    ? '<span style="background:#f47920;color:#fff;border-radius:3px;padding:0 5px;margin-left:4px;font-size:9px;font-weight:700;">&#9658;</span>'
+    : '<span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">' + ico('send',9) + '</span>';
 
   var tbody = '';
   var accumTv = 0, accumDist = 0, accumAllOsrm = true;
@@ -1682,7 +1720,7 @@ function imprimirHorario(returnHtml) {
     var cells  = {};
 
     cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>'
-      + (isStart ? ' <span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">' + ico('send',9) + '</span>' : '');
+      + (isStart ? ' ' + startBadge : '');
 
     if (pdfMode === 'comercial') {
       cells.chegada = isStart
@@ -1713,7 +1751,7 @@ function imprimirHorario(returnHtml) {
       cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? hhmm(p.tp) : '—';
       cells.saida   = p.saidaMin !== null
         ? '<strong>' + msR(p.saidaMin) + '</strong>'
-        : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + ico('star',11) + ' ' + msR(p.chegadaMin) + '</strong>' : '—');
+        : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + (forServer ? '&#9733;' : ico('star',11)) + ' ' + msR(p.chegadaMin) + '</strong>' : '—');
 
       if (isStart || !p.hasCoords) {
         cells.desl = '—';
@@ -1736,13 +1774,77 @@ function imprimirHorario(returnHtml) {
       }
     }
 
-    var rowBg = isStart ? 'background:#f0fff8;' : isLast ? 'background:#fff8f0;' : (!comVal ? 'background:#fff8f2;' : '');
-    tbody += '<tr style="' + rowBg + '">';
+    var rowBgColor = isStart ? '#f0fff8' : isLast ? '#fff8f0' : (!comVal ? '#fff8f2' : '');
+    tbody += '<tr' + (rowBgColor ? ' bgcolor="' + rowBgColor + '" style="background-color:' + rowBgColor + ';"' : '') + '>';
     activeCols.forEach(function(col) {
       tbody += '<td style="text-align:' + col.align + ';">' + (cells[col.key] || '—') + '</td>';
     });
     tbody += '</tr>';
   });
+
+  // ── Modo servidor: HTML enxuto para o conversor do Google (getAs PDF).
+  // O conversor não suporta grid/flex/position:fixed/SVG, então stats viram
+  // <table> e os ícones viram texto. O rodapé NÃO vai no HTML: é carimbado
+  // depois em todas as páginas via pdf-lib (o conversor não fixa rodapé por
+  // página); o @page reserva 14mm no pé para o carimbo não cobrir as linhas.
+  if (forServer) {
+    var sMeta = [_sel.sentido, 'Partida ' + partidaR(partida), (tipoVia || 'BR'), vel + ' km/h', fonteDist]
+                  .filter(Boolean).map(pe).join(' &nbsp;·&nbsp; ');
+    // table-layout:fixed + larguras explícitas: as colunas de tempo/valor ficam
+    // estreitas e a Cidade fica com o restante, para nomes longos caberem em 1
+    // linha (evita linhas altas e baixas alternadas). Garante também que a tabela
+    // nunca exceda a página (o conversor do Google cortava colunas ao transbordar).
+    var colW     = { chegada: 13, parada: 11, saida: 13, comercial: 13, dif: 11, desl: 18 };
+    var usadas   = activeCols.slice(1).reduce(function(s, col) { return s + (colW[col.key] || 14); }, 0);
+    var firstW   = Math.max(28, 100 - usadas);
+    var colgroup = '<colgroup><col style="width:' + firstW + '%;">'
+      + activeCols.slice(1).map(function(col) { return '<col style="width:' + (colW[col.key] || 14) + '%;">'; }).join('')
+      + '</colgroup>';
+    var s = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>' + pe(title) + '</title><style>'
+      + '@page{size:A4 portrait;margin:0 0 14mm 0;}'
+      // print-color-adjust:exact → o conversor do Google preserva as cores de
+      // fundo (barra escura do cabeçalho, realce dos stats, fundo do thead);
+      // sem isso ele descarta backgrounds ao renderizar como impressão.
+      + '*{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact;print-color-adjust:exact;}'
+      + 'html,body{width:210mm;}'
+      + 'body{font-family:Arial,Helvetica,sans-serif;font-size:12px;color:#1a1d23;}'
+      + '.hdr{background:#1a1d23;color:#fff;padding:22px 12mm 18px;}'
+      + '.hdr-title{font-size:22px;font-weight:900;letter-spacing:.01em;line-height:1.1;}'
+      + '.hdr-sub{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#f47920;margin-top:5px;}'
+      + '.hdr-meta{font-size:10px;color:#9aa0ad;margin-top:7px;}'
+      + '.body{padding:7mm 12mm 8mm;}'
+      + 'table.stats{width:100%;border-collapse:separate;border-spacing:6px 0;margin-bottom:14px;}'
+      + 'table.stats td{border:1px solid #dde1ee;border-radius:6px;padding:10px 12px;text-align:center;width:25%;}'
+      + 'table.stats td.hi{background:#fff8f0;border-color:#fddcb3;}'
+      + '.sv{font-size:16px;font-weight:800;color:#1a1d23;}'
+      + 'table.stats td.hi .sv{color:#f47920;}'
+      + '.sl{font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:#888;margin-top:2px;}'
+      + 'table.sched{width:100%;table-layout:fixed;border-collapse:collapse;font-size:11px;border:1px solid #cdd2e5;}'
+      + 'table.sched th{background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:normal;}'
+      + 'table.sched td{padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;word-break:break-word;}'
+      + 'tr{page-break-inside:avoid;}'
+      + '</style></head><body>'
+      // Cabeçalho via <table bgcolor> + cores inline: o conversor do Google
+      // ignora `background` em CSS, mas respeita o atributo bgcolor.
+      + '<table width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+      +   '<tr><td bgcolor="#1a1d23" style="background-color:#1a1d23;padding:22px 12mm 18px;">'
+      +     '<div style="font-size:22px;font-weight:900;letter-spacing:.01em;line-height:1.1;color:#ffffff;">' + pe(title) + '</div>'
+      +     (subtitle ? '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.1em;color:#f47920;margin-top:5px;">' + pe(subtitle) + '</div>' : '')
+      +     '<div style="font-size:10px;color:#9aa0ad;margin-top:7px;">' + sMeta + '</div>'
+      +   '</td></tr>'
+      + '</table>'
+      + '<div class="body">'
+      +   '<table class="stats"><tr>'
+      +     '<td><div class="sv">' + c.distTotal + ' km</div><div class="sl">Distância</div></td>'
+      +     '<td><div class="sv">' + hhmm(c.tvTotal) + '</div><div class="sl">Deslocamento</div></td>'
+      +     '<td><div class="sv">' + hhmm(c.tpTotal) + '</div><div class="sl">Paradas</div></td>'
+      +     '<td class="hi" bgcolor="#fff8f0"><div class="sv">' + hhmm(c.totalMin) + '</div><div class="sl">Tempo total</div></td>'
+      +   '</tr></table>'
+      +   '<table class="sched">' + colgroup + '<thead><tr>' + thead + '</tr></thead><tbody>' + tbody + '</tbody></table>'
+      + '</div>'
+      + '</body></html>';
+    return s;
+  }
 
   var html = '<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8">'
     + '<title>' + pe(title) + '</title><style>'
@@ -1972,6 +2074,7 @@ window.onload = function() {
       _esqs   = d.esquemas || [];
       _locais = d.locais   || [];
       _temposPermanencia = d.temposPermanencia || {};
+      _setRotasAjust(d.rotasAjustadas || []);
       _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
       doneLoading();
       _loadPdfPrefs();
@@ -1980,6 +2083,12 @@ window.onload = function() {
       setupPtSearch();
       mostrarHome();
       toast('Pronto — ' + _esqs.length + ' esquemas carregados', 'success', 3000);
+      // Deep-link: ?page=manager&esq=ID abre direto o esquema (nova aba).
+      if (typeof INITIAL_ESQ !== 'undefined' && INITIAL_ESQ) {
+        var alvo = _esqs.find(function(e) { return String(e.id_esquema) === String(INITIAL_ESQ); });
+        if (alvo) selecionarEsq(alvo);
+        else toast('Esquema #' + INITIAL_ESQ + ' não encontrado.', 'error');
+      }
     })
     .withFailureHandler(function(e) {
       doneLoading();
@@ -2229,6 +2338,7 @@ function novoEsquema() {
   document.getElementById('hdrViewToggle').style.display = 'none';
   document.getElementById('btnSalvar').style.display = 'none';
   document.getElementById('btnVolta').style.display  = 'none';
+  document.getElementById('btnAnalisar').style.display = 'none';
   document.getElementById('horPanel').style.display = 'none';
   document.getElementById('btnViewMapa').classList.add('active');
   document.getElementById('btnViewHorario').classList.remove('active');
@@ -2301,7 +2411,8 @@ function carregarPontos(idEsq) {
       doneLoading();
       _seq = pontos.map(function(p) {
         var l = _lMap[String(p.idPonto)] || {};
-        return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '', lat: l.lat || null, lng: l.lng || null, isNew: false };
+        // Nome exibido = o guardado no esquema (nomePonto); LOCAIS é só fallback.
+        return { idPonto: p.idPonto, nomePonto: (p.nomePonto || l.descricao), tipo: p.tipo || '', lat: l.lat || null, lng: l.lng || null, isNew: false };
       });
       _seqDirt        = false;
       _osrmLegs       = undefined;
@@ -2334,6 +2445,7 @@ function carregarPontos(idEsq) {
       document.getElementById('hdrViewToggle').style.display = 'flex';
       document.getElementById('btnSalvar').style.display = '';
       document.getElementById('btnVolta').style.display  = '';
+      document.getElementById('btnAnalisar').style.display = 'inline-flex';
       fecharModalEsquema();
       // Restaura config imediatamente (com _tipoViaVel padrão) para renderHorario ter os valores certos
       _restoreHorConfig(_sel);
@@ -2499,6 +2611,8 @@ function dirtySeq() {
 var REGIOES_ORDEM  = ['Norte', 'Nordeste', 'Centro-Oeste', 'Sudeste', 'Sul'];
 var PERIODOS_ORDEM = ['Madrugada (00–05)', 'Manhã (06–11)', 'Tarde (12–17)', 'Noite (18–23)', 'Sem horário'];
 var _homeGroupKeys  = ['regiao'];  // array ordenado de chaves ativas
+var _homeLocalFilter = '';         // texto digitado no autocomplete de local
+var _homeLocalSel    = null;       // local selecionado: { codigo, descricao }
 var _homeView       = 'grid';   // 'grid' | 'list'
 var _homeHideEmpty  = false;    // ocultar esquemas sem pontos
 var _homeSelectMode = false;
@@ -2513,10 +2627,27 @@ var HOME_GROUPS = {
   partida: { keyOf: function(e){ return (e.partida && String(e.partida).trim()) ? String(e.partida).trim() : 'Sem partida'; } },
   fim:     { keyOf: function(e){ return (e.fim     && String(e.fim).trim())     ? String(e.fim).trim()     : 'Sem encerramento'; } },
   linha:   { keyOf: function(e){ return (e.nome_linha && String(e.nome_linha).trim()) ? String(e.nome_linha).trim() : '—'; } },
-  sentido: { order: ['Ida', 'Volta'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } }
+  sentido: { order: ['Ida', 'Volta'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } },
+  // Eixo de busca por local: o usuário escolhe um local cadastrado e vê as
+  // linhas que passam por ele. Casa por CÓDIGO do ponto (preciso), não por texto.
+  // Sem local selecionado, não devolve seções (renderHome mostra o prompt).
+  local:   { keysOf: function(e){
+               var sel = _homeLocalSel;
+               if (!sel) return [];
+               var codSel = String(sel.codigo).trim();
+               var has = (e.paradas || []).some(function(p){ return String(p.cod).trim() === codSel; });
+               return has ? [sel.descricao || codSel] : [];
+             } }
 };
 
 function mostrarHome() {
+  // Reseta a navbar para o estado "home": esconde o seletor de esquema (redundante
+  // aqui, já há busca + grid) e os controles do editor (toggle de view, salvar, volta).
+  ['hdrEsqBtn', 'hdrViewToggle', 'btnSalvar', 'btnVolta', 'btnAnalisar'].forEach(function(id) {
+    var el = document.getElementById(id); if (el) el.style.display = 'none';
+  });
+  _updateHdrEsq(null);
+
   try { var v = localStorage.getItem('vc_homeView'); if (v) setHomeView(v); } catch(e) {}
   try {
     var he = localStorage.getItem('vc_homeHideEmpty');
@@ -2531,6 +2662,8 @@ function mostrarHome() {
 function esconderHome() {
   var h = document.getElementById('homeScreen');
   if (h) h.classList.remove('open');
+  // Saindo para o editor: o seletor de esquema volta (mostra o esquema atual).
+  var b = document.getElementById('hdrEsqBtn'); if (b) b.style.display = '';
 }
 
 function novoEsquemaHome() {
@@ -2541,6 +2674,29 @@ function novoEsquemaHome() {
 
 function setHomeGroup(g) {
   if (!HOME_GROUPS[g]) return;
+
+  // 'local' é um modo de busca exclusivo (não empilha com os outros eixos).
+  if (g === 'local') {
+    var jaLocal = _homeGroupKeys.length === 1 && _homeGroupKeys[0] === 'local';
+    if (jaLocal) {
+      _homeGroupKeys = ['regiao'];   // toggle off → volta ao padrão
+      _homeLocalSel = null;
+      _homeLocalFilter = '';
+    } else {
+      _homeGroupKeys = ['local'];     // entra no modo busca por local
+    }
+    _updateGroupBar();
+    renderHome();
+    if (_homeGroupKeys[0] === 'local') {
+      var inp = document.getElementById('homeLocalInput');
+      if (inp) { inp.value = ''; setTimeout(function(){ inp.focus(); }, 0); }
+    }
+    return;
+  }
+
+  // Escolher qualquer outro eixo sai do modo 'local'.
+  if (_homeGroupKeys.indexOf('local') !== -1) { _homeGroupKeys = []; _homeLocalSel = null; }
+
   var idx = _homeGroupKeys.indexOf(g);
   if (idx !== -1) {
     // já está ativo: remove (mas mantém ao menos 1)
@@ -2548,6 +2704,7 @@ function setHomeGroup(g) {
   } else {
     _homeGroupKeys.push(g);
   }
+  if (!_homeGroupKeys.length) _homeGroupKeys = ['regiao'];
   _updateGroupBar();
   renderHome();
 }
@@ -2573,7 +2730,70 @@ function _updateGroupBar() {
       badge.style.display = 'none';
     }
   });
+
+  // Filtro de local só aparece quando o eixo 'local' está ativo.
+  var lf = document.getElementById('homeLocalFilter');
+  if (lf) lf.style.display = (_homeGroupKeys.indexOf('local') !== -1) ? '' : 'none';
 }
+
+// ── Autocomplete de local ────────────────────────────────────
+// Digita "PIRAPORA" → lista os locais cadastrados que casam; seleciona um →
+// renderHome mostra as linhas que passam por aquele ponto (match por código).
+function onHomeLocalInput(v) {
+  _homeLocalFilter = v || '';
+  _homeLocalSel = null;                 // digitar de novo limpa a seleção anterior
+  renderLocalSuggestions();
+  renderHome();
+}
+
+function renderLocalSuggestions() {
+  var drop = document.getElementById('homeLocalDrop');
+  if (!drop) return;
+  var q = norm(_homeLocalFilter);
+  if (!q) { drop.classList.remove('open'); drop.innerHTML = ''; return; }
+
+  var list = (_locais || []).filter(function(l) {
+    return norm(l.descricao).indexOf(q) !== -1 || norm(String(l.codigo)).indexOf(q) !== -1;
+  }).slice(0, 50);
+
+  if (!list.length) {
+    drop.innerHTML = '<div class="home-localdrop-empty">Nenhum local encontrado</div>';
+  } else {
+    drop.innerHTML = list.map(function(l) {
+      return '<div class="home-localdrop-opt" data-cod="' + esc(String(l.codigo)) + '">'
+        + '<span class="home-localdrop-name">' + esc(l.descricao) + '</span>'
+        + '<span class="home-localdrop-meta">' + esc(String(l.codigo))
+        + (l.tipo ? ' · ' + esc(l.tipo) : '') + '</span></div>';
+    }).join('');
+  }
+  drop.classList.add('open');
+  drop.querySelectorAll('.home-localdrop-opt').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      selecionarLocalHome(el.getAttribute('data-cod'));
+    });
+  });
+}
+
+function selecionarLocalHome(cod) {
+  var l = (_locais || []).find(function(x) { return String(x.codigo) === String(cod); });
+  if (!l) return;
+  _homeLocalSel = { codigo: l.codigo, descricao: l.descricao };
+  _homeLocalFilter = l.descricao;
+  var inp = document.getElementById('homeLocalInput');
+  if (inp) inp.value = l.descricao;
+  var drop = document.getElementById('homeLocalDrop');
+  if (drop) drop.classList.remove('open');
+  renderHome();
+}
+
+// Fecha o dropdown de local ao clicar fora dele.
+document.addEventListener('click', function(e) {
+  if (!e.target.closest('#homeLocalInput') && !e.target.closest('#homeLocalDrop')) {
+    var d = document.getElementById('homeLocalDrop');
+    if (d) d.classList.remove('open');
+  }
+});
 
 function toggleHideEmpty() {
   _homeHideEmpty = !_homeHideEmpty;
@@ -2627,8 +2847,12 @@ function _renderGroups(esqs, keys, depth, isList) {
   var rest   = keys.slice(1);
   var groups = {};
   esqs.forEach(function(e) {
-    var k = cfg.keyOf(e) || '—';
-    (groups[k] = groups[k] || []).push(e);
+    // Eixos N:N usam keysOf (array); os demais, keyOf (chave única).
+    var ks = cfg.keysOf ? cfg.keysOf(e) : [cfg.keyOf(e) || '—'];
+    ks.forEach(function(k) {
+      if (!k) return;
+      (groups[k] = groups[k] || []).push(e);
+    });
   });
   var sorted = _sortedGroupKeys(groups, cfg);
   if (!sorted.length) return '<div class="home-empty">Nenhum esquema.</div>';
@@ -2657,6 +2881,19 @@ function renderHome() {
   }
 
   var isList = (_homeView === 'list');
+
+  // Modo busca por local: sem local selecionado, mostra orientação em vez de
+  // despejar todas as paradas.
+  if (_homeGroupKeys.length === 1 && _homeGroupKeys[0] === 'local' && !_homeLocalSel) {
+    body.innerHTML = '<div class="home-empty">'
+      + (_homeLocalFilter
+          ? 'Selecione um local na lista para ver as linhas que passam por ele.'
+          : 'Digite o nome de um local ou cidade (ex.: <strong>Pirapora</strong>) e selecione-o para ver as linhas que passam por ali.')
+      + '</div>';
+    body.classList.toggle('selecting', _homeSelectMode);
+    return;
+  }
+
   body.innerHTML = _renderGroups(esqs, _homeGroupKeys, 0, isList);
 
   body.classList.toggle('selecting', _homeSelectMode);
@@ -2671,7 +2908,27 @@ function renderHome() {
       }
       if (esq) selecionarEsq(esq);
     });
+    // Clique do scroll (botão do meio) abre o esquema em outra aba.
+    el.addEventListener('auxclick', function(ev) {
+      if (ev.button !== 1) return;
+      ev.preventDefault();
+      _abrirEsqNovaAba(id);
+    });
+    // Evita o autoscroll do navegador ao pressionar o botão do meio.
+    el.addEventListener('mousedown', function(ev) {
+      if (ev.button === 1) ev.preventDefault();
+    });
   });
+}
+
+// Abre o editor de um esquema numa nova aba (deep-link ?page=manager&esq=ID).
+function _abrirEsqNovaAba(id) {
+  if (!id) return;
+  if (typeof WEB_APP_URL === 'undefined' || !WEB_APP_URL) {
+    toast('URL do app indisponível para abrir em nova aba.', 'error');
+    return;
+  }
+  window.open(WEB_APP_URL + '?page=manager&esq=' + encodeURIComponent(id), '_blank');
 }
 
 function _homeCardHtml(e) {
@@ -2841,6 +3098,8 @@ function _updateHomeSelCount() {
   if (c) c.textContent = n + (n === 1 ? ' selecionado' : ' selecionados');
   var d = document.getElementById('homeSelDownload');
   if (d) d.textContent = 'Baixar PDFs (' + n + ')';
+  var a = document.getElementById('homeSelAnalise');
+  if (a) a.textContent = 'Analisar grupo (' + n + ')';
 }
 
 // ============================================================
@@ -2939,9 +3198,6 @@ function pdfLoteModeSelect(mode) {
 }
 
 function gerarPdfsLote() {
-  if (typeof html2pdf === 'undefined' || typeof JSZip === 'undefined') {
-    toast('Bibliotecas de PDF não carregaram. Recarregue a página.', 'error'); return;
-  }
   ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
     var el = document.getElementById('pdfLoteCol_' + k);
     if (el) _pdfCols[k] = el.checked;
@@ -2955,6 +3211,27 @@ function gerarPdfsLote() {
   fecharModalPdfLote();
   if (!esqList.length) { toast('Nenhum esquema para gerar.', 'error'); return; }
 
+  // Antes de gerar: identifica esquemas que produziriam o mesmo nome de arquivo
+  // (mesma linha, horário e sentido) e abre um aviso para revisão.
+  var dups = _detectarDuplicadosLote(esqList);
+  if (dups.length) { _abrirModalDuplicados(esqList, dups); return; }
+
+  _iniciarLoteServer(esqList);
+}
+
+// Agrupa os esquemas pelo nome de arquivo final; retorna só os grupos com 2+ itens.
+function _detectarDuplicadosLote(esqList) {
+  var byName = {};
+  esqList.forEach(function(e) {
+    var k = _loteFilename(e).toLowerCase();
+    (byName[k] = byName[k] || []).push(e);
+  });
+  return Object.keys(byName)
+    .filter(function(k) { return byName[k].length > 1; })
+    .map(function(k) { return byName[k]; });
+}
+
+function _iniciarLoteServer(esqList) {
   loading('Preparando dados…');
   google.script.run
     .withSuccessHandler(function(pontosByEsq) {
@@ -2980,41 +3257,1191 @@ function gerarPdfsLote() {
     .getTodosPontosParaFormulario();
 }
 
-function _processLote(esqList, pontosByEsq, cacheMap) {
-  var snap = _snapshotEsqState();
-  var zip  = new JSZip();
-  var idx = 0, ok = 0, fail = 0;
+// ── Aviso de esquemas duplicados ───────────────────────────────────────────
+var _loteDupPending = null;
 
-  function finish() {
-    _restoreEsqState(snap);
-    if (!ok) { doneLoading(); toast('Nenhum PDF foi gerado.', 'error'); return; }
-    loading('Compactando ' + ok + ' PDFs…');
-    zip.generateAsync({ type: 'blob' }).then(function(blob) {
-      doneLoading();
-      _baixarBlob(blob, 'esquemas_pdfs.zip');
-      toast(ok + ' PDFs gerados' + (fail ? (' · ' + fail + ' falharam') : ''), 'success', 4500);
-    }).catch(function() { doneLoading(); toast('Erro ao compactar os PDFs.', 'error'); });
+function _abrirModalDuplicados(esqList, dups) {
+  _loteDupPending = esqList;
+  var ex = document.getElementById('pdfDupOverlay');
+  if (ex) ex.remove();
+
+  var listHtml = dups.map(function(g) {
+    var nome  = _loteFilename(g[0]).replace(/\.pdf$/i, '');
+    var itens = g.map(function(e) {
+      var sent = e.sentido ? ' · ' + esc(e.sentido) : '';
+      return '<li style="font-size:12px;color:#3a3f52;margin:2px 0;">#' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + sent + '</li>';
+    }).join('');
+    return '<div style="margin-bottom:12px;">'
+      + '<div style="font-size:12px;font-weight:700;color:#1a1d23;margin-bottom:3px;">' + esc(nome) + ' <span style="color:#e0a000;font-weight:700;">×' + g.length + '</span></div>'
+      + '<ul style="margin:0;padding-left:18px;">' + itens + '</ul>'
+      + '</div>';
+  }).join('');
+
+  var modal =
+    '<div id="pdfDupOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:460px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('alert-triangle', 15) + ' Esquemas duplicados</div>'
+        + '<button onclick="_fecharModalDup()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:18px 20px;overflow-y:auto;">'
+        + '<p style="font-size:13px;color:#3a3f52;margin:0 0 12px;">' + dups.length + (dups.length === 1 ? ' nome de arquivo se repete' : ' nomes de arquivo se repetem')
+          + ' (mesma linha, horário e sentido). Se gerar assim, os repetidos recebem sufixo <strong>(2)</strong>, <strong>(3)</strong>… Revise os esquemas abaixo se forem duplicatas indevidas.</p>'
+        + listHtml
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
+        + '<button onclick="_fecharModalDup()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="_confirmarLoteComDup()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Gerar mesmo assim</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('pdfDupOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalDup(); });
+}
+
+function _fecharModalDup() {
+  var m = document.getElementById('pdfDupOverlay');
+  if (m) m.remove();
+  _loteDupPending = null;
+}
+
+function _confirmarLoteComDup() {
+  var lista = _loteDupPending;
+  _fecharModalDup();
+  if (lista && lista.length) _iniciarLoteServer(lista);
+}
+
+// ============================================================
+//  FERRAMENTAS EM MASSA — substituir ponto / inserir entre pontos
+// ============================================================
+var _massa = { tab: 'sub', x: null, y: null, a: null, b: null, ra: null, rb: null, novos: [], preview: null, import: { rows: [], fileName: '', atualizar: false } };
+
+function abrirModalMassa() {
+  var ex = document.getElementById('massaOverlay'); if (ex) ex.remove();
+  _massa = { tab: 'sub', x: null, y: null, a: null, b: null, ra: null, rb: null, novos: [], preview: null, import: { rows: [], fileName: '', atualizar: false } };
+
+  var modal =
+    '<div id="massaOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:600px;max-width:96vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;">Ferramentas em massa</div>'
+        + '<button onclick="fecharModalMassa()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 16) + '</button>'
+      + '</div>'
+      + '<div style="display:flex;gap:6px;padding:14px 22px 0;flex-shrink:0;">'
+        + '<button id="massaTab_sub" class="massa-tab" onclick="massaSetTab(\'sub\')">Substituir ponto</button>'
+        + '<button id="massaTab_ins" class="massa-tab" onclick="massaSetTab(\'ins\')">Inserir entre pontos</button>'
+        + '<button id="massaTab_novo" class="massa-tab" onclick="massaSetTab(\'novo\')">Novo ponto</button>'
+        + '<button id="massaTab_import" class="massa-tab" onclick="massaSetTab(\'import\')">Importar CSV</button>'
+        + '<button id="massaTab_rota" class="massa-tab" onclick="massaSetTab(\'rota\')">Ajuste de rota</button>'
+      + '</div>'
+      + '<div id="massaBody" style="padding:18px 22px;overflow-y:auto;flex:1;"></div>'
+      + '<div id="massaMsg" class="massa-msg" style="display:none;"></div>'
+      + '<div id="massaFoot" style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-shrink:0;"></div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('massaOverlay').addEventListener('click', function(e) { if (e.target === this) fecharModalMassa(); });
+  massaSetTab('sub');
+}
+
+function fecharModalMassa() { _rotaDestroyMap(); var o = document.getElementById('massaOverlay'); if (o) o.remove(); }
+
+// Mensagem inline do modal (visível por cima do conteúdo, ao lado do rodapé).
+function massaMsg(text, type) {
+  var el = document.getElementById('massaMsg'); if (!el) return;
+  if (!text) { el.style.display = 'none'; el.textContent = ''; el.className = 'massa-msg'; return; }
+  el.textContent = text;
+  el.className = 'massa-msg ' + (type || 'info');
+  el.style.display = 'block';
+}
+
+function massaSetTab(t) {
+  if (t !== 'rota') _rotaDestroyMap();   // libera o Leaflet ao sair do mapa
+  _massa.tab = t; _massa.preview = null;
+  massaMsg('');
+  ['sub', 'ins', 'novo', 'import', 'rota'].forEach(function(k) {
+    var b = document.getElementById('massaTab_' + k);
+    if (b) b.classList.toggle('active', k === t);
+  });
+  renderMassaBody();
+}
+
+// ── Combobox reutilizável (slots: x, y, a, b, novo) ──────────
+function _massaPickHtml(slot, label, placeholder) {
+  return '<div style="margin-bottom:14px;position:relative;">'
+    + (label ? '<div class="massa-lbl">' + label + '</div>' : '')
+    + '<input id="massaPick_' + slot + '" class="massa-input" autocomplete="off" placeholder="' + placeholder + '" '
+    + 'oninput="massaPickInput(\'' + slot + '\',this.value)" onfocus="massaPickInput(\'' + slot + '\',this.value)">'
+    + '<div id="massaDrop_' + slot + '" class="home-localdrop"></div>'
+    + '</div>';
+}
+
+function massaPickInput(slot, v) {
+  if (slot !== 'novo') { _massa[slot] = null; }
+  _massa.preview = null; renderMassaPreviewBox(); renderMassaFoot();
+  if (slot === 'ra' || slot === 'rb') renderRotaPreview();
+  var drop = document.getElementById('massaDrop_' + slot); if (!drop) return;
+  var q = norm(v);
+  if (!q) { drop.classList.remove('open'); drop.innerHTML = ''; return; }
+  var list = (_locais || []).filter(function(l) {
+    return norm(l.descricao).indexOf(q) !== -1 || norm(String(l.codigo)).indexOf(q) !== -1;
+  }).slice(0, 40);
+  drop.innerHTML = list.length ? list.map(function(l) {
+    return '<div class="home-localdrop-opt" data-cod="' + esc(String(l.codigo)) + '">'
+      + '<span class="home-localdrop-name">' + esc(l.descricao) + '</span>'
+      + '<span class="home-localdrop-meta">' + esc(String(l.codigo)) + (l.tipo ? ' · ' + esc(l.tipo) : '') + '</span></div>';
+  }).join('') : '<div class="home-localdrop-empty">Nenhum local encontrado</div>';
+  drop.classList.add('open');
+  drop.querySelectorAll('.home-localdrop-opt').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) { ev.preventDefault(); massaPickSelect(slot, el.getAttribute('data-cod')); });
+  });
+}
+
+function massaPickSelect(slot, cod) {
+  var l = (_locais || []).find(function(x) { return String(x.codigo) === String(cod); }); if (!l) return;
+  var inp = document.getElementById('massaPick_' + slot);
+  var drop = document.getElementById('massaDrop_' + slot); if (drop) drop.classList.remove('open');
+  _massa.preview = null; renderMassaPreviewBox();
+  if (slot === 'novo') {
+    _massa.novos.push({ cod: String(l.codigo), nome: l.descricao, tipo: l.tipo || '' });
+    if (inp) inp.value = '';
+    renderMassaNovos(); renderMassaFoot();
+    return;
+  }
+  if (inp) inp.value = l.descricao;
+  _massa[slot] = { codigo: String(l.codigo), descricao: l.descricao, lat: l.lat, lng: l.lng };
+  if (slot === 'ra' || slot === 'rb') { renderRotaPreview(); _rotaPointsChanged(); }
+  renderMassaFoot();
+}
+
+// ── Corpo por aba ────────────────────────────────────────────
+function renderMassaBody() {
+  var body = document.getElementById('massaBody'); if (!body) return;
+  if (_massa.tab === 'sub') {
+    body.innerHTML =
+      '<div class="massa-intro">Troca um ponto por outro em <strong>todas as linhas</strong> que passam por ele. '
+      + 'Linhas que já contêm o ponto destino são puladas.</div>'
+      + _massaPickHtml('x', 'Ponto atual (será substituído)', 'Buscar local cadastrado…')
+      + _massaPickHtml('y', 'Novo ponto', 'Buscar local cadastrado…')
+      + '<div id="massaPreviewBox"></div>';
+  } else if (_massa.tab === 'ins') {
+    body.innerHTML =
+      '<div class="massa-intro">Insere um ou mais pontos entre A e B em <strong>todas as linhas</strong> onde eles são paradas consecutivas. '
+      + 'Aplica também no sentido inverso (volta), espelhando a ordem.</div>'
+      + _massaPickHtml('a', 'Ponto A', 'Buscar local cadastrado…')
+      + _massaPickHtml('b', 'Ponto B (logo após A)', 'Buscar local cadastrado…')
+      + '<div class="massa-lbl">Pontos a inserir entre A e B</div>'
+      + _massaPickHtml('novo', '', 'Adicionar ponto…')
+      + '<div id="massaNovosList" style="margin-bottom:6px;"></div>'
+      + '<div id="massaPreviewBox"></div>';
+    renderMassaNovos();
+  } else if (_massa.tab === 'novo') {
+    body.innerHTML = _massaNovoFormHtml();
+    // Datalist de tipos existentes + sugestão de código do servidor
+    _preencherTiposDatalist();
+    google.script.run
+      .withSuccessHandler(function(cod) { var el = document.getElementById('np_codigo'); if (el && !el.value) el.value = cod || ''; })
+      .getProximoCodigoLocal();
+  } else if (_massa.tab === 'import') {
+    body.innerHTML =
+      '<div class="massa-intro">Suba o CSV exportado da base de locais. As linhas são preenchidas automaticamente; '
+      + 'você revisa e salva. Códigos já existentes são pulados.</div>'
+      + '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">'
+      + '<label class="np-file"><input type="file" accept=".csv,text/csv" onchange="massaCsvFile(this)" style="display:none;">'
+      + '<span>' + ico('upload-cloud', 15) + ' Escolher arquivo CSV…</span></label>'
+      + '<label class="np-check"><input type="checkbox" id="impUpd"' + (_massa.import.atualizar ? ' checked' : '')
+      + ' onchange="massaImportToggleUpd(this.checked)"> Atualizar registros já existentes</label>'
+      + '</div>'
+      + '<div id="massaImportBox" style="margin-top:14px;"></div>';
+    renderImportTable();
+  } else if (_massa.tab === 'rota') {
+    body.innerHTML =
+      '<div class="massa-intro">Ajusta a <strong>distância e o tempo</strong> de um trecho (ex.: desvio). '
+      + 'Escolha A e B, <strong>arraste o traçado no mapa</strong> pra desenhar o desvio, e o km/tempo recalculam. '
+      + 'Vale para <strong>todas as linhas</strong> com A↔B consecutivos, sem mudar a sequência.</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">'
+        + _massaPickHtml('ra', 'Ponto A', 'Buscar local…')
+        + _massaPickHtml('rb', 'Ponto B', 'Buscar local…')
+      + '</div>'
+      + '<div id="rotaMapWrap" style="margin-top:6px;">'
+        + '<div class="rota-map-bar">'
+          + '<span id="rotaMapStatus" class="rota-map-status">Selecione A e B (com coordenadas) para abrir o mapa.</span>'
+          + '<button type="button" class="rota-map-btn" id="rotaBtnClear" onclick="_rotaClearVias()" style="display:none;">Limpar desvio</button>'
+        + '</div>'
+        + '<div id="rotaMap" class="rota-map"></div>'
+        + '<div class="rota-map-hint">Clique sobre a linha para puxá-la por um caminho; arraste os pontos roxos para ajustar. O traçado reroteia pelo OSRM.</div>'
+      + '</div>'
+      + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:6px;">'
+        + '<div><div class="massa-lbl">Distância do trecho (km)</div>'
+        + '<input id="ra_km" class="massa-input" inputmode="decimal" placeholder="ex: 290" oninput="_massaRotaTouch()"></div>'
+        + '<div><div class="massa-lbl">Tempo do trecho (HH:MM)</div>'
+        + '<input id="ra_tempo" class="massa-input" placeholder="ex: 4:30" oninput="_massaRotaTouch()"></div>'
+      + '</div>'
+      + '<div style="margin-top:12px;"><div class="massa-lbl">Motivo (opcional)</div>'
+      + '<input id="ra_motivo" class="massa-input" placeholder="ex: Ponte do Rio das Velhas interditada"></div>'
+      + '<div id="massaRotaPreview"></div>'
+      + '<div class="np-sec">Ajustes ativos</div>'
+      + '<div id="massaRotaList"></div>';
+    if (_massa.ra) { var ea = document.getElementById('massaPick_ra'); if (ea) ea.value = _massa.ra.descricao; }
+    if (_massa.rb) { var eb = document.getElementById('massaPick_rb'); if (eb) eb.value = _massa.rb.descricao; }
+    renderRotaPreview();
+    renderRotasList();
+    setTimeout(_rotaPointsChanged, 60);
+  }
+  renderMassaFoot();
+}
+
+// ── Formulário de novo ponto (aba 'novo') ────────────────────
+function _npText(id, label, ph, attrs) {
+  return '<div style="display:flex;flex-direction:column;gap:4px;">'
+    + '<label class="massa-lbl" for="np_' + id + '" style="margin:0;">' + label + '</label>'
+    + '<input id="np_' + id + '" class="massa-input" autocomplete="off" placeholder="' + (ph || '') + '" ' + (attrs || '') + '>'
+    + '</div>';
+}
+function _npCheck(id, label, checked) {
+  return '<label class="np-check"><input type="checkbox" id="np_' + id + '"' + (checked ? ' checked' : '') + '> ' + label + '</label>';
+}
+function _massaNovoFormHtml() {
+  return '<div class="massa-intro">Cadastra um novo ponto na base <strong>LOCAIS</strong>. '
+      + 'Ele fica disponível para as outras ferramentas e para os esquemas após o cadastro.</div>'
+    + '<div class="np-grid">'
+      + _npText('codigo', 'Código *', 'ex: 327', 'inputmode="numeric"')
+      + _npText('codEmb', 'Cód. Emb.', '')
+      + '<div style="grid-column:1 / -1;">' + _npText('descricao', 'Descrição *', 'ex: RODOVIARIA DE PIRAPORA - MG') + '</div>'
+      + _npText('descResumida', 'Desc. Resumida', 'ex: PIRAPORA')
+      + _npText('tipo', 'Tipo', '', 'list="npTipos"')
+      + _npText('unidade', 'Unidade Empresarial', '')
+      + _npText('grupoPc', 'Grupo PC.', '')
+      + _npText('codigoExterno', 'Código externo', '')
+      + _npText('direcoes', 'Direções', '')
+    + '</div>'
+    + '<div class="np-sec">Parâmetros</div>'
+    + '<div class="np-grid">'
+      + _npText('latitude',  'Latitude',  'ex: -17.345678', 'inputmode="decimal"')
+      + _npText('longitude', 'Longitude', 'ex: -44.123456', 'inputmode="decimal"')
+      + _npText('vel',        'Vel. (km/h)',     '', 'inputmode="numeric"')
+      + _npText('raio',       'Raio',            '', 'inputmode="numeric"')
+      + _npText('raioAdvert', 'Raio Advert.',    '', 'inputmode="numeric"')
+      + _npText('ajusteHorario', 'Ajuste Horário', '', 'inputmode="numeric"')
+      + _npText('distVel',    'Dist. uso vel.',  '', 'inputmode="numeric"')
+    + '</div>'
+    + '<div class="np-sec">Indicadores</div>'
+    + '<div class="np-checks">'
+      + _npCheck('ativo', 'Ativo', true)
+      + _npCheck('rodoviaria', 'Rodoviária', false)
+      + _npCheck('garagem', 'Garagem', false)
+      + _npCheck('pedagio', 'Pedágio', false)
+      + _npCheck('suspensao', 'Suspensão', false)
+      + _npCheck('online', 'Online', false)
+      + _npCheck('auxiliar', 'Auxiliar', false)
+      + _npCheck('seletivo', 'Seletivo', false)
+      + _npCheck('pontoVel', 'Ponto Vel.', false)
+      + _npCheck('areaVel', 'Area Vel.', false)
+    + '</div>'
+    + '<datalist id="npTipos"></datalist>';
+}
+function _preencherTiposDatalist() {
+  var dl = document.getElementById('npTipos'); if (!dl) return;
+  var seen = {}, tipos = [];
+  (_locais || []).forEach(function(l) {
+    var t = String(l.tipo || '').trim();
+    if (t && !seen[t]) { seen[t] = 1; tipos.push(t); }
+  });
+  tipos.sort();
+  dl.innerHTML = tipos.map(function(t) { return '<option value="' + esc(t) + '">'; }).join('');
+}
+function _npVal(id) { var el = document.getElementById('np_' + id); return el ? el.value : ''; }
+function _npChk(id) { var el = document.getElementById('np_' + id); return !!(el && el.checked); }
+
+function massaCadastrar() {
+  var codigo = _npVal('codigo').trim();
+  var descricao = _npVal('descricao').trim();
+  if (!codigo)    { massaMsg('Informe o código.', 'error'); var c = document.getElementById('np_codigo'); if (c) c.focus(); return; }
+  if (!descricao) { massaMsg('Informe a descrição.', 'error'); var dd = document.getElementById('np_descricao'); if (dd) dd.focus(); return; }
+
+  var btn = document.getElementById('massaBtnCad');
+  if (btn) { btn.disabled = true; btn.textContent = 'Cadastrando…'; }
+  massaMsg('');
+
+  var dados = {
+    codigo: codigo, codEmb: _npVal('codEmb'), descResumida: _npVal('descResumida'),
+    descricao: descricao, unidade: _npVal('unidade'), tipo: _npVal('tipo'),
+    ajusteHorario: _npVal('ajusteHorario'), raio: _npVal('raio'), raioAdvert: _npVal('raioAdvert'),
+    vel: _npVal('vel'), grupoPc: _npVal('grupoPc'), distVel: _npVal('distVel'),
+    codigoExterno: _npVal('codigoExterno'), direcoes: _npVal('direcoes'),
+    latitude: _npVal('latitude'), longitude: _npVal('longitude'),
+    ativo: _npChk('ativo'), pedagio: _npChk('pedagio'), rodoviaria: _npChk('rodoviaria'),
+    suspensao: _npChk('suspensao'), garagem: _npChk('garagem'), online: _npChk('online'),
+    auxiliar: _npChk('auxiliar'), seletivo: _npChk('seletivo'),
+    pontoVel: _npChk('pontoVel'), areaVel: _npChk('areaVel')
+  };
+
+  google.script.run
+    .withSuccessHandler(function(novo) {
+      // Atualiza a base em memória para uso imediato nas outras abas
+      if (novo && novo.codigo) {
+        _locais.push(novo);
+        _lMap[String(novo.codigo)] = novo;
+      }
+      renderMassaBody(); // limpa o formulário e sugere o próximo código (recria o botão)
+      massaMsg('Ponto ' + (novo ? novo.codigo : '') + ' cadastrado com sucesso.', 'success');
+      toast('Ponto ' + (novo ? novo.codigo : '') + ' cadastrado.', 'success', 4000);
+    })
+    .withFailureHandler(function(e) {
+      var b = document.getElementById('massaBtnCad');
+      if (b) { b.disabled = false; b.textContent = 'Cadastrar ponto'; }
+      massaMsg('Erro: ' + (e.message || e), 'error');
+    })
+    .cadastrarLocal(dados);
+}
+
+// ── Importação de CSV ────────────────────────────────────────
+// Ordem das colunas da aba LOCAIS (0..28) com aliases de cabeçalho normalizados.
+var _LOC_HEADERS = [
+  ['codigo'], ['cod emb'], ['desc resumida'], ['descricao'],
+  ['unidade empresarial', 'unidade'], ['tipo'], ['ajuste horario'], ['raio'],
+  ['raio advert'], ['vel'], ['grupo pc'], ['dist uso vel'], ['codigo externo'],
+  ['ativo'], ['pedagio'], ['rodoviaria'], ['suspensao'], ['garagem'], ['online'],
+  ['auxiliar', 'auxlilar'], ['seletivo'], ['ponto vel'], ['area vel'], ['direcoes'],
+  ['latitude'], ['longitude'], ['chave'], ['data cadastro'], ['data alteracao']
+];
+
+function _normHdr(s) {
+  return String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+function _coerceCsv(v) {
+  var s = String(v == null ? '' : v).trim();
+  if (s === '') return '';
+  if (/^-?\d+(?:\.\d+)?$/.test(s)) return Number(s);
+  return s;
+}
+
+// Parser CSV: aspas, vírgulas internas, CRLF e quebras dentro de aspas.
+function _parseCSV(text) {
+  var rows = [], row = [], cur = '', q = false, i = 0, c;
+  for (; i < text.length; i++) {
+    c = text[i];
+    if (q) {
+      if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; }
+      else cur += c;
+    } else {
+      if (c === '"') q = true;
+      else if (c === ',') { row.push(cur); cur = ''; }
+      else if (c === '\r') { /* ignora */ }
+      else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; }
+      else cur += c;
+    }
+  }
+  if (cur !== '' || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+
+function massaCsvFile(input) {
+  var file = input && input.files && input.files[0];
+  if (!file) return;
+  var upd = !!(_massa.import && _massa.import.atualizar);
+  _massa.import = { rows: [], fileName: file.name, atualizar: upd };
+  massaMsg('Lendo ' + file.name + '…', 'info');
+  var reader = new FileReader();
+  reader.onload = function() {
+    try { _processarCsv(String(reader.result || '')); }
+    catch (e) { massaMsg('Erro ao ler CSV: ' + (e.message || e), 'error'); }
+  };
+  reader.onerror = function() { massaMsg('Não consegui ler o arquivo.', 'error'); };
+  // O export vem em Latin-1 (ISO-8859-1) — preserva os acentos.
+  reader.readAsText(file, 'ISO-8859-1');
+}
+
+function _processarCsv(text) {
+  var grid = _parseCSV(text).filter(function(r) {
+    return r.some(function(c) { return String(c).trim() !== ''; });
+  });
+  if (grid.length < 2) { massaMsg('CSV sem linhas de dados.', 'error'); return; }
+
+  // Mapa: índice da coluna no CSV → índice na aba LOCAIS
+  var header = grid[0].map(_normHdr);
+  var csvToLoc = header.map(function(h) {
+    for (var li = 0; li < _LOC_HEADERS.length; li++) {
+      if (_LOC_HEADERS[li].indexOf(h) !== -1) return li;
+    }
+    return -1;
+  });
+  if (csvToLoc.indexOf(0) === -1) { massaMsg('O cabeçalho não tem a coluna "Código". Confira o arquivo.', 'error'); return; }
+
+  var rows = [];
+  for (var r = 1; r < grid.length; r++) {
+    var arr = new Array(_LOC_HEADERS.length).fill('');
+    grid[r].forEach(function(val, j) {
+      var li = csvToLoc[j];
+      if (li >= 0) arr[li] = _coerceCsv(val);
+    });
+    var cod = String(arr[0]).trim();
+    var status = !cod ? 'erro' : (_lMap[cod] ? 'existe' : 'novo');
+    rows.push({ arr: arr, codigo: cod, descricao: String(arr[3] || ''), tipo: String(arr[5] || ''),
+                lat: arr[24], lng: arr[25], status: status });
+  }
+  // Duplicado dentro do próprio arquivo → marca como 'existe' a partir da 2ª ocorrência
+  var seen = {};
+  rows.forEach(function(it) {
+    if (it.status === 'novo') {
+      if (seen[it.codigo]) it.status = 'existe';
+      else seen[it.codigo] = true;
+    }
+  });
+
+  _massa.import.rows = rows;
+  _aplicarModoAtualizarImport();
+  massaMsg('');
+  renderImportTable();
+  renderMassaFoot();
+}
+
+// Reflete a flag "atualizar existentes" nos status das linhas (existe <-> atualizar).
+function _aplicarModoAtualizarImport() {
+  var imp = _massa.import; if (!imp) return;
+  (imp.rows || []).forEach(function(r) {
+    if (imp.atualizar && r.status === 'existe')   r.status = 'atualizar';
+    else if (!imp.atualizar && r.status === 'atualizar') r.status = 'existe';
+  });
+}
+
+function massaImportToggleUpd(checked) {
+  if (!_massa.import) return;
+  _massa.import.atualizar = !!checked;
+  _aplicarModoAtualizarImport();
+  renderImportTable();
+  renderMassaFoot();
+}
+
+function renderImportTable() {
+  var box = document.getElementById('massaImportBox'); if (!box) return;
+  var data = (_massa.import && _massa.import.rows) || [];
+  if (!data.length) { box.innerHTML = ''; return; }
+  var nNovo = data.filter(function(r) { return r.status === 'novo'; }).length;
+  var nUpd  = data.filter(function(r) { return r.status === 'atualizar'; }).length;
+  var nEx   = data.filter(function(r) { return r.status === 'existe'; }).length;
+  var nErr  = data.filter(function(r) { return r.status === 'erro'; }).length;
+  var nOk   = data.filter(function(r) { return r.status === 'importado' || r.status === 'atualizado'; }).length;
+
+  var badge = {
+    novo:       '<span class="imp-b imp-novo">Novo</span>',
+    atualizar:  '<span class="imp-b imp-upd">Atualizar</span>',
+    existe:     '<span class="imp-b imp-existe">Já existe</span>',
+    erro:       '<span class="imp-b imp-erro">Erro</span>',
+    importado:  '<span class="imp-b imp-ok">Importado</span>',
+    atualizado: '<span class="imp-b imp-ok">Atualizado</span>'
+  };
+  var head = '<div class="imp-sum"><strong>' + data.length + '</strong> linha(s) · '
+    + '<span style="color:#1e7d43;">' + nNovo + ' novo(s)</span>'
+    + (nUpd ? ' · <span style="color:#c47f17;">' + nUpd + ' p/ atualizar</span>' : '')
+    + (nEx  ? ' · <span style="color:#7a8299;">' + nEx + ' já existe(m)</span>' : '')
+    + (nErr ? ' · <span style="color:#c62828;">' + nErr + ' erro</span>' : '')
+    + (nOk  ? ' · <span style="color:#1e7d43;">' + nOk + ' gravado(s)</span>' : '') + '</div>';
+
+  var rowsHtml = data.map(function(r) {
+    var skip = (r.status === 'existe' || r.status === 'erro');
+    return '<tr class="' + (skip ? 'imp-row-skip' : '') + '">'
+      + '<td>' + (badge[r.status] || '') + '</td>'
+      + '<td>' + esc(r.codigo || '—') + '</td>'
+      + '<td>' + esc(r.descricao || '') + '</td>'
+      + '<td>' + esc(r.tipo || '') + '</td>'
+      + '<td class="imp-num">' + esc(r.lat === '' ? '' : String(r.lat)) + '</td>'
+      + '<td class="imp-num">' + esc(r.lng === '' ? '' : String(r.lng)) + '</td>'
+      + '</tr>';
+  }).join('');
+
+  box.innerHTML = head
+    + '<div class="imp-table-wrap"><table class="imp-table">'
+    + '<thead><tr><th>Status</th><th>Código</th><th>Descrição</th><th>Tipo</th><th>Lat</th><th>Lng</th></tr></thead>'
+    + '<tbody>' + rowsHtml + '</tbody></table></div>';
+}
+
+function massaImportSalvar() {
+  var data = (_massa.import && _massa.import.rows) || [];
+  var gravar = data.filter(function(r) { return r.status === 'novo' || r.status === 'atualizar'; });
+  if (!gravar.length) { massaMsg('Nenhuma linha para gravar.', 'error'); return; }
+  var atualizar = !!(_massa.import && _massa.import.atualizar);
+  var btn = document.getElementById('massaBtnImp');
+  if (btn) { btn.disabled = true; btn.textContent = 'Importando…'; }
+  massaMsg('');
+  var payload = gravar.map(function(r) { return r.arr; });
+  google.script.run
+    .withSuccessHandler(function(res) {
+      res = res || { imported: [], updated: [], skipped: [] };
+      var impSet = {}, updSet = {};
+      (res.imported || []).forEach(function(c) { impSet[String(c)] = true; });
+      (res.updated  || []).forEach(function(c) { updSet[String(c)] = true; });
+      data.forEach(function(r) {
+        var obj = { codigo: r.codigo, descricao: r.descricao, tipo: r.tipo,
+                    lat: (r.lat === '' ? null : Number(r.lat)), lng: (r.lng === '' ? null : Number(r.lng)) };
+        if (impSet[r.codigo]) { r.status = 'importado'; _locais.push(obj); _lMap[r.codigo] = obj; }
+        else if (updSet[r.codigo]) { r.status = 'atualizado'; _lMap[r.codigo] = obj; }
+      });
+      renderImportTable(); renderMassaFoot();
+      var nImp = (res.imported || []).length, nUpd = (res.updated || []).length;
+      var partes = [];
+      if (nImp) partes.push(nImp + ' importado(s)');
+      if (nUpd) partes.push(nUpd + ' atualizado(s)');
+      if ((res.skipped || []).length) partes.push((res.skipped).length + ' pulado(s)');
+      massaMsg(partes.join(' · ') || 'Nada a gravar.', 'success');
+      toast((nImp + nUpd) + ' ponto(s) gravado(s).', 'success', 4000);
+    })
+    .withFailureHandler(function(e) {
+      var b = document.getElementById('massaBtnImp');
+      if (b) { b.disabled = false; b.textContent = 'Importar'; }
+      massaMsg('Erro ao importar: ' + (e.message || e), 'error');
+    })
+    .importarLocais(payload, atualizar);
+}
+
+function renderMassaNovos() {
+  var el = document.getElementById('massaNovosList'); if (!el) return;
+  if (!_massa.novos.length) { el.innerHTML = '<div class="massa-novos-empty">Nenhum ponto adicionado ainda.</div>'; return; }
+  el.innerHTML = _massa.novos.map(function(n, i) {
+    return '<div class="massa-chip"><span class="massa-chip-n">' + (i + 1) + '</span>'
+      + '<span class="massa-chip-name">' + esc(n.nome) + '</span>'
+      + '<button class="massa-chip-rm" onclick="massaRemoverNovo(' + i + ')" title="Remover">' + ico('x', 12) + '</button></div>';
+  }).join('');
+}
+
+function massaRemoverNovo(i) {
+  _massa.novos.splice(i, 1);
+  _massa.preview = null; renderMassaPreviewBox();
+  renderMassaNovos(); renderMassaFoot();
+}
+
+// ── Preview + rodapé ─────────────────────────────────────────
+function _nomeEsq(id) {
+  var e = _esqs.find(function(x) { return String(x.id_esquema) === String(id); });
+  return e ? (e.id_esquema + ' — ' + e.nome_linha) : ('#' + id);
+}
+
+function renderMassaPreviewBox() {
+  var box = document.getElementById('massaPreviewBox'); if (!box) return;
+  var p = _massa.preview;
+  if (!p) { box.innerHTML = ''; return; }
+  var ap = p.applied || [], sk = p.skipped || [];
+  box.innerHTML = '<div class="massa-prev">'
+    + '<div class="massa-prev-h"><strong>' + ap.length + '</strong> linha(s) serão alteradas'
+    + (sk.length ? ' · <span style="color:#c47f17;">' + sk.length + ' pulada(s)</span>' : '') + '</div>'
+    + (ap.length
+        ? '<div class="massa-prev-list">' + ap.map(function(id) { return '<div>' + esc(_nomeEsq(id)) + '</div>'; }).join('') + '</div>'
+        : '<div class="massa-prev-empty">Nenhuma linha corresponde aos critérios.</div>')
+    + (sk.length
+        ? '<div class="massa-prev-sub">Puladas (já contêm o ponto destino):</div>'
+          + '<div class="massa-prev-list muted">' + sk.map(function(s) { return '<div>' + esc(_nomeEsq(s.id)) + '</div>'; }).join('') + '</div>'
+        : '')
+    + '</div>';
+}
+
+function _massaPronto() {
+  return _massa.tab === 'sub'
+    ? !!(_massa.x && _massa.y)
+    : !!(_massa.a && _massa.b && _massa.novos.length);
+}
+
+function renderMassaFoot() {
+  var foot = document.getElementById('massaFoot'); if (!foot) return;
+  if (_massa.tab === 'novo') {
+    foot.innerHTML =
+      '<button class="btn btn-ghost" onclick="fecharModalMassa()">Fechar</button>'
+      + '<button id="massaBtnCad" class="btn btn-dark" onclick="massaCadastrar()">Cadastrar ponto</button>';
+    return;
+  }
+  if (_massa.tab === 'import') {
+    var dataI = (_massa.import && _massa.import.rows) || [];
+    var nGravar = dataI.filter(function(r) { return r.status === 'novo' || r.status === 'atualizar'; }).length;
+    foot.innerHTML =
+      '<button class="btn btn-ghost" onclick="fecharModalMassa()">Fechar</button>'
+      + '<button id="massaBtnImp" class="btn btn-dark" onclick="massaImportSalvar()"' + (nGravar ? '' : ' disabled') + '>Importar' + (nGravar ? ' (' + nGravar + ')' : '') + '</button>';
+    return;
+  }
+  if (_massa.tab === 'rota') {
+    var ok = !!(_massa.ra && _massa.rb);
+    foot.innerHTML =
+      '<button class="btn btn-ghost" onclick="fecharModalMassa()">Fechar</button>'
+      + '<button id="massaBtnRota" class="btn btn-dark" onclick="massaRotaSalvar()"' + (ok ? '' : ' disabled') + '>Salvar ajuste</button>';
+    return;
+  }
+  var pronto = _massaPronto();
+  var podeAplicar = !!(_massa.preview && (_massa.preview.applied || []).length);
+  foot.innerHTML =
+    '<button class="btn btn-ghost" onclick="fecharModalMassa()">Cancelar</button>'
+    + '<button class="btn btn-ghost" onclick="massaPreview()"' + (pronto ? '' : ' disabled') + '>Pré-visualizar</button>'
+    + '<button class="btn btn-dark" onclick="massaAplicar()"' + (podeAplicar ? '' : ' disabled') + '>Aplicar' + (podeAplicar ? ' (' + _massa.preview.applied.length + ')' : '') + '</button>';
+}
+
+function massaPreview() {
+  if (!_massaPronto()) { toast('Preencha os campos antes de pré-visualizar.', 'error'); return; }
+  loading('Calculando impacto…');
+  var ok = function(r) { doneLoading(); massaMsg(''); _massa.preview = r || { applied: [], skipped: [] }; renderMassaPreviewBox(); renderMassaFoot(); };
+  var fail = function(e) { doneLoading(); massaMsg('Erro: ' + (e.message || e), 'error'); };
+  if (_massa.tab === 'sub') {
+    google.script.run.withSuccessHandler(ok).withFailureHandler(fail)
+      .substituirPontoEmMassa(_massa.x.codigo, _massa.y.codigo, _massa.y.descricao, false);
+  } else {
+    google.script.run.withSuccessHandler(ok).withFailureHandler(fail)
+      .inserirEntrePontosEmMassa(_massa.a.codigo, _massa.b.codigo, _massa.novos, false);
+  }
+}
+
+function massaAplicar() {
+  if (!_massa.preview || !(_massa.preview.applied || []).length) return;
+  var n = _massa.preview.applied.length;
+  appConfirm({
+    titulo: 'Aplicar alteração',
+    mensagem: 'Aplicar a alteração em ' + n + ' linha(s)?\nEsta ação grava na planilha e não tem desfazer automático.',
+    okLabel: 'Aplicar (' + n + ')',
+    onOk: function() { _massaAplicarConfirmado(n); }
+  });
+}
+
+function _massaAplicarConfirmado(n) {
+  var fail = function(e) { appConfirmClose(); doneLoading(); massaMsg('Erro ao aplicar: ' + (e.message || e), 'error'); };
+  var ok = function(r) {
+    appConfirmClose();
+    fecharModalMassa();
+    _recarregarDadosManager(function() {
+      toast('Pronto — ' + ((r && r.applied) ? r.applied.length : n) + ' linha(s) alterada(s).', 'success', 4000);
+    });
+  };
+  if (_massa.tab === 'sub') {
+    google.script.run.withSuccessHandler(ok).withFailureHandler(fail)
+      .substituirPontoEmMassa(_massa.x.codigo, _massa.y.codigo, _massa.y.descricao, true);
+  } else {
+    google.script.run.withSuccessHandler(ok).withFailureHandler(fail)
+      .inserirEntrePontosEmMassa(_massa.a.codigo, _massa.b.codigo, _massa.novos, true);
+  }
+}
+
+// ── Ajuste de rota (aba 'rota') ──────────────────────────────
+function _massaRotaTouch() { /* hook de digitação (reservado) */ }
+
+function _parseTempoMin(s) {
+  s = String(s || '').trim();
+  if (!s) return 0;
+  if (s.indexOf(':') !== -1) { var p = s.split(':'); return (parseInt(p[0], 10) || 0) * 60 + (parseInt(p[1], 10) || 0); }
+  var m = s.match(/(\d+)\s*h\s*(\d+)?/i);
+  if (m) return (parseInt(m[1], 10) || 0) * 60 + (parseInt(m[2], 10) || 0);
+  return parseInt(s, 10) || 0;
+}
+function _fmtMin(min) {
+  min = Math.round(min || 0); var h = Math.floor(min / 60), m = min % 60;
+  return h ? (h + 'h' + (m ? (' ' + m + 'min') : '')) : (m + 'min');
+}
+
+// Linhas onde A e B são paradas consecutivas (qualquer sentido).
+function _linhasComTrecho(codA, codB) {
+  if (!codA || !codB) return [];
+  return _esqs.filter(function(e) {
+    var ps = e.paradas || [];
+    for (var i = 0; i < ps.length - 1; i++) {
+      var a = String(ps[i].cod), b = String(ps[i + 1].cod);
+      if ((a === codA && b === codB) || (a === codB && b === codA)) return true;
+    }
+    return false;
+  });
+}
+
+function renderRotaPreview() {
+  var box = document.getElementById('massaRotaPreview'); if (!box) return;
+  if (!_massa.ra || !_massa.rb) { box.innerHTML = ''; return; }
+  var afet = _linhasComTrecho(String(_massa.ra.codigo), String(_massa.rb.codigo));
+  box.innerHTML = '<div class="massa-prev" style="margin-top:12px;">'
+    + '<div class="massa-prev-h"><strong>' + afet.length + '</strong> linha(s) usam este trecho (A↔B consecutivos)</div>'
+    + (afet.length
+        ? '<div class="massa-prev-list">' + afet.map(function(e) { return '<div>' + esc(e.id_esquema + ' — ' + e.nome_linha) + '</div>'; }).join('') + '</div>'
+        : '<div class="massa-prev-empty">Nenhuma linha tem A e B consecutivos hoje. O ajuste fica salvo e passa a valer quando isso ocorrer.</div>')
+    + '</div>';
+}
+
+function renderRotasList() {
+  var el = document.getElementById('massaRotaList'); if (!el) return;
+  var list = _rotasAjustList || [];
+  if (!list.length) { el.innerHTML = '<div class="massa-novos-empty">Nenhum ajuste cadastrado ainda.</div>'; return; }
+  el.innerHTML = list.map(function(a) {
+    var partes = [];
+    if (a.km > 0)  partes.push(a.km + ' km');
+    if (a.min > 0) partes.push(_fmtMin(a.min));
+    return '<div class="rota-item">'
+      + '<div class="rota-item-main">'
+        + '<div class="rota-item-trecho">' + esc(a.nomeA || a.codA) + ' ↔ ' + esc(a.nomeB || a.codB) + '</div>'
+        + '<div class="rota-item-meta">' + esc(partes.join(' · ')) + (a.motivo ? (' · ' + esc(a.motivo)) : '') + '</div>'
+      + '</div>'
+      + '<button class="rota-item-rm" title="Remover ajuste" onclick="massaRotaExcluir(\'' + esc(a.codA) + '\',\'' + esc(a.codB) + '\')">' + ico('x', 13) + '</button>'
+      + '</div>';
+  }).join('');
+}
+
+function _refreshRotas(cb) {
+  google.script.run
+    .withSuccessHandler(function(list) { _setRotasAjust(list || []); if (cb) cb(); })
+    .withFailureHandler(function() { if (cb) cb(); })
+    .getRotasAjustadas();
+}
+
+function massaRotaSalvar() {
+  if (!_massa.ra || !_massa.rb) { massaMsg('Selecione os pontos A e B.', 'error'); return; }
+  if (String(_massa.ra.codigo) === String(_massa.rb.codigo)) { massaMsg('A e B não podem ser o mesmo ponto.', 'error'); return; }
+  var km  = parseFloat(String((document.getElementById('ra_km') || {}).value || '').replace(',', '.')) || 0;
+  var min = _parseTempoMin((document.getElementById('ra_tempo') || {}).value);
+  if (!(km > 0) && !(min > 0)) { massaMsg('Informe a distância (km) e/ou o tempo (HH:MM).', 'error'); return; }
+  var motivo = (document.getElementById('ra_motivo') || {}).value || '';
+  var btn = document.getElementById('massaBtnRota');
+  if (btn) { btn.disabled = true; btn.textContent = 'Salvando…'; }
+  massaMsg('');
+  google.script.run
+    .withSuccessHandler(function() {
+      _refreshRotas(function() {
+        ['ra_km', 'ra_tempo', 'ra_motivo'].forEach(function(id) { var el = document.getElementById(id); if (el) el.value = ''; });
+        renderRotasList(); renderRotaPreview();
+        var b = document.getElementById('massaBtnRota'); if (b) { b.disabled = false; b.textContent = 'Salvar ajuste'; }
+        massaMsg('Ajuste salvo. O horário das linhas do trecho já usa estes valores.', 'success');
+        toast('Ajuste de rota salvo.', 'success', 3500);
+      });
+    })
+    .withFailureHandler(function(e) {
+      var b = document.getElementById('massaBtnRota'); if (b) { b.disabled = false; b.textContent = 'Salvar ajuste'; }
+      massaMsg('Erro: ' + (e.message || e), 'error');
+    })
+    .salvarRotaAjustada({ codA: String(_massa.ra.codigo), codB: String(_massa.rb.codigo),
+      nomeA: _massa.ra.descricao, nomeB: _massa.rb.descricao, km: km, min: min, motivo: motivo,
+      viaCoords: JSON.stringify(_rotaVias || []) });
+}
+
+function massaRotaExcluir(codA, codB) {
+  appConfirm({
+    titulo: 'Remover ajuste', danger: true,
+    mensagem: 'Remover o ajuste deste trecho? As linhas voltam a calcular o tempo pelo OSRM.',
+    okLabel: 'Remover', okLoadingLabel: 'Removendo…',
+    onOk: function() {
+      google.script.run
+        .withSuccessHandler(function() { appConfirmClose(); toast('Ajuste removido.', 'success', 3000); _refreshRotas(function() { renderRotasList(); renderRotaPreview(); }); })
+        .withFailureHandler(function(e) { appConfirmClose(); massaMsg('Erro ao remover: ' + (e.message || e), 'error'); })
+        .excluirRotaAjustada(codA, codB);
+    }
+  });
+}
+
+// ── Mapa-arrasta do ajuste de rota (Leaflet + OSRM) ──────────
+var _rotaMap = null, _rotaLine = null, _rotaVias = [], _rotaViaMarkers = [], _rotaABMarkers = [];
+var _rotaResult = { km: 0, min: 0, geom: null };
+
+function _rotaHasCoords(p) { return !!(p && p.lat != null && p.lng != null && !isNaN(+p.lat) && !isNaN(+p.lng)); }
+
+function _rotaPointsChanged() {
+  if (!_massa || _massa.tab !== 'rota') return;
+  var status = document.getElementById('rotaMapStatus');
+  var clearBtn = document.getElementById('rotaBtnClear');
+  var a = _massa.ra, b = _massa.rb;
+  if (!_rotaHasCoords(a) || !_rotaHasCoords(b)) {
+    if (status) status.textContent = (a && b)
+      ? 'Um dos pontos não tem coordenadas — informe km/tempo manualmente.'
+      : 'Selecione A e B (com coordenadas) para abrir o mapa.';
+    _rotaDestroyMap();
+    if (clearBtn) clearBtn.style.display = 'none';
+    return;
+  }
+  _rotaVias = [];
+  _rotaInitMap();
+  _rotaRoute();
+}
+
+function _rotaInitMap() {
+  var el = document.getElementById('rotaMap'); if (!el || typeof L === 'undefined') return;
+  _rotaDestroyMap();
+  _rotaMap = L.map(el, { zoomControl: true, attributionControl: false });
+  L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', { maxZoom: 19, crossOrigin: true }).addTo(_rotaMap);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png', { subdomains: 'abcd', maxZoom: 19, opacity: 0.85, crossOrigin: true }).addTo(_rotaMap);
+  setTimeout(function() { if (_rotaMap) _rotaMap.invalidateSize(); }, 80);
+}
+
+function _rotaDestroyMap() {
+  if (_rotaMap) { try { _rotaMap.remove(); } catch (e) {} _rotaMap = null; }
+  _rotaLine = null; _rotaViaMarkers = []; _rotaABMarkers = [];
+}
+
+function _rotaWaypoints() {
+  var wp = [];
+  if (_rotaHasCoords(_massa.ra)) wp.push({ lat: +_massa.ra.lat, lng: +_massa.ra.lng });
+  _rotaVias.forEach(function(v) { wp.push({ lat: v.lat, lng: v.lng }); });
+  if (_rotaHasCoords(_massa.rb)) wp.push({ lat: +_massa.rb.lat, lng: +_massa.rb.lng });
+  return wp;
+}
+
+function _rotaRoute() {
+  if (!_rotaMap) return;
+  var wp = _rotaWaypoints(); if (wp.length < 2) return;
+  var status = document.getElementById('rotaMapStatus');
+  if (status) status.textContent = 'Calculando rota…';
+  var coords = wp.map(function(p) { return (+p.lng).toFixed(6) + ',' + (+p.lat).toFixed(6); }).join(';');
+  var url = 'https://router.project-osrm.org/route/v1/driving/' + coords + '?overview=full&geometries=geojson&continue_straight=false';
+  fetch(url).then(function(r) { return r.ok ? r.json() : Promise.reject('http'); })
+    .then(function(data) {
+      if (!data || data.code !== 'Ok' || !data.routes || !data.routes[0]) return Promise.reject('no-route');
+      var route = data.routes[0];
+      var km  = Math.round(route.distance / 100) / 10;
+      var min = Math.round(route.duration / 60);
+      var geom = (route.geometry && route.geometry.coordinates) ? route.geometry.coordinates.map(function(c) { return [c[1], c[0]]; }) : [];
+      _rotaResult = { km: km, min: min, geom: geom };
+      _rotaDrawRoute(geom, wp);
+      var kmEl = document.getElementById('ra_km');    if (kmEl) kmEl.value = km;
+      var tEl  = document.getElementById('ra_tempo'); if (tEl)  tEl.value = _hhmmFromMin(min);
+      if (status) status.textContent = km + ' km · ' + _fmtMin(min) + (_rotaVias.length ? (' · ' + _rotaVias.length + ' desvio(s)') : ' · rota direta');
+      var cb = document.getElementById('rotaBtnClear'); if (cb) cb.style.display = _rotaVias.length ? '' : 'none';
+    })
+    .catch(function() { if (status) status.textContent = 'Não consegui rotear (OSRM). Informe km/tempo manualmente.'; });
+}
+
+function _hhmmFromMin(min) { min = Math.round(min || 0); var h = Math.floor(min / 60), m = min % 60; return h + ':' + ('0' + m).slice(-2); }
+
+function _rotaDrawRoute(geom, wp) {
+  if (!_rotaMap) return;
+  if (_rotaLine) { _rotaMap.removeLayer(_rotaLine); _rotaLine = null; }
+  _rotaLine = L.polyline(geom, { color: '#f47920', weight: 5, opacity: 0.9 }).addTo(_rotaMap);
+  _rotaLine.on('click', function(e) { _rotaAddVia(e.latlng); });
+
+  _rotaABMarkers.forEach(function(m) { _rotaMap.removeLayer(m); });
+  _rotaABMarkers = [];
+  var aLL = wp[0], bLL = wp[wp.length - 1];
+  _rotaABMarkers.push(L.circleMarker([aLL.lat, aLL.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#22c55e', fillOpacity: 1 }).addTo(_rotaMap).bindTooltip('A', { permanent: false }));
+  _rotaABMarkers.push(L.circleMarker([bLL.lat, bLL.lng], { radius: 7, color: '#fff', weight: 2, fillColor: '#ef4444', fillOpacity: 1 }).addTo(_rotaMap).bindTooltip('B', { permanent: false }));
+
+  _rotaViaMarkers.forEach(function(m) { _rotaMap.removeLayer(m); });
+  _rotaViaMarkers = [];
+  _rotaVias.forEach(function(v, idx) {
+    var mk = L.marker([v.lat, v.lng], { draggable: true, icon: _rotaViaIcon() }).addTo(_rotaMap);
+    mk.bindTooltip('Arraste para ajustar · clique-direito remove', { direction: 'top' });
+    mk.on('drag', function(e) { var ll = e.target.getLatLng(); _rotaVias[idx] = { lat: ll.lat, lng: ll.lng }; });
+    mk.on('dragend', function() { _rotaSortVias(); _rotaRoute(); });
+    mk.on('contextmenu', function() { _rotaVias.splice(idx, 1); _rotaRoute(); });
+    _rotaViaMarkers.push(mk);
+  });
+
+  if (_rotaVias.length === 0) {
+    try { _rotaMap.fitBounds(_rotaLine.getBounds(), { padding: [30, 30], maxZoom: 12 }); } catch (e) {}
+  }
+}
+
+function _rotaViaIcon() {
+  return L.divIcon({ className: '', iconSize: [16, 16], iconAnchor: [8, 8],
+    html: '<div style="width:14px;height:14px;border-radius:50%;background:#7c3aed;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);"></div>' });
+}
+
+function _rotaAddVia(latlng) {
+  _rotaVias.push({ lat: latlng.lat, lng: latlng.lng });
+  _rotaSortVias();
+  _rotaRoute();
+}
+
+// Ordena os vias pela projeção no eixo A→B (mantém a ordem ao longo do trecho).
+function _rotaSortVias() {
+  var a = _massa.ra, b = _massa.rb;
+  if (!_rotaHasCoords(a) || !_rotaHasCoords(b)) return;
+  var ax = +a.lng, ay = +a.lat, dx = (+b.lng) - ax, dy = (+b.lat) - ay, len2 = dx * dx + dy * dy || 1;
+  _rotaVias.sort(function(p, q) {
+    var tp = ((p.lng - ax) * dx + (p.lat - ay) * dy) / len2;
+    var tq = ((q.lng - ax) * dx + (q.lat - ay) * dy) / len2;
+    return tp - tq;
+  });
+}
+
+function _rotaClearVias() { _rotaVias = []; _rotaRoute(); }
+
+// ── Modal de confirmação in-app (substitui o confirm() do navegador) ──
+// opts: { titulo, mensagem, okLabel, okLoadingLabel, danger, onOk }
+// Ao confirmar, o botão entra em estado de carregando NA HORA e o modal
+// permanece até a operação chamar appConfirmClose() (no sucesso/erro).
+function appConfirm(opts) {
+  opts = opts || {};
+  var ex = document.getElementById('appConfirmOverlay'); if (ex) ex.remove();
+  var msgHtml = esc(String(opts.mensagem || '')).replace(/\n/g, '<br>');
+  var html =
+    '<div id="appConfirmOverlay" class="appc-overlay">'
+    + '<div class="appc-card">'
+      + '<div class="appc-title">' + esc(opts.titulo || 'Confirmar') + '</div>'
+      + '<div class="appc-msg">' + msgHtml + '</div>'
+      + '<div class="appc-foot">'
+        + '<button class="btn btn-ghost" id="appcCancel">Cancelar</button>'
+        + '<button class="btn ' + (opts.danger ? 'btn-danger' : 'btn-dark') + '" id="appcOk">' + esc(opts.okLabel || 'Confirmar') + '</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  var ov = document.getElementById('appConfirmOverlay');
+  var busy = false;
+
+  function cleanup() { document.removeEventListener('keydown', onKey); if (ov && ov.parentNode) ov.remove(); }
+  // Exposto para a operação fechar o modal quando terminar (sucesso ou erro).
+  window._appConfirmCleanup = cleanup;
+
+  function fechar() { if (busy) return; cleanup(); }
+
+  function confirmar() {
+    if (busy) return;
+    busy = true;
+    var okb = document.getElementById('appcOk');
+    var cb  = document.getElementById('appcCancel');
+    if (cb)  cb.disabled = true;
+    if (okb) { okb.disabled = true; okb.innerHTML = '<span class="appc-spin"></span>' + esc(opts.okLoadingLabel || 'Aplicando…'); }
+    if (opts.onOk) opts.onOk();
   }
 
-  function next() {
-    if (idx >= esqList.length) return finish();
-    var e   = esqList[idx];
-    loading('Gerando PDF ' + (idx + 1) + '/' + esqList.length + '…');
+  function onKey(e) {
+    if (e.key === 'Escape') fechar();
+    else if (e.key === 'Enter') confirmar();
+  }
+
+  document.getElementById('appcCancel').addEventListener('click', fechar);
+  ov.addEventListener('click', function(e) { if (e.target === ov && !busy) fechar(); });
+  document.getElementById('appcOk').addEventListener('click', confirmar);
+  document.addEventListener('keydown', onKey);
+  setTimeout(function() { var b = document.getElementById('appcOk'); if (b) b.focus(); }, 30);
+}
+
+// Fecha o modal de confirmação aberto (chamado pela operação ao terminar).
+function appConfirmClose() { if (window._appConfirmCleanup) { window._appConfirmCleanup(); window._appConfirmCleanup = null; } }
+
+// ── Análise de esquema (regras + IA Groq) ────────────────────
+function abrirAnaliseEsquema() {
+  if (!_sel) return;
+  var ex = document.getElementById('analiseOverlay'); if (ex) ex.remove();
+  var titulo = '#' + esc(_sel.id_esquema) + ' — ' + esc(_sel.nome_linha || '');
+  var modal =
+    '<div id="analiseOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:580px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;">Análise do esquema</div>'
+        + '<button onclick="fecharAnalise()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 16) + '</button>'
+      + '</div>'
+      + '<div style="padding:10px 22px 0;font-size:12px;color:#7a8299;flex-shrink:0;font-weight:600;">' + titulo + '</div>'
+      + '<div id="analiseBody" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('analiseOverlay').addEventListener('click', function(e) { if (e.target === this) fecharAnalise(); });
+  document.getElementById('analiseBody').innerHTML =
+    '<div style="text-align:center;color:#9aa0ad;padding:34px 0;">'
+    + '<span class="appc-spin" style="border-color:rgba(0,0,0,.15);border-top-color:#f47920;width:18px;height:18px;"></span>'
+    + '<div style="margin-top:10px;font-size:12px;">Verificando regras e consultando a IA…</div></div>';
+
+  google.script.run
+    .withSuccessHandler(_renderAnalise)
+    .withFailureHandler(function(e) { var b = document.getElementById('analiseBody'); if (b) b.innerHTML = '<div class="massa-msg error" style="margin:0;">Erro: ' + esc(e.message || e) + '</div>'; })
+    .analisarEsquema(_sel.id_esquema, true);
+}
+
+function fecharAnalise() { var o = document.getElementById('analiseOverlay'); if (o) o.remove(); }
+
+// ── Análise em grupo (esquemas selecionados) ──────────────────
+function analisarSelecionados() {
+  var lista = _selectedEsqList();
+  if (lista.length < 2) { toast('Selecione ao menos 2 esquemas para comparar.', 'error'); return; }
+  var ids = lista.map(function(e) { return e.id_esquema; });
+
+  var ex = document.getElementById('analiseOverlay'); if (ex) ex.remove();
+  var modal =
+    '<div id="analiseOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:640px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;">Análise do grupo</div>'
+        + '<button onclick="fecharAnalise()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 16) + '</button>'
+      + '</div>'
+      + '<div style="padding:10px 22px 0;font-size:12px;color:#7a8299;flex-shrink:0;font-weight:600;">' + lista.length + ' esquemas selecionados</div>'
+      + '<div id="analiseBody" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('analiseOverlay').addEventListener('click', function(e) { if (e.target === this) fecharAnalise(); });
+  document.getElementById('analiseBody').innerHTML =
+    '<div style="text-align:center;color:#9aa0ad;padding:34px 0;">'
+    + '<span class="appc-spin" style="border-color:rgba(0,0,0,.15);border-top-color:#f47920;width:18px;height:18px;"></span>'
+    + '<div style="margin-top:10px;font-size:12px;">Comparando ' + lista.length + ' esquemas com a IA…</div></div>';
+
+  google.script.run
+    .withSuccessHandler(_renderAnaliseGrupo)
+    .withFailureHandler(function(e) { var b = document.getElementById('analiseBody'); if (b) b.innerHTML = '<div class="massa-msg error" style="margin:0;">Erro: ' + esc(e.message || e) + '</div>'; })
+    .analisarEsquemasEmGrupo(ids, true);
+}
+
+function _renderAnaliseGrupo(r) {
+  var b = document.getElementById('analiseBody'); if (!b || !r) return;
+  var badge = { alto: '<span class="an-b an-alto">Alto</span>', medio: '<span class="an-b an-medio">Médio</span>', baixo: '<span class="an-b an-baixo">Baixo</span>' };
+
+  // IA combinada (foco da análise em grupo)
+  var iaHtml;
+  if (!r.ia) iaHtml = '<div class="an-muted">IA não consultada.</div>';
+  else if (r.ia.erro) iaHtml = '<div class="massa-msg error" style="margin:0;">IA indisponível: ' + esc(r.ia.erro) + '</div>';
+  else iaHtml = '<div class="an-ia">' + _mdLite(r.ia.texto || '(sem resposta)') + '</div>'
+    + (r.ia.model ? '<div class="an-muted" style="margin-top:8px;">via Groq · ' + esc(r.ia.model) + '</div>' : '');
+
+  // Regras determinísticas por esquema (só mostra os que têm achados)
+  var comRegras = (r.regras || []).filter(function(g) { return g.regras && g.regras.length; });
+  var regrasHtml = comRegras.length
+    ? comRegras.map(function(g) {
+        var itens = g.regras.map(function(x) { return '<div class="an-item">' + (badge[x.nivel] || '') + '<span>' + esc(x.msg) + '</span></div>'; }).join('');
+        return '<div style="margin-top:10px;"><div style="font-size:12px;font-weight:700;color:#3a3f52;margin-bottom:4px;">#' + esc(g.idEsquema) + ' — ' + esc(g.nomeLinha || '') + '</div>' + itens + '</div>';
+      }).join('')
+    : '<div class="an-ok">' + ico('check', 14) + ' Nenhuma anomalia pelas regras automáticas.</div>';
+
+  b.innerHTML = '<div class="np-sec" style="margin-top:0;">Comparação entre as linhas (IA)</div>' + iaHtml
+    + '<div class="np-sec">Regras automáticas por esquema</div>' + regrasHtml;
+}
+
+function _renderAnalise(r) {
+  var b = document.getElementById('analiseBody'); if (!b || !r) return;
+  var badge = { alto: '<span class="an-b an-alto">Alto</span>', medio: '<span class="an-b an-medio">Médio</span>', baixo: '<span class="an-b an-baixo">Baixo</span>' };
+  var regras = r.regras || [];
+  var regrasHtml = regras.length
+    ? regras.map(function(x) { return '<div class="an-item">' + (badge[x.nivel] || '') + '<span>' + esc(x.msg) + '</span></div>'; }).join('')
+    : '<div class="an-ok">' + ico('check', 14) + ' Nenhuma anomalia pelas regras automáticas.</div>';
+
+  var iaHtml;
+  if (!r.ia) iaHtml = '<div class="an-muted">IA não consultada.</div>';
+  else if (r.ia.erro) iaHtml = '<div class="massa-msg error" style="margin:0;">IA indisponível: ' + esc(r.ia.erro) + '</div>';
+  else iaHtml = '<div class="an-ia">' + _mdLite(r.ia.texto || '(sem resposta)') + '</div>'
+    + (r.ia.model ? '<div class="an-muted" style="margin-top:8px;">via Groq · ' + esc(r.ia.model) + '</div>' : '');
+
+  b.innerHTML = '<div class="np-sec" style="margin-top:0;">Regras automáticas</div>' + regrasHtml
+    + '<div class="np-sec">Análise da IA</div>' + iaHtml;
+}
+
+// Markdown leve: **negrito**, bullets (-, *, •) e quebras de linha.
+function _mdLite(s) {
+  var t = esc(String(s || '')).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  return t.split('\n').map(function(l) {
+    var x = l.trim();
+    if (/^[-*•]\s+/.test(x)) return '<div class="an-bullet">' + x.replace(/^[-*•]\s+/, '') + '</div>';
+    return x ? '<div>' + x + '</div>' : '<div style="height:6px;"></div>';
+  }).join('');
+}
+
+// Recarrega esquemas/locais do servidor e re-renderiza a home.
+function _recarregarDadosManager(cb) {
+  loading('Recarregando…');
+  google.script.run
+    .withSuccessHandler(function(d) {
+      _esqs   = d.esquemas || [];
+      _locais = d.locais   || [];
+      _temposPermanencia = d.temposPermanencia || {};
+      _setRotasAjust(d.rotasAjustadas || []);
+      _lMap = {};
+      _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
+      _homeLocalSel = null; _homeLocalFilter = '';
+      doneLoading();
+      if (typeof renderHome === 'function') renderHome();
+      if (cb) cb();
+    })
+    .withFailureHandler(function(e) { doneLoading(); toast('Erro ao recarregar: ' + (e.message || e), 'error'); })
+    .getDadosManager();
+}
+
+// Fecha dropdowns de pontos do modal ao clicar fora.
+document.addEventListener('click', function(e) {
+  if (e.target.closest('.massa-input') || e.target.closest('.home-localdrop')) return;
+  ['x', 'y', 'a', 'b', 'novo', 'ra', 'rb'].forEach(function(slot) {
+    var d = document.getElementById('massaDrop_' + slot);
+    if (d) d.classList.remove('open');
+  });
+});
+
+function _processLote(esqList, pontosByEsq, cacheMap) {
+  if (typeof PDFLib === 'undefined' || typeof JSZip === 'undefined') {
+    doneLoading(); toast('Bibliotecas de PDF não carregaram. Recarregue a página.', 'error'); return;
+  }
+  // Monta o HTML de cada esquema no cliente (toda a lógica de cálculo continua
+  // aqui). O servidor converte HTML → PDF (sem rodapé) e o cliente carimba o
+  // rodapé em todas as páginas via pdf-lib e monta o zip.
+  var snap  = _snapshotEsqState();
+  var items = [], fail = 0;
+
+  esqList.forEach(function(e) {
     var pts = pontosByEsq[e.id_esquema] || [];
-    if (!pts.length) { fail++; idx++; return setTimeout(next, 0); }
+    if (!pts.length) { fail++; return; }
     try {
       _setupEsqStateLote(e, pts);
       _restoreHorConfig(e);
       _osrmLegs   = _legsFromCacheMap(cacheMap);
       _osrmStatus = (_osrmLegs && _osrmLegs.some(function(l) { return l; })) ? 'cache' : 'unavailable';
-      var html = imprimirHorario(true);
-      if (!html) { fail++; idx++; return setTimeout(next, 0); }
-      _htmlToPdfBlob(html).then(function(blob) {
-        zip.file(_loteFilename(e), blob); ok++; idx++; setTimeout(next, 0);
-      }).catch(function() { fail++; idx++; setTimeout(next, 0); });
-    } catch (err) { fail++; idx++; setTimeout(next, 0); }
+      var html = imprimirHorario(true, true);
+      if (!html) { fail++; return; }
+      items.push({ name: _loteFilename(e), html: html });
+    } catch (err) { fail++; }
+  });
+
+  _restoreEsqState(snap);
+
+  if (!items.length) { doneLoading(); toast('Nenhum PDF foi gerado.', 'error'); return; }
+
+  loading('Gerando ' + items.length + ' PDFs no servidor…');
+  google.script.run
+    .withSuccessHandler(function(lista) {
+      if (!lista || !lista.length) { doneLoading(); toast('O servidor não retornou os PDFs.', 'error'); return; }
+      loading('Aplicando rodapé…');
+      _finalizarLotePdfs(lista, fail).catch(function(err) {
+        doneLoading(); toast('Erro ao finalizar os PDFs: ' + (err && err.message ? err.message : err), 'error');
+      });
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao gerar PDFs: ' + (e && e.message ? e.message : e), 'error');
+    })
+    .gerarPdfsEsquemas(items);
+}
+
+// Carimba o rodapé em todas as páginas de cada PDF (pdf-lib) e monta o zip.
+function _finalizarLotePdfs(lista, fail) {
+  var zip = new JSZip();
+  var genStr = new Date().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+  var i = 0;
+  function passo() {
+    if (i >= lista.length) {
+      return zip.generateAsync({ type: 'blob' }).then(function(blob) {
+        doneLoading();
+        _baixarBlob(blob, 'esquemas_pdfs.zip');
+        toast(lista.length + ' PDFs gerados' + (fail ? (' · ' + fail + ' sem pontos') : ''), 'success', 4500);
+      });
+    }
+    loading('Aplicando rodapé… (' + (i + 1) + '/' + lista.length + ')');
+    return _carimbarRodape(_base64ToBytes(lista[i].b64), genStr).then(function(bytes) {
+      zip.file(lista[i].name, bytes);
+      i++;
+      return passo();
+    });
   }
-  next();
+  return passo();
+}
+
+// Desenha empresa/CNPJ à esquerda e Pág. X/Y · data à direita, no pé de cada página.
+function _carimbarRodape(bytes, genStr) {
+  return PDFLib.PDFDocument.load(bytes).then(function(doc) {
+    return Promise.all([
+      doc.embedFont(PDFLib.StandardFonts.Helvetica),
+      doc.embedFont(PDFLib.StandardFonts.HelveticaBold)
+    ]).then(function(fonts) {
+      var font = fonts[0], bold = fonts[1];
+      var pages  = doc.getPages();
+      var orange = PDFLib.rgb(0.957, 0.475, 0.125);
+      var dark   = PDFLib.rgb(0.102, 0.114, 0.137);
+      var gray   = PDFLib.rgb(0.533, 0.533, 0.533);
+      var M = 34, sz = 7, comp = 'KANDANGO TRANSPORTE E TURISMO LTDA';
+      var compW = bold.widthOfTextAtSize(comp, sz);
+      pages.forEach(function(page, idx) {
+        var w = page.getWidth();
+        page.drawLine({ start: { x: M, y: 30 }, end: { x: w - M, y: 30 }, thickness: 1.4, color: orange });
+        page.drawText(comp, { x: M, y: 16, size: sz, font: bold, color: dark });
+        page.drawText(' · CNPJ: 03.233.439/0001-52', { x: M + compW, y: 16, size: sz, font: font, color: gray });
+        var right = 'Pág. ' + (idx + 1) + ' / ' + pages.length + '   ·   Gerado em ' + genStr;
+        var rW = font.widthOfTextAtSize(right, sz);
+        page.drawText(right, { x: w - M - rW, y: 16, size: sz, font: font, color: gray });
+      });
+      return doc.save();
+    });
+  });
+}
+
+function _base64ToBytes(b64) {
+  var bin   = atob(b64);
+  var bytes = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
 }
 
 function _setupEsqStateLote(e, pts) {
@@ -3059,67 +4486,10 @@ function _restoreEsqState(s) {
   var hv = document.getElementById('horVelMedia');    if (hv && s.vel != null)     hv.value = s.vel;
 }
 
-function _htmlToPdfBlob(html) {
-  return new Promise(function(resolve, reject) {
-    // Extrai <style> e <body> do documento completo e injeta no documento
-    // principal — html2canvas só lê estilos computados do documento pai.
-    var styleMatch = html.match(/<style[^>]*>([\s\S]*?)<\/style>/i);
-    var bodyMatch  = html.match(/<body[^>]*>([\s\S]*)<\/body>/i);
-    if (!styleMatch || !bodyMatch) { reject(new Error('HTML parse error')); return; }
-
-    // Wrapper fora da área visível, largura A4 (794px ≈ 210mm a 96dpi)
-    var wrapperId = 'pdf_render_' + Date.now();
-    var wrapper = document.createElement('div');
-    wrapper.id = wrapperId;
-    // position:fixed left:0 top:0 → getBoundingClientRect retorna coords válidas
-    // para o html2canvas (left:-9999 causava canvas vazio pois a translação
-    // mapeava todo o conteúdo fora dos 794px do canvas).
-    // z-index:8999 coloca o wrapper ABAIXO do spinner de loading (z-index:9000)
-    // que está ativo durante o batch, ocultando o wrapper do usuário.
-    // @scope isola o CSS do PDF para não vazar estilos (body, *, table…) ao app.
-    wrapper.style.cssText = 'position:fixed;left:0;top:0;width:794px;background:#fff;'
-      + 'pointer-events:none;z-index:8999;';
-
-    // CSS injetado diretamente (sem @scope — html2canvas não aplica estilos
-    // de regras @scope ao ler o DOM). O tremor visual é coberto pelo spinner
-    // de loading (z-index:9000) que está ativo durante todo o batch.
-    var styleEl = document.createElement('style');
-    styleEl.textContent = styleMatch[1];
-    document.head.appendChild(styleEl);
-
-    // Injeta o corpo
-    var content = document.createElement('div');
-    content.innerHTML = bodyMatch[1];
-    wrapper.appendChild(content);
-
-    document.body.appendChild(wrapper);
-
-    // Aguarda 400ms para o browser aplicar layout e fontes
-    setTimeout(function() {
-      var el = wrapper.querySelector('.body') || content;
-      html2pdf().set({
-        margin:      [10, 12, 16, 12],
-        image:       { type: 'jpeg', quality: 0.96 },
-        html2canvas: { scale: 2, useCORS: true, allowTaint: true,
-                       backgroundColor: '#ffffff', logging: false,
-                       windowWidth: 794 },
-        jsPDF:       { unit: 'mm', format: 'a4', orientation: 'portrait' },
-        pagebreak:   { mode: ['css', 'legacy'] }
-      }).from(el).outputPdf('blob').then(function(blob) {
-        if (styleEl.parentNode)  styleEl.parentNode.removeChild(styleEl);
-        if (wrapper.parentNode)  document.body.removeChild(wrapper);
-        resolve(blob);
-      }).catch(function(err) {
-        if (styleEl.parentNode)  styleEl.parentNode.removeChild(styleEl);
-        if (wrapper.parentNode)  document.body.removeChild(wrapper);
-        reject(err);
-      });
-    }, 400);
-  });
-}
-
 function _loteFilename(e) {
-  var base = (e.horario || '').replace(':', 'h') + ' - ' + (e.nome_linha || ('Esquema ' + e.id_esquema)) + ' (' + e.id_esquema + ')';
+  // Sem o código de sequência do esquema; com o sentido entre parênteses.
+  var sent = e.sentido ? ' (' + e.sentido + ')' : '';
+  var base = (e.horario || '').replace(':', 'h') + ' - ' + (e.nome_linha || ('Esquema ' + e.id_esquema)) + sent;
   base = base.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
   return (base || ('esquema_' + e.id_esquema)) + '.pdf';
 }
