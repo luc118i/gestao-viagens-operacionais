@@ -30,9 +30,11 @@ var _pdfCols     = { chegada:true, parada:true, saida:true, desl:true, comercial
 var _pdfMode     = 'normal';
 var _pdfTitle    = '';
 var _pdfSubtitle = '';
+var _pdfPersonConfig = { formato: 'hhmm', pontos: null }; // pontos: null = todos; { idPonto: bool } = seleção manual
 var _osrmLegs        = undefined;
 var _osrmSeqKey      = '';
 var _osrmGeometry    = null;
+var _osrmLegGeoms    = null;   // geometria real (curva) de cada leg — [[lat,lng],...] por leg, ou null
 var _comercialTimes  = {};
 var _horStartIdx     = 0;
 var _customStopTimes = {};
@@ -40,8 +42,43 @@ var _temposPermanencia = {};   // { codigoLocal: minutos } — vindo da aba TEMP
 var _rotasAjust      = {};     // { "codA|codB": {km,min,motivo} } — ajustes de rota (2 sentidos)
 var _rotasAjustList  = [];     // lista crua de ajustes (para a aba de gestão)
 var _legVia          = {};
+var _legVelPers      = {};     // { idPonto: km/h } — velocidade do trecho quando _legVia === 'Pers'
 var _tipoViaVel      = { BR: 85, Est: 75, Mun: 60, Urb: 45 };
 var _VIA_LABEL_TO_KEY = { 'BR': 'BR', 'Estadual': 'Est', 'Municipal': 'Mun', 'Urbana': 'Urb' };
+
+// Trechos personalizados guardam a velocidade embutida no valor de tipo_trecho
+// (ex.: "Pers:72"), reaproveitando a coluna existente sem mexer no esquema da planilha.
+var _PERS_RE = /^Pers:(\d+(?:\.\d+)?)$/i;
+
+// Aplica um valor bruto de tipo_trecho (ex.: 'BR' ou 'Pers:72') aos mapas de trecho.
+function _setLegViaRaw(idPonto, raw) {
+  raw = String(raw || '').trim();
+  if (!raw) return;
+  var m = _PERS_RE.exec(raw);
+  if (m) { _legVia[idPonto] = 'Pers'; _legVelPers[idPonto] = parseFloat(m[1]); }
+  else   { _legVia[idPonto] = raw; }
+}
+
+// Serializa o tipo de trecho de um ponto para persistência (ex.: 'Pers:72').
+function _legViaSerialized(idPonto) {
+  var v = _legVia[idPonto];
+  if (!v) return '';
+  if (v === 'Pers') {
+    var vel = _legVelPers[idPonto];
+    return (vel > 0) ? 'Pers:' + vel : '';
+  }
+  return v;
+}
+
+// Persiste o estado de vias (incluindo velocidade personalizada) no localStorage.
+function _persistLegVia() {
+  if (!_sel) return;
+  try {
+    var out = {};
+    Object.keys(_legVia).forEach(function(k){ var s = _legViaSerialized(k); if (s) out[k] = s; });
+    localStorage.setItem('vc_legVia_' + _sel.id_esquema, JSON.stringify(out));
+  } catch(e) {}
+}
 var _osrmStatus      = 'pending';
 var _horSidebarHidden = (function(){ try { return localStorage.getItem('vc_hor_sidebar') === 'hidden'; } catch(e){ return false; } })();
 var _horOsmHidden     = (function(){ try { return localStorage.getItem('vc_hor_osm')     === 'hidden'; } catch(e){ return false; } })();
@@ -58,6 +95,10 @@ var _anttSuggCacheKey = '';   // chave do último batch de cache consultado
 var _stretchPolys     = [];   // Leaflet polylines para coloração de trechos ANTT (map view)
 var _suggMapMarkers   = [];   // Leaflet markers para sugestões de apoio (map view)
 var _anttMapActive    = false; // true quando overlays ANTT estão desenhados no mapa
+var _legHoverPolys    = [];   // Leaflet polylines invisíveis (hover/click) com tempo+km+vel de cada trecho
+var _mapMode          = (function(){ try { return localStorage.getItem('vc_mapMode') || 'antt'; } catch(e) { return 'antt'; } })();
+var _comercialPolys       = [];   // Leaflet polylines de coloração do Modo Comercial (map view)
+var _comercialWarnMarkers = [];   // Leaflet markers ⚠ (velocidade irreal) do Modo Comercial
 
 // Tempo de parada (minutos) por tipo de ponto
 var STOP_TIMES = {
@@ -68,7 +109,8 @@ var STOP_TIMES = {
   PONTO: 5, PARADA: 5
 };
 var STOP_DEFAULT = 5;
-var MIN_LEG_TV   = 30;
+var MIN_LEG_TV   = 30;  // fallback de tempo só quando NÃO há distância real nenhuma (sem rota)
+var MIN_LEG_KM   = 15;  // piso de distância p/ legs curtos com dado real — o tempo sai de km/vel, proporcional à velocidade configurada
 
 function _stopTime(tipo) {
   if (!tipo) return STOP_DEFAULT;
@@ -198,7 +240,7 @@ function _seqCoordsKey() {
 
 function _fetchOsrmDistances(callback) {
   var pts = _seq.filter(function(p){ return p.lat && p.lng; });
-  if (pts.length < 2) { callback(null, null); return; }
+  if (pts.length < 2) { callback(null, null, null); return; }
 
   function normKey(a, b) { return a <= b ? (a+':'+b) : (b+':'+a); }
 
@@ -217,12 +259,37 @@ function _fetchOsrmDistances(callback) {
     });
   }
 
+  // Concatena as coordenadas de todos os steps de uma leg (dedup do ponto de junção).
+  function _legGeomFromSteps(leg) {
+    var latlngs = [];
+    (leg.steps || []).forEach(function(step) {
+      var coords = step.geometry && step.geometry.coordinates;
+      if (!coords) return;
+      coords.forEach(function(c) {
+        var ll = [c[1], c[0]];
+        var last = latlngs[latlngs.length - 1];
+        if (!last || last[0] !== ll[0] || last[1] !== ll[1]) latlngs.push(ll);
+      });
+    });
+    return latlngs.length >= 2 ? latlngs : null;
+  }
+
   function callOsrm(cached) {
-    var coords = pts.map(function(p){
-      return (+p.lng).toFixed(6) + ',' + (+p.lat).toFixed(6);
-    }).join(';');
+    // Insere os pontos de desvio de ajustes de rota salvos como waypoints
+    // extras entre A e B, pra o traçado seguir o mesmo caminho puxado no
+    // mapa de "Ajuste de rota". segCounts guarda quantas sub-legs do OSRM
+    // pertencem a cada par original, pra regrupar a resposta depois.
+    var coordParts = [(+pts[0].lng).toFixed(6) + ',' + (+pts[0].lat).toFixed(6)];
+    var segCounts = [];
+    for (var i = 0; i < pts.length - 1; i++) {
+      var vias = _rotaViaCoords(pts[i].idPonto, pts[i+1].idPonto);
+      vias.forEach(function(v) { coordParts.push((+v.lng).toFixed(6) + ',' + (+v.lat).toFixed(6)); });
+      coordParts.push((+pts[i+1].lng).toFixed(6) + ',' + (+pts[i+1].lat).toFixed(6));
+      segCounts.push(1 + vias.length);
+    }
+    var coords = coordParts.join(';');
     var url = 'https://router.project-osrm.org/route/v1/driving/' + coords
-            + '?overview=full&geometries=geojson&annotations=false&continue_straight=false';
+            + '?overview=full&geometries=geojson&steps=true&annotations=false&continue_straight=false';
 
     fetch(url)
       .then(function(r){ return r.ok ? r.json() : Promise.reject('http'); })
@@ -231,19 +298,33 @@ function _fetchOsrmDistances(callback) {
           return Promise.reject('no-route');
 
         var route = data.routes[0];
-        var legs  = route.legs.map(function(l) {
-          return {
-            distKm:      Math.round(l.distance / 100) / 10,
-            durationMin: Math.round(l.duration  / 6)  / 10
-          };
+        // Regrupa as sub-legs (inseridas pelos desvios) de volta em uma leg
+        // por par original de pontos consecutivos, somando dist/tempo e
+        // concatenando a geometria (curva real, seguindo a via).
+        var rawLegs = route.legs, legs = [], legGeoms = [], idx = 0;
+        segCounts.forEach(function(cnt) {
+          var distM = 0, durS = 0, geom = [];
+          for (var k = 0; k < cnt; k++) {
+            var l = rawLegs[idx + k]; if (!l) continue;
+            distM += l.distance; durS += l.duration;
+            var lg = _legGeomFromSteps(l);
+            if (lg) geom = geom.concat(geom.length ? lg.slice(1) : lg);
+          }
+          idx += cnt;
+          legs.push({ distKm: Math.round(distM / 100) / 10, durationMin: Math.round(durS / 6) / 10 });
+          legGeoms.push(geom.length >= 2 ? geom : null);
         });
 
         var toSave = [];
         legs.forEach(function(leg, i) {
-          if (!pts[i] || !pts[i+1]) return;
+          // Trecho com desvio de ajuste: a distância aqui é a do desvio, não a
+          // rota direta — não sobrescreve o cache geral de distâncias.
+          if (!pts[i] || !pts[i+1] || segCounts[i] > 1) return;
           var key    = normKey(pts[i].idPonto, pts[i+1].idPonto);
           var isNew  = leg.distKm > 0 && !((cached[key] || {}).km > 0);
           var via    = _legVia[pts[i].idPonto] || 'BR';
+          // Personalizado é específico do esquema: nunca vai para o cache global
+          if (via === 'Pers') via = 'BR';
           // Envia TODOS os pares: km > 0 apenas nos novos; existentes recebem km=0
           // para que o backend só atualize tipo_via sem criar linha duplicada
           toSave.push({ a: pts[i].idPonto, b: pts[i+1].idPonto, km: isNew ? leg.distKm : 0, tipoVia: via });
@@ -255,13 +336,13 @@ function _fetchOsrmDistances(callback) {
         var geom = route.geometry && route.geometry.coordinates
           ? route.geometry.coordinates.map(function(c){ return [c[1], c[0]]; })
           : null;
-        callback(legs, geom);
+        callback(legs, geom, legGeoms);
       })
       .catch(function() {
         var fallback = legsFromCache(cached || {});
         var hasAny   = fallback.some(function(l){ return l !== null; });
         _osrmStatus  = hasAny ? 'cache' : 'unavailable';
-        callback(hasAny ? fallback : null, null);
+        callback(hasAny ? fallback : null, null, null);
       });
   }
 
@@ -269,9 +350,12 @@ function _fetchOsrmDistances(callback) {
     google.script.run
       .withSuccessHandler(function(cached) {
         var allHit = pairs.every(function(p){ return (cached[normKey(p.a, p.b)] || {}).km > 0; });
-        if (allHit) {
+        // Se algum trecho tem desvio de ajuste de rota salvo, precisa chamar o
+        // OSRM mesmo com cache cheio, pra buscar a geometria real do desvio.
+        var temDesvio = pairs.some(function(p){ return _rotaViaCoords(p.a, p.b).length > 0; });
+        if (allHit && !temDesvio) {
           _osrmStatus = 'cache';
-          callback(legsFromCache(cached), null);
+          callback(legsFromCache(cached), null, null);
         } else {
           callOsrm(cached);
         }
@@ -372,6 +456,7 @@ function toggleView(v) {
   var mapEl  = document.getElementById('map');
   var mapPh  = document.getElementById('mapPh');
   var mapLeg = document.getElementById('mapLegend');
+  var mapTgl = document.getElementById('mapModeToggle');
   var horPan = document.getElementById('horPanel');
   var btnM   = document.getElementById('btnViewMapa');
   var btnH   = document.getElementById('btnViewHorario');
@@ -380,6 +465,7 @@ function toggleView(v) {
     mapEl.style.display  = 'none';
     mapPh.style.display  = 'none';
     mapLeg.classList.remove('show');
+    mapTgl.style.display = 'none';
     horPan.style.display = 'flex';
     btnM.classList.remove('active'); btnH.classList.add('active');
     renderHorario();
@@ -409,6 +495,32 @@ function _rotaAjustada(codA, codB) {
   return _rotasAjust[String(codA) + '|' + String(codB)] || null;
 }
 
+// Localiza o ajuste cru (com viaCoords) do par, em qualquer sentido.
+function _findRotaAjusteEntry(codA, codB) {
+  var list = _rotasAjustList || [];
+  for (var i = 0; i < list.length; i++) {
+    var e = list[i];
+    if (e.codA === codA && e.codB === codB) return { entry: e, reversed: false };
+    if (e.codA === codB && e.codB === codA) return { entry: e, reversed: true };
+  }
+  return null;
+}
+function _parseViaCoords(s) {
+  try {
+    var arr = JSON.parse(s || '[]');
+    return Array.isArray(arr) ? arr.filter(function(p) { return p && p.lat != null && p.lng != null; }) : [];
+  } catch (e) { return []; }
+}
+function _viasFromEntry(m) {
+  var vias = _parseViaCoords(m.entry.viaCoords);
+  return m.reversed ? vias.slice().reverse() : vias;
+}
+// Pontos de desvio salvos para o trecho codA→codB (respeitando o sentido), ou [].
+function _rotaViaCoords(codA, codB) {
+  var m = _findRotaAjusteEntry(String(codA), String(codB));
+  return m ? _viasFromEntry(m) : [];
+}
+
 function _calcHorario(osrmLegs) {
   var vel      = parseFloat(document.getElementById('horVelMedia').value) || 80;
   var partida  = document.getElementById('horHoraPartida').value || '00:00';
@@ -428,18 +540,32 @@ function _calcHorario(osrmLegs) {
     var isStart = (i === startIdx);
     var isLast  = (i === _seq.length - 1);
 
-    var dist = 0, tv = 0, distSource = 'none', timeSource = 'none';
+    var dist = 0, distReal = 0, tv = 0, distSource = 'none', timeSource = 'none', pisoKm = false;
     if (!preDep && !isStart) {
       var prev = _seq[i - 1];
       var legViaType = _legVia[prev.idPonto];
-      var legVel = legViaType ? (_tipoViaVel[legViaType] || vel) : vel;
+      var legVel = vel;
+      if (legViaType === 'Pers')  legVel = _legVelPers[prev.idPonto] || vel;
+      else if (legViaType)        legVel = _tipoViaVel[legViaType] || vel;
       // Ajuste de rota tem prioridade: sobrepõe km/tempo do trecho (ex.: desvio).
       var adj = _rotaAjustada(prev.idPonto, p.idPonto);
       if (adj) {
         dist = adj.km > 0 ? adj.km : 0;
+        distReal = dist;
         distSource = 'ajuste';
-        tv = adj.min > 0 ? Math.round(adj.min)
-                         : Math.max(Math.round((dist / legVel) * 60), MIN_LEG_TV);
+        // Ajuste manual em minutos tem prioridade total (sem piso). Sem tempo
+        // manual, o tempo sai de km/vel — mas com um piso de KM (não de tempo)
+        // pra trechos curtos, que escala com a velocidade configurada em vez
+        // de forçar sempre o mesmo tempo fixo.
+        if (adj.min > 0) {
+          tv = Math.round(adj.min);
+        } else if (dist > 0) {
+          pisoKm = dist < MIN_LEG_KM;
+          dist = Math.max(dist, MIN_LEG_KM);
+          tv   = Math.round((dist / legVel) * 60);
+        } else {
+          tv = MIN_LEG_TV;
+        }
         timeSource = 'ajuste';
       } else {
         var pRank = osrmOk ? coordRank[i - 1] : undefined;
@@ -447,8 +573,10 @@ function _calcHorario(osrmLegs) {
         var leg   = (osrmOk && pRank !== undefined && cRank !== undefined
                      && cRank === pRank + 1) ? osrmLegs[pRank] : null;
         if (leg) {
-          dist = leg.distKm; distSource = 'osrm';
-          tv   = Math.max(Math.round((leg.distKm / legVel) * 60), MIN_LEG_TV);
+          distReal = leg.distKm;
+          pisoKm = leg.distKm < MIN_LEG_KM;
+          dist = Math.max(leg.distKm, MIN_LEG_KM); distSource = 'osrm';
+          tv   = Math.round((dist / legVel) * 60);
           timeSource = 'vel';
         } else {
           dist = 0; distSource = 'none';
@@ -477,12 +605,14 @@ function _calcHorario(osrmLegs) {
       idx: i, nomePonto: p.nomePonto, tipo: p.tipo || '',
       preDep: preDep,
       dist: Math.round(dist * 10) / 10,
+      distReal: Math.round(distReal * 10) / 10,
       tv: tv, tp: tp,
       chegadaMin: chegada !== null ? Math.round(chegada) : null,
       saidaMin:   (!preDep && !isLast && saida !== null) ? Math.round(saida) : null,
       hasCoords:  !!(p.lat && p.lng),
       distSource: distSource,
-      timeSource: timeSource
+      timeSource: timeSource,
+      pisoKm:     pisoKm
     });
   });
 
@@ -508,10 +638,15 @@ function renderHorario() {
   if (!body) return;
 
   if (!_sel || !_seq.length) {
-    body.innerHTML = '<div style="text-align:center;color:#9aa0ad;padding:40px 20px;">'
-      + (!_sel ? 'Selecione um esquema para calcular o horário.'
-               : 'Adicione pontos ao esquema para calcular o horário.')
-      + '</div>';
+    if (_sel && !_seq.length) {
+      // Esquema vazio: oferece o preenchimento por print (colar/arrastar).
+      body.innerHTML = _itinPasteZoneHtml();
+      _bindItinDropZone();
+    } else {
+      body.innerHTML = '<div style="text-align:center;color:#9aa0ad;padding:40px 20px;">'
+        + 'Selecione um esquema para calcular o horário.'
+        + '</div>';
+    }
     return;
   }
 
@@ -527,14 +662,16 @@ function renderHorario() {
   _osrmStatus  = 'pending';
   _renderHorarioWith(null);
 
-  _fetchOsrmDistances(function(legs, geom) {
+  _fetchOsrmDistances(function(legs, geom, legGeoms) {
     if (_osrmSeqKey !== key) return;
     _osrmLegs     = legs;
     _osrmGeometry = geom;
+    _osrmLegGeoms = legGeoms;
     if (_view === 'horario') {
       _renderHorarioWith(legs);
     } else if (geom && _poly) {
       _poly.setLatLngs(geom);
+      _drawLegHoverOnMap();
     }
   });
 }
@@ -551,6 +688,287 @@ function _isApoioAntt(idx) {
   var p = _seq[idx];
   if (!p) return false;
   return !_comercialTimes[p.idPonto];
+}
+
+// ============================================================
+//  Investigação de Divergência — Model + View + Controller
+//  Fase 1 (atual): só evidências determinísticas, sem IA — hipóteses por
+//  heurística local. A camada de IA (DiagnosticoService no backend) entra
+//  depois, sem mudar esta estrutura: o Controller troca a renderização direta
+//  por uma chamada a google.script.run quando o serviço estiver pronto.
+// ============================================================
+
+var DivergenceInvestigationModel = (function() {
+
+  function _sevOf(diffAbsMin) { return diffAbsMin >= 180 ? 'critica' : 'alta'; }
+
+  // Último ponto ANTES de idx com horário comercial + chegada calculada —
+  // a "baseline" da qual a divergência deste ponto evoluiu.
+  function _prevComercialIdx(idx, seq, calc) {
+    for (var k = idx - 1; k >= 0; k--) {
+      if (seq[k] && _comercialTimes[seq[k].idPonto] && calc.pontos[k] && calc.pontos[k].chegadaMin !== null) return k;
+    }
+    return -1;
+  }
+
+  function _qualidadeDados(fromIdx, toIdx, calc) {
+    var semDados = false, comAjusteOuMin = false;
+    for (var k = fromIdx + 1; k <= toIdx; k++) {
+      var p = calc.pontos[k];
+      if (!p) continue;
+      if (p.distSource === 'none') semDados = true;
+      else if (p.distSource === 'ajuste' || p.timeSource === 'min') comAjusteOuMin = true;
+    }
+    if (semDados) return 'baixa';
+    if (comAjusteOuMin) return 'media';
+    return 'alta';
+  }
+
+  /**
+   * Monta o pacote de evidências para o ponto idx.
+   * @param {number} idx    — índice em _seq / calc.pontos
+   * @param {Array}  seq    — _seq
+   * @param {Object} calc   — retorno de _calcHorario (com _recomputeComercialBase já aplicado)
+   * @param {Object} comercialTimes — _comercialTimes
+   * @returns {Object|null} pacote estruturado, ou null se faltar dado essencial
+   */
+  function buildContext(idx, seq, calc, comercialTimes) {
+    var p = seq[idx], cp = calc.pontos[idx];
+    if (!p || !cp || cp.chegadaMin === null) return null;
+    var comVal = comercialTimes[p.idPonto];
+    if (!comVal) return null;
+
+    var diffMin  = _diffMin(comVal, cp.chegadaMin, p.idPonto);
+    var prevIdx  = _prevComercialIdx(idx, seq, calc);
+    var diffAntesMin = prevIdx >= 0
+      ? _diffMin(comercialTimes[seq[prevIdx].idPonto], calc.pontos[prevIdx].chegadaMin, seq[prevIdx].idPonto)
+      : 0;
+    var diffIntervaloMin = diffMin - diffAntesMin;
+    var fromIdx = prevIdx >= 0 ? prevIdx : 0;
+
+    // Maior parada, maior trecho, km/tempo somados, pontos de apoio sem
+    // horário e trechos muito curtos que bateram no "tempo mínimo por trecho"
+    // (MIN_LEG_TV) no intervalo (do último ponto comercial anterior até idx).
+    var maiorParada = null, maiorTrecho = null, apoioSemHorario = [], pisoTrechos = [];
+    var distIntervaloKm = 0, tvIntervaloMin = 0, tpIntervaloMin = 0;
+    for (var k = fromIdx + 1; k <= idx; k++) {
+      var kp = calc.pontos[k], ks = seq[k];
+      if (!kp || !ks) continue;
+      distIntervaloKm += kp.dist || 0;
+      tvIntervaloMin  += kp.tv   || 0;
+      tpIntervaloMin  += kp.tp   || 0;
+      if (kp.tp > 0 && (!maiorParada || kp.tp > maiorParada.minutos)) {
+        maiorParada = { ponto: ks.nomePonto || '', minutos: kp.tp };
+      }
+      if (kp.tv > 0 && (!maiorTrecho || kp.tv > maiorTrecho.tempoMin)) {
+        maiorTrecho = { de: (seq[k - 1] || {}).nomePonto || '', para: ks.nomePonto || '', tempoMin: kp.tv, km: kp.dist || 0 };
+      }
+      // MIN_LEG_KM é um piso de distância (Math.max) aplicado a trechos curtos
+      // — o tempo então sai de km/vel normalmente, então não infla tanto
+      // quanto o antigo piso de tempo fixo, mas ainda vale sinalizar quando
+      // ocorreu (o "km" mostrado não é 100% real nesse trecho).
+      if (kp.pisoKm) {
+        pisoTrechos.push({ de: (seq[k - 1] || {}).nomePonto || '', para: ks.nomePonto || '', kmReal: kp.distReal, kmUsado: kp.dist });
+      }
+      if (k !== idx && !comercialTimes[ks.idPonto]) apoioSemHorario.push(ks.nomePonto || '');
+    }
+
+    // Velocidade de condução (sem contar paradas) exigida pelo horário
+    // comercial pra cobrir a mesma distância no intervalo — só é possível
+    // quando há um ponto comercial anterior real (prevIdx) como referência,
+    // e descontando o tempo de parada já conhecido (tpIntervaloMin) pra
+    // comparar em pé de igualdade com a velocidade calculada (que também é
+    // só condução, sem parada).
+    var nomeOrigemIntervalo = prevIdx >= 0 ? (seq[prevIdx].nomePonto || '') : '';
+    var velComercialIntervalo = null;
+    if (prevIdx >= 0) {
+      var absA = _comercialAbsMap[seq[prevIdx].idPonto], absB = _comercialAbsMap[p.idPonto];
+      if (absA !== undefined && absB !== undefined && absB > absA && distIntervaloKm > 0) {
+        var condMinComercial = (absB - absA) - tpIntervaloMin;
+        if (condMinComercial > 0) velComercialIntervalo = distIntervaloKm / (condMinComercial / 60);
+      }
+    }
+    var velCalculadaIntervalo = tvIntervaloMin > 0 ? (distIntervaloKm / tvIntervaloMin) * 60 : null;
+
+    var hipoteses = [];
+    var ratioAntes = diffMin !== 0 ? Math.abs(diffAntesMin) / Math.abs(diffMin) : 0;
+    if (prevIdx >= 0 && ratioAntes >= 0.6) {
+      hipoteses.push({
+        tipo: 'folga_operacional',
+        probabilidade: ratioAntes >= 0.8 ? 'alta' : 'media',
+        evidencia: 'A maior parte da diferença (' + _dur(Math.abs(diffAntesMin)) + ' de ' + _dur(Math.abs(diffMin)) + ') já vinha acumulada antes deste ponto.'
+      });
+    }
+    if (maiorTrecho && Math.abs(diffIntervaloMin) > 15 && maiorTrecho.tempoMin >= Math.abs(diffIntervaloMin) * 0.5) {
+      hipoteses.push({
+        tipo: 'trecho_lento',
+        probabilidade: maiorTrecho.tempoMin >= Math.abs(diffIntervaloMin) * 0.8 ? 'alta' : 'media',
+        evidencia: 'O trecho ' + maiorTrecho.de + ' → ' + maiorTrecho.para + ' (' + maiorTrecho.km + ' km, ' + _dur(maiorTrecho.tempoMin) + ') concentra boa parte da divergência gerada neste intervalo.'
+      });
+    }
+    if (maiorParada && maiorParada.minutos >= 30) {
+      hipoteses.push({
+        tipo: 'parada_longa',
+        probabilidade: maiorParada.minutos >= 45 ? 'alta' : 'media',
+        evidencia: 'Parada de ' + _dur(maiorParada.minutos) + ' em "' + maiorParada.ponto + '" no intervalo.'
+      });
+    }
+    if (apoioSemHorario.length) {
+      hipoteses.push({
+        tipo: 'apoio_sem_horario',
+        probabilidade: 'media',
+        evidencia: (apoioSemHorario.length === 1 ? 'O ponto ' : 'Os pontos ') + apoioSemHorario.join(', ') +
+                   ' não têm horário comercial cadastrado, o que impede localizar com precisão onde a divergência nasceu.'
+      });
+    }
+    if (pisoTrechos.length) {
+      var maiorRazaoPiso = pisoTrechos.reduce(function(m, t) { return Math.max(m, t.kmUsado / (t.kmReal || 0.1)); }, 1);
+      hipoteses.push({
+        tipo: 'piso_tempo_minimo',
+        probabilidade: maiorRazaoPiso >= 2 ? 'alta' : 'media',
+        evidencia: pisoTrechos.map(function(t){ return t.de + ' → ' + t.para + ' (real ' + t.kmReal + ' km, usado ' + t.kmUsado + ' km)'; }).join('; ') +
+                   ': trecho real menor que o piso mínimo de ' + MIN_LEG_KM + ' km — o tempo é calculado com o km do piso, não o real, inflando o tempo calculado.'
+      });
+    }
+    if (!hipoteses.length) {
+      hipoteses.push({
+        tipo: 'indeterminado',
+        probabilidade: 'baixa',
+        evidencia: 'Nenhum padrão claro identificado nas evidências disponíveis para este intervalo.'
+      });
+    }
+
+    return {
+      id: 'div_' + (seq[fromIdx] ? seq[fromIdx].idPonto : '0') + '_' + p.idPonto,
+      ponto: p.nomePonto || '',
+      divergenciaMin: Math.round(diffMin),
+      chegadaCalculada: _ms(cp.chegadaMin),
+      horarioComercial: comVal,
+      severidade: _sevOf(Math.abs(diffMin)),
+      evidencias: {
+        maiorParada: maiorParada,
+        maiorTrecho: maiorTrecho,
+        diferencaAcumuladaAntesMin: Math.round(diffAntesMin),
+        diferencaGeradaNoIntervaloMin: Math.round(diffIntervaloMin),
+        pontosApoioSemHorario: apoioSemHorario,
+        qualidadeDados: _qualidadeDados(fromIdx, idx, calc),
+        nomeOrigemIntervalo: nomeOrigemIntervalo,
+        distIntervaloKm: Math.round(distIntervaloKm * 10) / 10,
+        velComercialIntervalo: velComercialIntervalo,
+        velCalculadaIntervalo: velCalculadaIntervalo
+      },
+      hipotesesIniciais: hipoteses
+    };
+  }
+
+  return { buildContext: buildContext };
+
+})();
+
+// ── Controller ─────────────────────────────────────────────
+function investigarDivergencia(idx) {
+  if (!_lastCalc) { toast('Calcule o horário antes de investigar.', 'error'); return; }
+  var pacote = DivergenceInvestigationModel.buildContext(idx, _seq, _lastCalc, _comercialTimes);
+  if (!pacote) { toast('Sem dados suficientes para investigar este ponto.', 'error'); return; }
+  _abrirModalInvestigacao(pacote);
+}
+
+// ── View ───────────────────────────────────────────────────
+var HIPOTESE_LABEL = {
+  folga_operacional: 'Folga operacional acumulada antes deste ponto',
+  trecho_lento:       'Trecho com tempo calculado muito diferente do comercial',
+  parada_longa:       'Parada mais longa que o esperado no intervalo',
+  apoio_sem_horario:  'Ponto de apoio sem horário comercial no intervalo',
+  piso_tempo_minimo:  'Piso de distância mínima aplicado a um trecho muito curto',
+  indeterminado:      'Causa não identificada com as evidências disponíveis'
+};
+var HIPOTESE_RECOMENDACAO = {
+  folga_operacional: 'Revisar se a folga acumulada nos trechos anteriores é intencional; se não for, ajustar o horário comercial de origem.',
+  trecho_lento:       'Revisar a velocidade configurada (ou o horário comercial) do trecho apontado como maior contribuinte.',
+  parada_longa:       'Confirmar se o tempo de parada no ponto apontado é real ou apenas um valor padrão que não reflete a operação.',
+  apoio_sem_horario:  'Cadastrar o horário comercial dos pontos de apoio listados para localizar com precisão onde a divergência nasce.',
+  piso_tempo_minimo:  'O piso de ' + MIN_LEG_KM + ' km por trecho é uma proteção genérica para trechos curtos — se este trecho tem uma razão real (trânsito, semáforos), cadastre um ajuste de rota manual documentando o motivo em vez de depender do piso genérico.',
+  indeterminado:      'Revisar manualmente o intervalo — as evidências disponíveis não indicam uma causa dominante.'
+};
+
+function _abrirModalInvestigacao(pacote) {
+  var ex = document.getElementById('investigacaoOverlay');
+  if (ex) ex.remove();
+
+  var probRank = { alta: 3, media: 2, baixa: 1 };
+  var causasOrdenadas = pacote.hipotesesIniciais.slice().sort(function(a, b) {
+    return (probRank[b.probabilidade] || 0) - (probRank[a.probabilidade] || 0);
+  });
+  var top = causasOrdenadas[0];
+  var confiancaTxt = { alta: 'Alta', media: 'Média', baixa: 'Baixa' }[top.probabilidade] || 'Baixa';
+
+  var sevCor = pacote.severidade === 'critica' ? '#ef4444' : '#f59e0b';
+  var causasHtml = causasOrdenadas.map(function(h, i) {
+    return '<div style="padding:10px 0;border-bottom:1px solid #eef0f6;">'
+      + '<div style="font-size:12.5px;font-weight:700;color:#1a1d23;margin-bottom:3px;">' + (i + 1) + '. ' + esc(HIPOTESE_LABEL[h.tipo] || h.tipo)
+      +   ' <span style="font-size:10px;font-weight:700;color:#9aa0ad;text-transform:uppercase;">(' + esc(h.probabilidade) + ')</span></div>'
+      + '<div style="font-size:12px;color:#3a3f52;line-height:1.5;">' + esc(h.evidencia) + '</div>'
+      + '</div>';
+  }).join('');
+
+  var ev = pacote.evidencias;
+
+  // Frase-chave: "do último ponto comercial até aqui são X km; o horário
+  // comercial sugere Y km/h — nós calculamos Z km/h."
+  var fraseIntervaloHtml = '';
+  if (ev.distIntervaloKm > 0) {
+    var origemTxt = ev.nomeOrigemIntervalo ? esc(ev.nomeOrigemIntervalo) : 'a partida';
+    fraseIntervaloHtml = '<div style="background:#f7f8fb;border:1px solid #eef0f6;border-radius:8px;padding:10px 12px;margin-bottom:14px;font-size:12.5px;color:#3a3f52;line-height:1.6;">'
+      + 'Do último ponto comercial (<strong>' + origemTxt + '</strong>) até aqui são <strong>' + ev.distIntervaloKm.toFixed(1).replace('.', ',') + ' km</strong>'
+      + ' — média de <strong>todo o intervalo</strong>, que pode somar mais de um trecho. '
+      + (ev.velComercialIntervalo !== null
+          ? 'O horário comercial sugere que o veículo andaria a <strong style="color:#f47920;">' + Math.round(ev.velComercialIntervalo) + ' km/h</strong> em média neste intervalo'
+              + (ev.velCalculadaIntervalo !== null ? ' — nossa proposta calcula <strong>' + Math.round(ev.velCalculadaIntervalo) + ' km/h</strong> de média.' : '.')
+          : 'Não foi possível calcular a velocidade sugerida pelo comercial (falta um ponto comercial de referência anterior).')
+      + '</div>';
+  }
+
+  var evidenciasHtml = ''
+    + (ev.maiorParada ? '<div style="font-size:11.5px;color:#5a6070;margin-bottom:3px;">' + ico('clock', 11) + ' Maior parada no intervalo: <strong>' + esc(ev.maiorParada.ponto) + '</strong> (' + _dur(ev.maiorParada.minutos) + ')</div>' : '')
+    + (ev.maiorTrecho ? '<div style="font-size:11.5px;color:#5a6070;margin-bottom:3px;">' + ico('map-pin', 11) + ' Maior trecho: <strong>' + esc(ev.maiorTrecho.de) + ' → ' + esc(ev.maiorTrecho.para) + '</strong> (' + ev.maiorTrecho.km + ' km, ' + _dur(ev.maiorTrecho.tempoMin) + ')</div>' : '')
+    + '<div style="font-size:11.5px;color:#5a6070;margin-bottom:3px;">' + ico('bar-chart', 11) + ' Defasagem antes deste intervalo: <strong>' + (ev.diferencaAcumuladaAntesMin >= 0 ? '+' : '') + ev.diferencaAcumuladaAntesMin + ' min</strong> · gerada neste intervalo: <strong>' + (ev.diferencaGeradaNoIntervaloMin >= 0 ? '+' : '') + ev.diferencaGeradaNoIntervaloMin + ' min</strong></div>'
+    + (ev.pontosApoioSemHorario.length ? '<div style="font-size:11.5px;color:#5a6070;margin-bottom:3px;">' + ico('alert-triangle', 11) + ' Sem horário comercial no intervalo: <strong>' + esc(ev.pontosApoioSemHorario.join(', ')) + '</strong></div>' : '')
+    + '<div style="font-size:11.5px;color:#5a6070;">' + ico('info', 11) + ' Qualidade dos dados: <strong>' + esc(ev.qualidadeDados) + '</strong></div>';
+
+  var modal =
+    '<div id="investigacaoOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:480px;max-width:92vw;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('gauge', 15) + ' Investigar divergência</div>'
+        + '<button onclick="_fecharModalInvestigacao()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:18px 20px;overflow-y:auto;">'
+        + '<div style="font-size:12px;color:#9aa0ad;margin-bottom:2px;">' + esc(pacote.ponto) + '</div>'
+        + '<div style="font-size:20px;font-weight:800;color:' + sevCor + ';margin-bottom:14px;">'
+        +   'Divergência: ' + (pacote.divergenciaMin >= 0 ? '+' : '') + _dur(Math.abs(pacote.divergenciaMin))
+        +   '<span style="font-size:11px;font-weight:600;color:#9aa0ad;margin-left:8px;">(comercial ' + esc(pacote.horarioComercial) + ' · calculado ' + esc(pacote.chegadaCalculada) + ')</span>'
+        + '</div>'
+        + fraseIntervaloHtml
+        + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#9aa0ad;margin-bottom:6px;">Possíveis causas</div>'
+        + causasHtml
+        + '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#9aa0ad;margin:14px 0 6px;">Evidências</div>'
+        + evidenciasHtml
+        + '<div style="margin-top:14px;padding-top:12px;border-top:1px solid #eef0f6;">'
+        +   '<div style="font-size:12px;color:#3a3f52;">Confiança: <strong>' + confiancaTxt + '</strong></div>'
+        +   '<div style="font-size:12.5px;color:#f47920;margin-top:6px;"><strong>Recomendação:</strong> ' + esc(HIPOTESE_RECOMENDACAO[top.tipo] || '') + '</div>'
+        + '</div>'
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
+        + '<button onclick="_fecharModalInvestigacao()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Fechar</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('investigacaoOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalInvestigacao(); });
+}
+
+function _fecharModalInvestigacao() {
+  var m = document.getElementById('investigacaoOverlay');
+  if (m) m.remove();
 }
 
 /**
@@ -820,6 +1238,37 @@ function _updateApoioSuggestions() {
   _refreshSuggestionsWithCache(_anttSuggCands);
 }
 
+// ── Traçado real (geometria OSRM) ─────────────────────────────
+// Mapeia cada índice de _seq com coordenadas para seu "rank" (posição entre os
+// pontos com lat/lng, 0-based) — usado para localizar a leg de _osrmLegGeoms
+// correspondente a um trecho entre dois índices quaisquer de _seq.
+function _buildCoordRank() {
+  var map = {}, r = 0;
+  _seq.forEach(function(p, i) { if (p.lat && p.lng) { map[i] = r; r++; } });
+  return map;
+}
+
+/**
+ * Retorna a geometria real (curva, seguindo a via) entre dois índices de _seq,
+ * concatenando as legs de _osrmLegGeoms no intervalo — ou null se a geometria
+ * ainda não estiver disponível (usa-se então uma linha reta como fallback).
+ */
+function _realGeomBetween(fromIdx, toIdx, coordRank) {
+  if (!_osrmLegGeoms) return null;
+  var rFrom = coordRank[fromIdx], rTo = coordRank[toIdx];
+  if (rFrom === undefined || rTo === undefined || rTo <= rFrom) return null;
+  var out = [];
+  for (var r = rFrom; r < rTo; r++) {
+    var legGeom = _osrmLegGeoms[r];
+    if (!legGeom) return null;
+    legGeom.forEach(function(ll) {
+      var last = out[out.length - 1];
+      if (!last || last[0] !== ll[0] || last[1] !== ll[1]) out.push(ll);
+    });
+  }
+  return out.length >= 2 ? out : null;
+}
+
 // ── ANTT map overlays ────────────────────────────────────────
 
 /** Remove todas as camadas ANTT do mapa (stretch polys + suggestion markers). */
@@ -923,6 +1372,349 @@ function _drawAnttOnMap() {
     })(cand.local));
     m.addTo(_map);
     _suggMapMarkers.push(m);
+  });
+}
+
+// ── Modo Comercial (mapa) ─────────────────────────────────────
+// Alterna a análise do mapa entre "ANTT" (limites de km sem apoio) e
+// "Comercial" (consistência do trecho frente ao horário comercial),
+// reaproveitando o mesmo critério de 3 níveis usado na tabela de horário
+// (delta-ok/warn/late, ±2min — ver _diffMin/_deltaCellHtml).
+function setMapMode(mode) {
+  if (mode !== 'antt' && mode !== 'comercial') return;
+  if (mode === _mapMode) return;
+  _mapMode = mode;
+  try { localStorage.setItem('vc_mapMode', mode); } catch(e) {}
+  document.querySelectorAll('.map-mode-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-mode') === mode);
+  });
+  updateMap();
+}
+
+/** Remove as camadas do overlay do Modo Comercial (polys + marcadores ⚠). */
+function _clearComercialMapLayers() {
+  _comercialPolys.forEach(function(p){ p.remove(); });
+  _comercialPolys = [];
+  _comercialWarnMarkers.forEach(function(m){ m.remove(); });
+  _comercialWarnMarkers = [];
+  var leg = document.getElementById('mapComercialLegend');
+  if (leg) leg.style.display = 'none';
+}
+
+/**
+ * Colore cada trecho (par de pontos consecutivos, ambos com horário comercial
+ * preenchido) segundo o quanto ele consumiu ou ganhou de margem em relação ao
+ * horário comercial: verde = folgado, âmbar = apertado (~exato), vermelho =
+ * estourou o horário. Marca com ⚠ os trechos cuja velocidade média exigida
+ * pelo horário comercial é fisicamente irreal (> 100 km/h).
+ */
+function _drawComercialOnMap() {
+  _clearComercialMapLayers();
+  if (!_map || _seq.length < 2) return;
+
+  var legs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c = _calcHorario(legs);
+  _recomputeComercialBase(c);
+
+  var clr = { ok: '#22c55e', warn: '#f59e0b', late: '#ef4444' };
+  var hasAlert = false;
+  var prevIdx = null;
+  var coordRank = _buildCoordRank();
+
+  for (var i = 0; i < c.pontos.length; i++) {
+    var sp = _seq[i];
+    if (!sp || !sp.lat || !sp.lng) continue;
+    if (prevIdx === null) { prevIdx = i; continue; }
+
+    var pp = _seq[prevIdx], pc = c.pontos[prevIdx], cc = c.pontos[i];
+    var comA = _comercialTimes[pp.idPonto], comB = _comercialTimes[sp.idPonto];
+    if (comA && comB && pc.chegadaMin !== null && cc.chegadaMin !== null) {
+      var diffA = _diffMin(comA, pc.chegadaMin, pp.idPonto);
+      var diffB = _diffMin(comB, cc.chegadaMin, sp.idPonto);
+      var legDelta = diffB - diffA; // margem ganha (+) ou perdida (−) NESTE trecho
+      var type = legDelta > 2 ? 'ok' : legDelta < -2 ? 'late' : 'warn';
+      if (type === 'late') hasAlert = true;
+
+      var distKm  = cc.dist || 0;
+      var comAbsA = _comercialAbsMap[pp.idPonto], comAbsB = _comercialAbsMap[sp.idPonto];
+      var comVel  = (comAbsA !== undefined && comAbsB !== undefined && comAbsB > comAbsA)
+                    ? distKm / ((comAbsB - comAbsA) / 60) : null;
+      var irreal  = comVel !== null && comVel > 100;
+
+      // Segue o traçado real (curva da via) quando a geometria OSRM já chegou;
+      // cai para linha reta enquanto isso não acontece.
+      var coords = _realGeomBetween(prevIdx, i, coordRank) || [[+pp.lat, +pp.lng], [+sp.lat, +sp.lng]];
+      var lbl = type === 'late' ? 'Atrasa o horário' : type === 'ok' ? 'Folgado' : 'Apertado';
+      var tip = '<b>' + esc(lbl) + '</b>'
+              + (irreal ? ' ' + ico('alert-triangle', 11) : '')
+              + '<br><span style="font-size:10px;color:#ccc">' + esc(pp.nomePonto || '') + ' &rarr; ' + esc(sp.nomePonto || '') + '</span>'
+              + '<br><span style="font-size:10px;color:#ccc">Variação de margem no trecho: ' + (legDelta >= 0 ? '+' : '') + Math.round(legDelta) + ' min</span>'
+              + (comVel !== null ? '<br><span style="font-size:10px;color:#ccc">Vel. exigida p/ horário comercial: ' + Math.round(comVel) + ' km/h</span>' : '');
+      var pl = L.polyline(coords, {
+        color: clr[type], weight: 10, opacity: 0.32,
+        lineCap: 'round', lineJoin: 'round'
+      }).addTo(_map);
+      pl.bindTooltip(tip, { sticky: true });
+      _comercialPolys.push(pl);
+
+      if (irreal) {
+        var mid     = coords[Math.floor(coords.length / 2)];
+        var midLat  = mid[0], midLng = mid[1];
+        var icon = L.divIcon({
+          className: '',
+          html: '<div style="width:22px;height:22px;border-radius:50%;background:#ef4444;border:2px solid #fff;' +
+                'display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:900;' +
+                'box-shadow:0 2px 8px rgba(0,0,0,0.5);">!</div>',
+          iconSize: [22, 22], iconAnchor: [11, 11]
+        });
+        var wm = L.marker([midLat, midLng], { icon: icon, zIndexOffset: 700 });
+        wm.bindTooltip('<b>Inconsistência grave</b><br><span style="font-size:10px;color:#ccc">Velocidade exigida (' + Math.round(comVel) + ' km/h) é irreal para este trecho.</span>', { direction: 'top', offset: [0, -12] });
+        wm.addTo(_map);
+        _comercialWarnMarkers.push(wm);
+      }
+    }
+    prevIdx = i;
+  }
+
+  var leg = document.getElementById('mapComercialLegend');
+  if (leg) leg.style.display = '';
+}
+
+// ── IA: por que o horário comercial diverge da nossa proposta ────────────
+// Reusa a mesma lógica de trecho (legDelta/comVel) do Modo Comercial, mas
+// nesta fase (planejamento — o esquema ainda não rodou) manda os trechos com
+// maior divergência para a IA (Groq) explicar a causa provável e sugerir
+// ajuste, numa única chamada (visão geral, mesmo padrão do Diagnóstico
+// Inteligente do relatório operacional).
+function analisarDivergenciaComercial() {
+  if (!_sel || _seq.length < 2) { toast('Selecione um esquema com pontos para analisar.', 'error'); return; }
+
+  var legs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c = _calcHorario(legs);
+  _recomputeComercialBase(c);
+
+  var trechos = [];
+  var prevIdx = null;
+  for (var i = 0; i < c.pontos.length; i++) {
+    var sp = _seq[i];
+    if (!sp || !sp.lat || !sp.lng) continue;
+    if (prevIdx === null) { prevIdx = i; continue; }
+
+    var pp = _seq[prevIdx], pc = c.pontos[prevIdx], cc = c.pontos[i];
+    var comA = _comercialTimes[pp.idPonto], comB = _comercialTimes[sp.idPonto];
+    if (comA && comB && pc.chegadaMin !== null && cc.chegadaMin !== null) {
+      var diffA = _diffMin(comA, pc.chegadaMin, pp.idPonto);
+      var diffB = _diffMin(comB, cc.chegadaMin, sp.idPonto);
+      var legDelta = diffB - diffA;
+      var distKm  = cc.dist || 0;
+      var tvCalcMin = cc.tv || 0;
+      var calcVel = tvCalcMin > 0 ? (distKm / tvCalcMin) * 60 : null;
+      var comAbsA = _comercialAbsMap[pp.idPonto], comAbsB = _comercialAbsMap[sp.idPonto];
+      var comVel = (comAbsA !== undefined && comAbsB !== undefined && comAbsB > comAbsA)
+                   ? distKm / ((comAbsB - comAbsA) / 60) : null;
+      trechos.push({
+        de: pp.nomePonto || '', para: sp.nomePonto || '',
+        distKm: distKm, tvCalcMin: tvCalcMin, calcVel: calcVel, comVel: comVel,
+        legDelta: legDelta, diffA: diffA, diffB: diffB,
+        irreal: comVel !== null && comVel > 100
+      });
+    }
+    prevIdx = i;
+  }
+
+  // Critério de seleção: ou o TRECHO em si já diverge (>2min de variação de
+  // margem — pega desalinhos localizados), ou o ponto de chegada já acumula
+  // mais de 2h de defasagem em relação ao horário comercial (>=120min, para
+  // mais ou para menos — pega o arrasto de vários trechos pequenos que juntos
+  // viram um problema grande, mesmo que nenhum trecho isolado pareça crítico).
+  var LIMIAR_ACUM_MIN = 120;
+  var divergentes = trechos.filter(function(t) {
+    return Math.abs(t.legDelta) > 2 || t.irreal || Math.abs(t.diffB) >= LIMIAR_ACUM_MIN;
+  }).sort(function(a, b) {
+    return Math.max(Math.abs(b.diffB), Math.abs(b.legDelta)) - Math.max(Math.abs(a.diffB), Math.abs(a.legDelta));
+  }).slice(0, 12);
+
+  if (!divergentes.length) {
+    if (!trechos.length) toast('Preencha o horário comercial dos pontos para poder analisar.', 'error');
+    else toast('Nenhuma divergência relevante encontrada — horário comercial e proposta estão alinhados.', 'success');
+    return;
+  }
+
+  var lastComIdx = -1;
+  for (var k = _seq.length - 1; k >= 0; k--) {
+    if (_comercialTimes[_seq[k].idPonto] && c.pontos[k] && c.pontos[k].chegadaMin !== null) { lastComIdx = k; break; }
+  }
+  var diffFinalMin = lastComIdx >= 0
+    ? _diffMin(_comercialTimes[_seq[lastComIdx].idPonto], c.pontos[lastComIdx].chegadaMin, _seq[lastComIdx].idPonto)
+    : null;
+
+  var payload = {
+    nomeLinha: (_sel.nome_linha || ''),
+    indicadores: { totalKm: c.distTotal, tempoCalcMin: c.totalMin, diffFinalMin: diffFinalMin },
+    trechos: divergentes
+  };
+
+  var btn = document.getElementById('btnIaDivergencia');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+  loading('Analisando divergências com IA…');
+  google.script.run
+    .withSuccessHandler(function(res) {
+      doneLoading();
+      if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+      if (!res || !res.ok) { toast('Erro na análise: ' + (res && res.erro || 'falha desconhecida'), 'error'); return; }
+      _abrirModalIaDivergencia(res.narrativa);
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+      toast('Erro na análise: ' + (e.message || e), 'error');
+    })
+    .explicarDivergenciaComercial(payload);
+}
+
+function _abrirModalIaDivergencia(n) {
+  n = n || {};
+  var ex = document.getElementById('iaDivOverlay');
+  if (ex) ex.remove();
+
+  var impactoCor = { alto: '#ef4444', medio: '#f59e0b', baixo: '#22c55e' };
+  var causasHtml = (n.causasPrincipais || []).map(function(c) {
+    var cor = impactoCor[c.impacto] || '#9aa0ad';
+    return '<div style="padding:12px 0;border-bottom:1px solid #eef0f6;">'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'
+      +   '<span style="width:8px;height:8px;border-radius:50%;background:' + cor + ';flex-shrink:0;"></span>'
+      +   '<strong style="font-size:13px;color:#1a1d23;">' + esc(c.titulo || '') + '</strong>'
+      + '</div>'
+      + (c.trecho ? '<div style="font-size:11px;color:#9aa0ad;margin-bottom:5px;">' + esc(c.trecho) + '</div>' : '')
+      + '<div style="font-size:12.5px;color:#3a3f52;line-height:1.55;">' + esc(c.descricao || '') + '</div>'
+      + (c.sugestao ? '<div style="font-size:12.5px;color:#f47920;margin-top:5px;"><strong>Sugestão:</strong> ' + esc(c.sugestao) + '</div>' : '')
+      + '</div>';
+  }).join('');
+
+  var modal =
+    '<div id="iaDivOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:540px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('lightbulb', 15) + ' Análise de divergência — IA</div>'
+        + '<button onclick="_fecharModalIaDivergencia()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:18px 20px;overflow-y:auto;">'
+        + (n.resumoExecutivo ? '<p style="font-size:13px;color:#1a1d23;font-weight:600;margin:0 0 14px;line-height:1.55;">' + esc(n.resumoExecutivo) + '</p>' : '')
+        + causasHtml
+        + (n.parecerFinal ? '<p style="font-size:12.5px;color:#3a3f52;margin:14px 0 0;line-height:1.55;padding-top:12px;border-top:1px solid #eef0f6;">' + esc(n.parecerFinal) + '</p>' : '')
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
+        + '<button onclick="_fecharModalIaDivergencia()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Fechar</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('iaDivOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalIaDivergencia(); });
+}
+
+function _fecharModalIaDivergencia() {
+  var m = document.getElementById('iaDivOverlay');
+  if (m) m.remove();
+}
+
+/** Remove as camadas de hover/click de trecho (tempo+km+vel) do mapa. */
+function _clearLegHoverLayers() {
+  _legHoverPolys.forEach(function(p){ p.remove(); });
+  _legHoverPolys = [];
+}
+
+function _fmtLegDuration(min) {
+  min = Math.round(min);
+  var h = Math.floor(min / 60), m = min % 60;
+  return h > 0 ? (h + 'h' + (m < 10 ? '0' : '') + m + 'min') : (m + ' min');
+}
+
+/**
+ * Card do trecho: "são X km, a Y km/h, feito em Zh". Se ambos os pontos
+ * tiverem horário comercial, mostra também um comparativo — entrada A → entrada
+ * B (intervalo real da tabela comercial) e a velocidade média que o veículo
+ * precisaria manter para cumprir esse intervalo com a mesma distância.
+ */
+function _legHoverTooltipHtml(A, B, distKm, tv) {
+  var vel   = tv > 0 ? Math.round((distKm / tv) * 60) : null;
+  var kmTxt = distKm.toFixed(1).replace('.', ',') + ' km';
+
+  var html = '<div style="font-family:Inter,Arial,sans-serif;font-size:13px;line-height:1.6;min-width:230px;">'
+    + '<div style="font-weight:700;font-size:13px;margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid #e2e5ea;">'
+    +   esc(A.nomePonto || '') + ' &rarr; ' + esc(B.nomePonto || '') + '</div>'
+    + '<div style="color:#3a3f52;">'
+    +   'São <strong>' + kmTxt + '</strong>'
+    +   (vel !== null ? ', a uma velocidade média de <strong>' + vel + ' km/h</strong>' : '')
+    +   ', feitos em <strong>' + _fmtLegDuration(tv) + '</strong>.'
+    + '</div>';
+
+  var comA = _comercialAbsMap[A.idPonto], comB = _comercialAbsMap[B.idPonto];
+  if (comA !== undefined && comB !== undefined && comB > comA) {
+    var diffMin  = comB - comA;
+    var comVel   = distKm / (diffMin / 60);
+    html += '<div style="margin-top:9px;padding-top:8px;border-top:1px dashed #d4d8e8;">'
+      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#9aa0ad;margin-bottom:4px;">Horário comercial</div>'
+      + '<div style="color:#3a3f52;">'
+      +   esc(_comercialTimes[A.idPonto] || '') + ' &rarr; ' + esc(_comercialTimes[B.idPonto] || '')
+      +   ' <span style="color:#9aa0ad;">(' + _fmtLegDuration(diffMin) + ')</span>'
+      + '</div>'
+      + '<div style="color:#3a3f52;margin-top:2px;">'
+      +   'Velocidade média necessária: <strong style="color:#f47920;">' + Math.round(comVel) + ' km/h</strong>'
+      + '</div>'
+      + '</div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+/**
+ * Desenha, entre cada par de pontos consecutivos do mapa (view "Mapa"), uma
+ * camada invisível espessa que responde a hover/click mostrando tempo, km e
+ * velocidade média daquele trecho — no estilo Google Maps. Fica por cima da
+ * rota principal e do overlay ANTT para não perder o hover para eles.
+ *
+ * No Modo Comercial, os pontos de apoio (sem horário comercial) ficam ocultos
+ * no mapa — então os trechos aqui também são agregados entre os pontos ainda
+ * visíveis (início, fim e comerciais), somando km/tempo dos pulos ocultos no
+ * meio, em vez de mostrar um card por perna intermediária escondida.
+ */
+function _drawLegHoverOnMap() {
+  _clearLegHoverLayers();
+  if (!_map || _seq.length < 2) return;
+  var legs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c = _calcHorario(legs);
+  _recomputeComercialBase(c);
+
+  var seqCoordIdxs = [];
+  _seq.forEach(function(p, i) { if (p.lat && p.lng) seqCoordIdxs.push(i); });
+  var firstCoordIdx = seqCoordIdxs[0], lastCoordIdx = seqCoordIdxs[seqCoordIdxs.length - 1];
+  var coordRank = _buildCoordRank();
+
+  function isKeeper(idx) {
+    return _mapMode !== 'comercial' || idx === firstCoordIdx || idx === lastCoordIdx || !_isApoioAntt(idx);
+  }
+
+  var prevKeeperIdx = null, accumDist = 0, accumTv = 0;
+  _seq.forEach(function(sp, idx) {
+    if (!sp.lat || !sp.lng) return;
+    var calc = c.pontos[idx];
+    if (prevKeeperIdx !== null && calc) {
+      accumDist += calc.dist || 0;
+      accumTv   += calc.tv   || 0;
+    }
+    if (!isKeeper(idx)) return;
+    if (prevKeeperIdx !== null && (accumDist > 0 || accumTv > 0)) {
+      var A = _seq[prevKeeperIdx], B = sp;
+      // Segue o traçado real (curva da via) quando disponível — inclusive
+      // quando o trecho agrega várias legs ocultas no Modo Comercial.
+      var coords = _realGeomBetween(prevKeeperIdx, idx, coordRank) || [[+A.lat, +A.lng], [+B.lat, +B.lng]];
+      var html = _legHoverTooltipHtml(A, B, accumDist, accumTv);
+      var hit = L.polyline(coords, { color: '#000', weight: 14, opacity: 0 }).addTo(_map);
+      hit.bindTooltip(html, { sticky: true, direction: 'top', className: 'leaflet-tooltip-leg' });
+      hit.bindPopup(html, { className: 'leaflet-popup-light', maxWidth: 300 });
+      _legHoverPolys.push(hit);
+    }
+    prevKeeperIdx = idx; accumDist = 0; accumTv = 0;
   });
 }
 
@@ -1092,7 +1884,7 @@ function _renderHorarioWith(osrmLegs) {
               + 'onkeydown="if(event.key===\'Enter\'){event.preventDefault();_confirmComercial(' + i + ',this,true)}'
               + 'else if(event.key===\'Escape\'){this.value=\'\';unhighlightRow(' + i + ')}" />';
     }
-    var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+    var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
 
     return '<tr id="horRow' + i + '"' + cls + ' onclick="selectHorRow(' + i + ')">'
       + cidadeCell
@@ -1219,7 +2011,7 @@ function _buildComAnalysis(c) {
 // ============================================================
 //  Célula Temp. Desl. com seletor de via por trecho
 // ============================================================
-var _LEG_LABEL = { BR:'Rodovia federal', Est:'Estadual', Mun:'Municipal', Urb:'Urbana' };
+var _LEG_LABEL = { BR:'Rodovia federal', Est:'Estadual', Mun:'Municipal', Urb:'Urbana', Pers:'Personalizado — velocidade própria deste trecho' };
 
 function _buildLegViaCell(i, c) {
   var isLast = (i >= c.pontos.length - 1);
@@ -1237,47 +2029,232 @@ function _buildLegViaCell(i, c) {
     ? '<span style="color:#bbb;font-size:9px;" title="Sem dados de rota — tempo mínimo aplicado"> ~</span>'
     : '';
 
-  var tvHtml = '<span class="hor-via-time">' + _hhmm(next.tv) + approxMark + '</span>'
-    + (distStr ? '<span class="hor-via-dist">' + distStr + '</span>' : '');
-
-  var viaKey = _legVia[_seq[i].idPonto];
-  var badge  = viaKey
-    ? '<span class="hor-via-badge" data-via="' + viaKey + '">' + viaKey + '</span>'
+  // Recalcular: refaz a consulta de rota só deste trecho (ignorando o cache
+  // de DISTANCIAS), pra conferir contra outra fonte (ex.: Google Maps).
+  var recalcBtn = (next.dist > 0)
+    ? '<button type="button" class="hor-via-recalc-btn" onclick="event.stopPropagation();_recalcularTrechoKm(' + i + ')" title="Recalcular esta distância (confere contra o cache salvo)">' + ico('refresh', 9) + '</button>'
     : '';
 
-  var btns = ['BR','Est','Mun','Urb'].map(function(t) {
+  var tvHtml = '<span class="hor-via-time">' + _hhmm(next.tv) + approxMark + '</span>'
+    + (distStr ? '<span class="hor-via-dist">' + distStr + recalcBtn + '</span>' : '');
+
+  var idPt   = _seq[i].idPonto;
+  var viaKey = _legVia[idPt];
+  var persV  = _legVelPers[idPt];
+  var badgeTxt = (viaKey === 'Pers') ? ((persV > 0 ? persV : '?') + '') : viaKey;
+  var badgeTit = (viaKey === 'Pers' && persV > 0) ? 'Personalizado — ' + persV + ' km/h' : (_LEG_LABEL[viaKey] || '');
+  var badge  = viaKey
+    ? '<span class="hor-via-badge" data-via="' + viaKey + '" title="' + badgeTit + '">' + badgeTxt + '</span>'
+    : '';
+
+  var btns = ['BR','Est','Mun','Urb','Pers'].map(function(t) {
     return '<button class="hor-via-btn' + (viaKey === t ? ' active' : '') + '" '
       + 'data-via="' + t + '" '
       + 'onclick="setLegVia(' + i + ',\'' + t + '\',event)" '
       + 'title="' + _LEG_LABEL[t] + '">' + t + '</button>';
   }).join('');
 
+  // Campo inline de km/h — visível só quando o trecho é personalizado
+  var persInput = '<span class="hor-via-pers' + (viaKey === 'Pers' ? ' show' : '') + '">'
+    + '<input class="hor-via-pers-input" type="number" min="1" max="200" step="1" '
+    + 'value="' + (persV > 0 ? persV : '') + '" placeholder="km/h" '
+    + 'onclick="event.stopPropagation();" '
+    + 'onfocus="_pinPersEdit(' + i + ')" '
+    + 'onkeydown="_persInputKey(' + i + ',event)" '
+    + 'onblur="_commitPersVel(' + i + ',this.value,event)">'
+    + '<span class="hor-via-pers-unit">km/h</span>'
+    + '</span>';
+
   return '<div class="hor-via-wrap">'
     + tvHtml + badge
-    + '<div class="hor-via-overlay">' + btns + '</div>'
+    + '<div class="hor-via-overlay">' + btns + persInput + '</div>'
     + '</div>';
+}
+
+// ── Recalcular distância de um trecho (confere contra o cache salvo) ─────
+// A distância exibida normalmente vem do cache persistente (aba DISTANCIAS) —
+// que só é atualizado para pares NOVOS, nunca sobrescrito depois. Se a via
+// mudou, o ponto foi recadastrado, ou o valor salvo está simplesmente errado,
+// o cache pode ficar desatualizado. Este botão refaz a consulta de rota só
+// deste trecho (direto na API, sem cache) e deixa o usuário decidir se
+// atualiza o valor salvo.
+function _recalcularTrechoKm(i) {
+  var A = _seq[i], B = _seq[i + 1];
+  if (!A || !B || !A.lat || !A.lng || !B.lat || !B.lng) { toast('Pontos sem coordenadas para recalcular.', 'error'); return; }
+
+  var coords = (+A.lng).toFixed(6) + ',' + (+A.lat).toFixed(6) + ';' + (+B.lng).toFixed(6) + ',' + (+B.lat).toFixed(6);
+  var url = 'https://router.project-osrm.org/route/v1/driving/' + coords + '?overview=false&annotations=false';
+
+  loading('Recalculando distância do trecho…');
+  fetch(url)
+    .then(function(r) { return r.ok ? r.json() : Promise.reject('http'); })
+    .then(function(data) {
+      doneLoading();
+      if (!data || data.code !== 'Ok' || !data.routes || !data.routes[0]) { toast('Rota indisponível no momento — tente de novo em instantes.', 'error'); return; }
+      var kmNovo  = Math.round(data.routes[0].distance / 100) / 10;
+      var kmAtual = (_lastCalc && _lastCalc.pontos[i + 1]) ? _lastCalc.pontos[i + 1].dist : null;
+      _abrirModalRecalcKm(A, B, kmAtual, kmNovo);
+    })
+    .catch(function() { doneLoading(); toast('Erro ao recalcular: rota indisponível no momento.', 'error'); });
+}
+
+function _abrirModalRecalcKm(A, B, kmAtual, kmNovo) {
+  var ex = document.getElementById('recalcKmOverlay');
+  if (ex) ex.remove();
+
+  var diffKm  = (kmAtual != null) ? Math.round((kmNovo - kmAtual) * 10) / 10 : null;
+  var diffPct = (kmAtual != null && kmAtual > 0) ? Math.round((diffKm / kmAtual) * 1000) / 10 : null;
+  var diffTxt = diffKm !== null
+    ? '<div style="font-size:12px;color:#5a6070;margin-top:8px;">Diferença: <strong>' + (diffKm >= 0 ? '+' : '') + diffKm.toFixed(1).replace('.', ',') + ' km</strong>'
+        + (diffPct !== null ? ' (' + (diffPct >= 0 ? '+' : '') + diffPct.toFixed(1).replace('.', ',') + '%)' : '') + '</div>'
+    : '';
+
+  var modal =
+    '<div id="recalcKmOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:380px;max-width:92vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('refresh', 15) + ' Recalcular distância</div>'
+        + '<button onclick="_fecharModalRecalcKm()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:18px 20px;">'
+        + '<div style="font-size:12px;color:#9aa0ad;margin-bottom:10px;">' + esc(A.nomePonto || '') + ' &rarr; ' + esc(B.nomePonto || '') + '</div>'
+        + '<div style="display:flex;gap:14px;">'
+        +   '<div style="flex:1;background:#f7f8fb;border-radius:8px;padding:10px;text-align:center;">'
+        +     '<div style="font-size:10px;font-weight:700;color:#9aa0ad;text-transform:uppercase;margin-bottom:3px;">Salvo (cache)</div>'
+        +     '<div style="font-size:17px;font-weight:800;color:#1a1d23;">' + (kmAtual != null ? kmAtual.toFixed(1).replace('.', ',') : '—') + ' km</div>'
+        +   '</div>'
+        +   '<div style="flex:1;background:#fff8f0;border-radius:8px;padding:10px;text-align:center;">'
+        +     '<div style="font-size:10px;font-weight:700;color:#f47920;text-transform:uppercase;margin-bottom:3px;">Recalculado agora</div>'
+        +     '<div style="font-size:17px;font-weight:800;color:#f47920;">' + kmNovo.toFixed(1).replace('.', ',') + ' km</div>'
+        +   '</div>'
+        + '</div>'
+        + diffTxt
+        + '<p style="font-size:11.5px;color:#9aa0ad;margin:12px 0 0;line-height:1.5;">Ambos os valores vêm do mesmo motor de rota (OSRM/OpenStreetMap) — divergências grandes de outras fontes (ex.: Google Maps) costumam ser diferença de trajeto escolhido, não erro. Atualize só se tiver certeza de que este valor está mais correto.</p>'
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eef0f6;">'
+        + '<button onclick="_fecharModalRecalcKm()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="_confirmarAtualizarKm(\'' + esc(A.idPonto) + '\',\'' + esc(B.idPonto) + '\',' + kmNovo + ')" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Atualizar cache</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('recalcKmOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalRecalcKm(); });
+}
+
+function _fecharModalRecalcKm() {
+  var m = document.getElementById('recalcKmOverlay');
+  if (m) m.remove();
+}
+
+function _confirmarAtualizarKm(idA, idB, kmNovo) {
+  loading('Atualizando cache…');
+  google.script.run
+    .withSuccessHandler(function(res) {
+      doneLoading();
+      _fecharModalRecalcKm();
+      if (!res || !res.ok) { toast('Erro ao atualizar: ' + (res && res.erro || 'falha desconhecida'), 'error'); return; }
+      toast('Distância atualizada — recalculando horário…', 'success');
+      // Força reconsulta (a leitura de cache agora vai trazer o valor novo).
+      _osrmSeqKey = ''; _osrmLegs = undefined; _osrmGeometry = null; _osrmLegGeoms = null;
+      if (_view === 'horario') renderHorario(); else updateMap();
+    })
+    .withFailureHandler(function(e) {
+      doneLoading();
+      toast('Erro ao atualizar: ' + (e.message || e), 'error');
+    })
+    .atualizarDistanciaCache(idA, idB, kmNovo);
 }
 
 function setLegVia(i, type, evt) {
   if (evt) { evt.stopPropagation(); evt.preventDefault(); }
   var key = _seq[i].idPonto;
+
+  // Personalizado: aplica já (como os outros tipos) usando a velocidade atual ou a base,
+  // e abre o campo inline para ajuste fino. Recalcular na hora evita a sensação de "travado".
+  if (type === 'Pers') {
+    if (!(_legVelPers[key] > 0)) {
+      var base = parseFloat((document.getElementById('horVelMedia') || {}).value);
+      _legVelPers[key] = (!isNaN(base) && base > 0) ? Math.round(base) : 85;
+    }
+    _legVia[key] = 'Pers';
+    _persistLegVia();
+    _markDirty();
+    _partialUpdateSchedule();
+    _focusPersInput(i);   // após o re-render, foca o input recém-criado
+    return;
+  }
+
   if (_legVia[key] === type) delete _legVia[key]; else _legVia[key] = type;
-  try { if (_sel) localStorage.setItem('vc_legVia_' + _sel.id_esquema, JSON.stringify(_legVia)); } catch(e) {}
+  delete _legVelPers[key];   // troca para um tipo padrão descarta a velocidade personalizada
+  _persistLegVia();
   _markDirty();
   _partialUpdateSchedule();
-  // Fecha o overlay após o clique para evitar re-clique acidental (o rebuild via CSS hover
-  // manteria o overlay aberto, causando toggle indesejado se o cursor ficasse sobre ele)
+  _closeViaOverlay(i);
+}
+
+// Fecha o overlay após o clique para evitar re-clique acidental (o rebuild via CSS hover
+// manteria o overlay aberto, causando toggle indesejado se o cursor ficasse sobre ele)
+function _closeViaOverlay(i) {
   var row = document.getElementById('horRow' + i);
-  if (row) {
-    var td = row.querySelectorAll('td')[4];
-    if (td) {
-      td.classList.add('hor-via-done');
-      setTimeout(function() { td.classList.remove('hor-via-done'); }, 500);
-    }
+  if (!row) return;
+  var td = row.querySelectorAll('td')[4];
+  if (td) {
+    td.classList.add('hor-via-done');
+    setTimeout(function() { td.classList.remove('hor-via-done'); }, 500);
   }
 }
 
-function _deltaCellHtml(comVal, chegadaMin, idPonto) {
+// Fixa o overlay aberto enquanto o campo de km/h está em edição. A classe
+// 'hor-via-editing' força o overlay visível (sem depender do :hover), então o
+// campo não "trava" se o cursor sair da célula durante a digitação.
+function _pinPersEdit(i) {
+  var row = document.getElementById('horRow' + i);
+  if (!row) return;
+  var td = row.querySelectorAll('td')[4];
+  if (td) td.classList.add('hor-via-editing');
+}
+
+// Fixa e foca o campo (usado logo após aplicar 'Pers' pelo botão).
+function _focusPersInput(i) {
+  _pinPersEdit(i);
+  var row = document.getElementById('horRow' + i);
+  var td  = row ? row.querySelectorAll('td')[4] : null;
+  var input = td ? td.querySelector('.hor-via-pers-input') : null;
+  if (input) { input.focus(); input.select(); }
+}
+
+function _persInputKey(i, evt) {
+  if (evt.key === 'Enter')       { evt.preventDefault(); _commitPersVel(i, evt.target.value); }
+  else if (evt.key === 'Escape') { evt.preventDefault(); evt.target.blur(); }
+}
+
+// Confirma a velocidade digitada e recalcula o horário. O trecho já está em 'Pers'
+// desde o clique (aplicação imediata), então valor inválido apenas mantém o atual.
+function _commitPersVel(i, rawVal, evt) {
+  if (!_seq[i]) return;
+  // Se o foco saiu para outro botão de tipo, deixa aquele clique decidir o tipo.
+  var rt = evt && evt.relatedTarget;
+  if (rt && rt.classList && rt.classList.contains('hor-via-btn')
+      && rt.getAttribute('data-via') !== 'Pers') return;
+
+  var key = _seq[i].idPonto;
+  var row = document.getElementById('horRow' + i);
+  var td  = row ? row.querySelectorAll('td')[4] : null;
+  if (td) td.classList.remove('hor-via-editing');
+  var input = td ? td.querySelector('.hor-via-pers-input') : null;
+  if (input) input.onblur = null;   // evita re-entrância do blur durante o re-render
+
+  var vel = parseFloat(rawVal);
+  if (!isNaN(vel) && vel > 0) {
+    _legVelPers[key] = Math.min(200, Math.max(1, Math.round(vel)));
+    _legVia[key]     = 'Pers';
+  }
+  _persistLegVia();
+  _markDirty();
+  _partialUpdateSchedule();
+  _closeViaOverlay(i);
+}
+
+function _deltaCellHtml(comVal, chegadaMin, idPonto, idx) {
   if (!comVal) return '<span style="color:#dde1ee;font-size:14px;">—</span>';
   var diff    = _diffMin(comVal, chegadaMin, idPonto);
   var diffAbs = Math.abs(diff);
@@ -1285,7 +2262,15 @@ function _deltaCellHtml(comVal, chegadaMin, idPonto) {
   if      (diff >  2) { cls = 'delta-ok';   sign = '+'; }
   else if (diff < -2) { cls = 'delta-late';  sign = '−'; }
   else                { cls = 'delta-warn';  sign = '≈'; }
-  return '<div class="' + cls + '">' + sign + (diffAbs > 1 ? _dur(diffAbs) : '') + '</div>';
+  var txt = sign + (diffAbs > 1 ? _dur(diffAbs) : '');
+  // Destaque + botão "Investigar" quando a divergência acumulada passa de 2h.
+  if (diffAbs > 120 && idx !== undefined) {
+    return '<div style="display:flex;align-items:center;justify-content:center;gap:6px;flex-wrap:wrap;">'
+      + '<div class="' + cls + ' delta-critical">' + txt + '</div>'
+      + '<button type="button" class="delta-investigar-btn" onclick="event.stopPropagation();investigarDivergencia(' + idx + ')">' + ico('info', 10) + ' Investigar</button>'
+      + '</div>';
+  }
+  return '<div class="' + cls + '">' + txt + '</div>';
 }
 
 function _autoFormatTime(input) {
@@ -1404,7 +2389,7 @@ function _partialUpdateComercial() {
     var deltaEl = document.getElementById('horDelta' + i);
     if (!deltaEl) continue;
     var comVal = _comercialTimes[_seq[i].idPonto] || '';
-    deltaEl.innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+    deltaEl.innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
   }
 
   for (var i = 0; i < c.pontos.length; i++) {
@@ -1442,13 +2427,52 @@ function _partialUpdateComercial() {
 }
 
 function _updateStartPtSelect() {
-  var sel = document.getElementById('horStartPt');
-  if (!sel) return;
+  var drop = document.getElementById('horStartDrop');
+  if (!drop) return;
   if (_horStartIdx >= _seq.length) _horStartIdx = 0;
-  sel.innerHTML = _seq.map(function(p, i) {
-    return '<option value="' + i + '">' + (i + 1) + ' — ' + esc(p.nomePonto) + '</option>';
-  }).join('') || '<option value="0">—</option>';
-  sel.value = String(_horStartIdx);
+  if (_seq.length) {
+    drop.innerHTML = _seq.map(function(p, i) {
+      return '<div class="cs-opt' + (i === _horStartIdx ? ' sel' : '') + '" role="option" data-idx="' + i + '" onclick="_selectStartPt(' + i + ')">'
+        + '<span class="cs-opt-num">' + (i + 1) + '</span>' + esc(p.nomePonto) + '</div>';
+    }).join('');
+  } else {
+    drop.innerHTML = '<div class="cs-empty">Nenhum ponto</div>';
+  }
+  _setStartTxt();
+}
+
+// Texto exibido no botão do dropdown de ponto de partida.
+function _setStartTxt() {
+  var txt = document.getElementById('horStartTxt');
+  if (!txt) return;
+  txt.textContent = (_seq.length && _seq[_horStartIdx])
+    ? (_horStartIdx + 1) + ' — ' + _seq[_horStartIdx].nomePonto
+    : '—';
+}
+
+// Abre/fecha o dropdown de ponto de partida.
+function _toggleStartDrop(ev) {
+  ev.stopPropagation();
+  var wrap = document.getElementById('horStartWrap');
+  if (!wrap) return;
+  if (wrap.classList.toggle('open')) {
+    var sel = wrap.querySelector('.cs-opt.sel');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+// Seleciona um ponto de partida e recalcula o horário.
+function _selectStartPt(i) {
+  _horStartIdx = +i;
+  var wrap = document.getElementById('horStartWrap');
+  if (wrap) {
+    wrap.classList.remove('open');
+    wrap.querySelectorAll('.cs-opt').forEach(function(el) {
+      el.classList.toggle('sel', +el.getAttribute('data-idx') === _horStartIdx);
+    });
+  }
+  _setStartTxt();
+  renderHorario();
 }
 
 // Atualização parcial do schedule sem reconstruir a tabela
@@ -1487,7 +2511,7 @@ function _partialUpdateSchedule() {
     tds[4].innerHTML = _buildLegViaCell(i, c);
 
     var comVal = _comercialTimes[_seq[i].idPonto] || '';
-    tds[6].innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto) : '—';
+    tds[6].innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
   }
 
   for (var i = 0; i < c.pontos.length; i++) {
@@ -1540,9 +2564,7 @@ function abrirModalPdf() {
   var ex = document.getElementById('pdfModalOverlay');
   if (ex) ex.remove();
 
-  var _partStr = (_sel.horario || '00:00').replace(':', 'h');
-  var _sentStr = _sel.sentido ? ' (' + _sel.sentido + ')' : '';
-  var title    = _pdfTitle    || (_partStr + ' - ' + _sel.nome_linha + ' (' + _sel.id_esquema + ')' + _sentStr);
+  var title    = _pdfTitle    || _tituloPadraoEsquema(_sel);
   var subtitle = _pdfSubtitle || '';
 
   var colDefs = [
@@ -1553,7 +2575,8 @@ function abrirModalPdf() {
     { key:'comercial', label:'Comercial'          },
     { key:'dif',       label:'Dif.'               }
   ];
-  var comDisabled = (_pdfMode === 'comercial');
+  var isPersonMode = (_pdfMode === 'personalizado');
+  var comDisabled  = (_pdfMode === 'comercial');
   var disabledKeys = { comercial:true, dif:true };
   var checks = colDefs.map(function(c) {
     var isDisabled = comDisabled && disabledKeys[c.key];
@@ -1564,6 +2587,41 @@ function abrirModalPdf() {
       + ' style="width:14px;height:14px;accent-color:#f47920;cursor:pointer;">'
       + c.label + '</label>';
   }).join('');
+
+  // Seção "Personalizado": formato de horário + lista de pontos
+  var personPontosHtml = _seq.map(function(p, i) {
+    var sel = !_pdfPersonConfig.pontos || _pdfPersonConfig.pontos[p.idPonto] !== false;
+    return '<label style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px;cursor:pointer;">'
+      + '<input type="checkbox" class="pdf-person-ponto" data-idx="' + i + '" data-id="' + esc(p.idPonto) + '"'
+      + (sel ? ' checked' : '') + ' style="width:13px;height:13px;accent-color:#f47920;cursor:pointer;" onchange="_pdfPersonSyncAll()">'
+      + esc(p.nomePonto)
+      + '</label>';
+  }).join('');
+  var personSection =
+    '<div id="pdfPersonConfig" style="' + (isPersonMode ? '' : 'display:none;') + 'margin-top:14px;padding-top:14px;border-top:1px solid #f0f2f8;">'
+    + '<div style="margin-bottom:12px;">'
+      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Formato de horário</div>'
+      + '<div style="display:flex;gap:8px;">'
+        + '<label id="pdfPersonFmtHhmmLabel" onclick="pdfPersonFormatoSelect(\'hhmm\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato !== 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato !== 'min' ? '#fff8f0' : '#fff') + ';">'
+          + '<input type="radio" name="pdfPersonFormato" id="pdfPersonFmtHhmm" value="hhmm"' + (_pdfPersonConfig.formato !== 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> HH:MM'
+        + '</label>'
+        + '<label id="pdfPersonFmtMinLabel" onclick="pdfPersonFormatoSelect(\'min\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato === 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato === 'min' ? '#fff8f0' : '#fff') + ';">'
+          + '<input type="radio" name="pdfPersonFormato" id="pdfPersonFmtMin" value="min"' + (_pdfPersonConfig.formato === 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Minutos'
+        + '</label>'
+      + '</div>'
+    + '</div>'
+    + '<div>'
+      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
+        + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;">Pontos</div>'
+        + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#5a6070;cursor:pointer;">'
+          + '<input type="checkbox" id="pdfPersonSelectAll" style="accent-color:#f47920;cursor:pointer;" onchange="pdfPersonToggleAll(this)" checked> Todos'
+        + '</label>'
+      + '</div>'
+      + '<div style="max-height:190px;overflow-y:auto;border:1px solid #d4d8e8;border-radius:6px;padding:6px 10px;">'
+        + personPontosHtml
+      + '</div>'
+    + '</div>'
+    + '</div>';
 
   var modal =
     '<div id="pdfModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
@@ -1584,11 +2642,14 @@ function abrirModalPdf() {
         + '<div style="margin-bottom:16px;">'
           + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Modo</div>'
           + '<div style="display:flex;gap:8px;">'
-            + '<label id="pdfModeNormalLabel" onclick="pdfModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode !== 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode !== 'comercial' ? '#fff8f0' : '#fff') + ';">'
-              + '<input type="radio" name="pdfMode" id="pdfModeNormal" value="normal"' + (_pdfMode !== 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal'
+            + '<label id="pdfModeNormalLabel" onclick="pdfModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'normal' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'normal' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfMode" id="pdfModeNormal" value="normal"' + (_pdfMode === 'normal' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal'
             + '</label>'
             + '<label id="pdfModeComercialLabel" onclick="pdfModeSelect(\'comercial\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'comercial' ? '#fff8f0' : '#fff') + ';">'
               + '<input type="radio" name="pdfMode" id="pdfModeComercial" value="comercial"' + (_pdfMode === 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Hor. Comercial'
+            + '</label>'
+            + '<label id="pdfModePersonalizadoLabel" onclick="pdfModeSelect(\'personalizado\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'personalizado' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'personalizado' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfMode" id="pdfModePersonalizado" value="personalizado"' + (_pdfMode === 'personalizado' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Personalizado'
             + '</label>'
           + '</div>'
         + '</div>'
@@ -1596,6 +2657,7 @@ function abrirModalPdf() {
           + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
         + '</div>'
+        + personSection
       + '</div>'
       + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
         + '<button onclick="fecharModalPdf()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
@@ -1618,17 +2680,50 @@ function fecharModalPdf() {
 function pdfModeSelect(mode) {
   var nLbl = document.getElementById('pdfModeNormalLabel');
   var cLbl = document.getElementById('pdfModeComercialLabel');
+  var pLbl = document.getElementById('pdfModePersonalizadoLabel');
   var nRad = document.getElementById('pdfModeNormal');
   var cRad = document.getElementById('pdfModeComercial');
-  var isCom = (mode === 'comercial');
-  if (nLbl) { nLbl.style.borderColor = isCom ? '#d4d8e8' : '#f47920'; nLbl.style.background = isCom ? '#fff' : '#fff8f0'; }
-  if (cLbl) { cLbl.style.borderColor = isCom ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom ? '#fff8f0' : '#fff'; }
-  if (nRad) nRad.checked = !isCom;
-  if (cRad) cRad.checked =  isCom;
+  var pRad = document.getElementById('pdfModePersonalizado');
+  var isCom  = (mode === 'comercial');
+  var isPers = (mode === 'personalizado');
+  if (nLbl) { nLbl.style.borderColor = (!isCom && !isPers) ? '#f47920' : '#d4d8e8'; nLbl.style.background = (!isCom && !isPers) ? '#fff8f0' : '#fff'; }
+  if (cLbl) { cLbl.style.borderColor = isCom  ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom  ? '#fff8f0' : '#fff'; }
+  if (pLbl) { pLbl.style.borderColor = isPers ? '#f47920' : '#d4d8e8'; pLbl.style.background = isPers ? '#fff8f0' : '#fff'; }
+  if (nRad) nRad.checked = (!isCom && !isPers);
+  if (cRad) cRad.checked = isCom;
+  if (pRad) pRad.checked = isPers;
+  // Colunas comercial/dif: desabilitadas somente no modo comercial
   ['comercial','dif'].forEach(function(k) {
     var lbl = document.getElementById('pdfColLabel_' + k);
     if (lbl) { lbl.style.opacity = isCom ? '0.4' : ''; lbl.style.pointerEvents = isCom ? 'none' : ''; }
   });
+  // Seção personalizado: mostra/oculta
+  var sec = document.getElementById('pdfPersonConfig');
+  if (sec) sec.style.display = isPers ? '' : 'none';
+}
+
+function pdfPersonFormatoSelect(fmt) {
+  _pdfPersonConfig.formato = fmt;
+  var hLbl = document.getElementById('pdfPersonFmtHhmmLabel');
+  var mLbl = document.getElementById('pdfPersonFmtMinLabel');
+  var hRad = document.getElementById('pdfPersonFmtHhmm');
+  var mRad = document.getElementById('pdfPersonFmtMin');
+  var isMin = (fmt === 'min');
+  if (hLbl) { hLbl.style.borderColor = isMin ? '#d4d8e8' : '#f47920'; hLbl.style.background = isMin ? '#fff' : '#fff8f0'; }
+  if (mLbl) { mLbl.style.borderColor = isMin ? '#f47920' : '#d4d8e8'; mLbl.style.background = isMin ? '#fff8f0' : '#fff'; }
+  if (hRad) hRad.checked = !isMin;
+  if (mRad) mRad.checked =  isMin;
+}
+
+function pdfPersonToggleAll(cb) {
+  document.querySelectorAll('.pdf-person-ponto').forEach(function(el) { el.checked = cb.checked; });
+}
+
+function _pdfPersonSyncAll() {
+  var all  = document.querySelectorAll('.pdf-person-ponto');
+  var allC = Array.from(all).every(function(el) { return el.checked; });
+  var sa   = document.getElementById('pdfPersonSelectAll');
+  if (sa) sa.checked = allC;
 }
 
 function gerarPdfComOpcoes() {
@@ -1642,6 +2737,16 @@ function gerarPdfComOpcoes() {
   var sEl = document.getElementById('pdfSubtitleInput');
   _pdfTitle    = tEl ? tEl.value.trim() : '';
   _pdfSubtitle = sEl ? sEl.value.trim() : '';
+  // Captura config personalizado
+  if (_pdfMode === 'personalizado') {
+    var fEl = document.querySelector('input[name="pdfPersonFormato"]:checked');
+    _pdfPersonConfig.formato = fEl ? fEl.value : 'hhmm';
+    var pontos = {};
+    document.querySelectorAll('.pdf-person-ponto').forEach(function(cb) {
+      pontos[cb.dataset.id] = cb.checked;
+    });
+    _pdfPersonConfig.pontos = pontos;
+  }
   _savePdfPrefs();
   fecharModalPdf();
   imprimirHorario();
@@ -1662,10 +2767,8 @@ function imprimirHorario(returnHtml, forServer) {
   var fonteDist = _osrmStatus === 'ok' ? 'Traçado real (OSM)' : _osrmStatus === 'cache' ? 'Cache de distâncias' : 'Mín. 30 min (sem rota)';
   var startIdx  = Math.min(_horStartIdx, c.pontos.length - 1);
   var cols      = _pdfCols;
-  var _sentStr  = _sel.sentido ? ' (' + _sel.sentido + ')' : '';
-  // Título sem o código de sequência do esquema (ex.: "(158)"). O código de
-  // linha (ex.: "(RNSP00530460)") já vem embutido em nome_linha quando existe.
-  var title     = _pdfTitle    || ((_sel.horario || '00:00').replace(':', 'h') + ' - ' + _sel.nome_linha + _sentStr);
+  // Título padrão: "HORARIO - NOME (COD_LINHA) (Sentido)".
+  var title     = _pdfTitle    || _tituloPadraoEsquema(_sel);
   var subtitle  = _pdfSubtitle || '';
 
   function pe(s){ return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
@@ -1677,7 +2780,18 @@ function imprimirHorario(returnHtml, forServer) {
   function partidaR(s){ var p=(s||'00:00').split(':'); return ms(r5(+p[0]*60+(+p[1]||0))); }
   function comR(s){ if(!s) return s; var p=s.split(':'); return p.length<2 ? s : ms(r5(+p[0]*60+(+p[1]||0))); }
 
-  var pdfMode   = _pdfMode || 'normal';
+  var pdfMode = _pdfMode || 'normal';
+  // Formato adaptável: modo personalizado com "min" → tempo decorrido desde o ponto de partida
+  var _useMin = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'min');
+  // Base = minuto de saída do ponto de partida (o ponto "startIdx")
+  var _baseMin = (function() {
+    var sp = c.pontos[startIdx];
+    if (!sp) return 0;
+    return sp.saidaMin !== null ? sp.saidaMin : (sp.chegadaMin !== null ? sp.chegadaMin : 0);
+  })();
+  function timeFmt(m){ return _useMin ? String(r5(Math.max(0, Math.round((m || 0) - _baseMin)))) : msR(m); }
+  function durFmt(m){  return _useMin ? String(r5(Math.round(m || 0))) : hhmm(m); }
+
   var activeCols = [{ key:'cidade', label:'Cidade', align:'left' }];
   if (cols.chegada) activeCols.push({ key:'chegada', label:'Chegada', align:'center' });
   if (cols.parada)  activeCols.push({ key:'parada',  label:'Parada',  align:'center' });
@@ -1703,6 +2817,10 @@ function imprimirHorario(returnHtml, forServer) {
   c.pontos.forEach(function(p, i) {
     var isStart = (i === startIdx);
     var isLast  = (i === c.pontos.length - 1);
+    // Modo personalizado: filtra pontos desmarcados pelo usuário
+    if (pdfMode === 'personalizado' && _pdfPersonConfig.pontos) {
+      if (_pdfPersonConfig.pontos[_seq[i].idPonto] === false) return;
+    }
     if (p.preDep) {
       tbody += '<tr style="opacity:0.32;">'
         + '<td><strong>' + pe(p.nomePonto) + '</strong></td>'
@@ -1747,13 +2865,13 @@ function imprimirHorario(returnHtml, forServer) {
     } else {
       cells.chegada = isStart
         ? '<span style="color:#bbb;">—</span>'
-        : '<strong>' + (p.chegadaMin === null ? '—' : msR(p.chegadaMin)) + '</strong>';
-      cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? hhmm(p.tp) : '—';
+        : '<strong>' + (p.chegadaMin === null ? '—' : timeFmt(p.chegadaMin)) + '</strong>';
+      cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? durFmt(p.tp) : '—';
       cells.saida   = p.saidaMin !== null
-        ? '<strong>' + msR(p.saidaMin) + '</strong>'
-        : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + (forServer ? '&#9733;' : ico('star',11)) + ' ' + msR(p.chegadaMin) + '</strong>' : '—');
+        ? '<strong>' + timeFmt(p.saidaMin) + '</strong>'
+        : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + (forServer ? '&#9733;' : ico('star',11)) + ' ' + timeFmt(p.chegadaMin) + '</strong>' : '—');
 
-      if (isStart || !p.hasCoords) {
+      if (isStart || !p.hasCoords || _useMin) {
         cells.desl = '—';
       } else {
         var tvStr   = hhmm(p.tv)   + (p.distSource !== 'osrm' ? '<span style="color:#ccc;font-size:9px;"> ~</span>' : '');
@@ -1991,6 +3109,7 @@ function abrirImportarPontos() {
         + '<div class="sdi-main">' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + cntHtml + '</div>'
         + '<div class="sdi-meta">'
         + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+        + _codLinhaBadge(e)
         + esc(e.sentido || '')
         + '</div></div>';
     }).join('');
@@ -2036,8 +3155,8 @@ function importarDeEsquema(idEsq) {
                  lat: l.lat || null, lng: l.lng || null, isNew: true };
       });
       // Importa dados específicos da ROTA (não do horário)
-      _legVia = {};
-      pontos.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
+      _legVia = {}; _legVelPers = {};
+      pontos.forEach(function(p) { _setLegViaRaw(p.idPonto, p.tipoTrecho); });
       // tempo_local não é mais usado: parada vem da aba TEMPO_PERMANENCIA e,
       // fora dela, do padrão fixo de 30 min. _customStopTimes só guarda edições
       // feitas na sessão.
@@ -2047,6 +3166,7 @@ function importarDeEsquema(idEsq) {
       _osrmLegs        = undefined;
       _osrmSeqKey      = '';
       _osrmGeometry    = null;
+      _osrmLegGeoms    = null;
       _horStartIdx     = 0;
       _osrmStatus      = 'pending';
       renderSeq();
@@ -2110,6 +3230,10 @@ function initMap() {
     'https://{s}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}{r}.png',
     { subdomains: 'abcd', maxZoom: 19, opacity: 0.85, crossOrigin: true }
   ).addTo(_map);
+
+  document.querySelectorAll('.map-mode-btn').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-mode') === _mapMode);
+  });
 }
 
 function updateMap() {
@@ -2119,18 +3243,22 @@ function updateMap() {
   _markers = [];
   if (_poly) { _poly.remove(); _poly = null; }
   _clearAnttMapLayers();
+  _clearComercialMapLayers();
+  _clearLegHoverLayers();
 
   var pts = _seq.filter(function(p) { return p.lat && p.lng; });
   if (!pts.length) {
     document.getElementById('map').style.display = 'none';
     document.getElementById('mapPh').style.display = '';
     document.getElementById('mapLegend').classList.remove('show');
+    document.getElementById('mapModeToggle').style.display = 'none';
     return;
   }
 
   document.getElementById('map').style.display = 'block';
   document.getElementById('mapPh').style.display = 'none';
   document.getElementById('mapLegend').classList.add('show');
+  document.getElementById('mapModeToggle').style.display = 'flex';
 
   var seqCoordIdxs = [];
   _seq.forEach(function(p, i) { if (p.lat && p.lng) seqCoordIdxs.push(i); });
@@ -2142,36 +3270,49 @@ function updateMap() {
   setTimeout(function() {
     _map.invalidateSize();
 
-    // 1. Desenha trechos ANTT coloridos PRIMEIRO (ficam abaixo da rota laranja)
-    _drawAnttOnMap();
+    // 1. Desenha overlay do modo ativo PRIMEIRO (fica abaixo da rota laranja)
+    if (_mapMode === 'comercial') _drawComercialOnMap(); else _drawAnttOnMap();
 
     // 2. Rota principal por cima
     _poly = L.polyline(lls, { color: '#f47920', weight: 5, opacity: 0.9 }).addTo(_map);
 
+    // 3. Camada de hover/click por trecho (tempo+km+vel), por cima de tudo
+    _drawLegHoverOnMap();
+
     if (_osrmGeometry && _osrmSeqKey === mapSeqKey) {
       _poly.setLatLngs(_osrmGeometry);
     } else if (!_osrmGeometry || _osrmSeqKey !== mapSeqKey) {
-      _fetchOsrmDistances(function(legs, geom) {
+      _fetchOsrmDistances(function(legs, geom, legGeoms) {
         if (_seqCoordsKey() !== mapSeqKey) return;
         _osrmLegs     = _osrmLegs !== undefined ? _osrmLegs : legs;
         _osrmSeqKey   = mapSeqKey;
         _osrmGeometry = geom;
+        _osrmLegGeoms = legGeoms;
         if (_poly && geom) _poly.setLatLngs(geom);
-        // Redesenha ANTT com distâncias reais e garante que a rota fica por cima
-        _drawAnttOnMap();
+        // Redesenha o overlay ativo com distâncias reais e garante que a rota fica por cima
+        if (_mapMode === 'comercial') _drawComercialOnMap(); else _drawAnttOnMap();
         if (_poly) _poly.bringToFront();
+        // Recalcula tempo/km/vel dos trechos com os dados reais do OSRM
+        _drawLegHoverOnMap();
       });
     }
 
     // 3. Marcadores de sequência (DOM elements — sempre acima do SVG)
+    var visibleSeqNum = 0;
     _seq.forEach(function(p, i) {
       if (!p.lat || !p.lng) return;
       var first = (i === firstCoordIdx), last = (i === lastCoordIdx);
+      // Modo Comercial: some os pontos de apoio (sem horário comercial) do mapa,
+      // deixando visíveis só início, fim e pontos comerciais.
+      if (_mapMode === 'comercial' && !first && !last && _isApoioAntt(i)) return;
+      visibleSeqNum++;
       // Destaque de apoio ANTT apenas quando há alertas ativos na rota
       var isApoio = _anttMapActive && !first && !last && _isApoioAntt(i);
       var bg  = first ? '#22c97a' : last ? '#e05050' : '#f47920';
       var sz  = (first || last) ? 28 : 22;
-      var lbl = first ? 'I' : last ? 'F' : String(i + 1);
+      // Modo Comercial renumera sequencialmente os pontos visíveis (sem os
+      // "buracos" deixados pelos apoios ocultos); Modo ANTT mantém o índice real.
+      var lbl = first ? 'I' : last ? 'F' : String(_mapMode === 'comercial' ? visibleSeqNum : i + 1);
       var icon = L.divIcon({
         className: '',
         html: '<div style="width:' + sz + 'px;height:' + sz + 'px;border-radius:50%;' +
@@ -2185,7 +3326,7 @@ function updateMap() {
       var m = L.marker([+p.lat, +p.lng], { icon: icon });
       m.bindTooltip(
         '<strong>' + esc(p.nomePonto) + '</strong>' +
-        '<br><span style="font-size:10px;color:#888;">#' + (i+1) + (p.tipo ? ' · ' + esc(p.tipo) : '') +
+        '<br><span style="font-size:10px;color:#888;">#' + (_mapMode === 'comercial' ? visibleSeqNum : i + 1) + (p.tipo ? ' · ' + esc(p.tipo) : '') +
         (isApoio ? ' · <span style="color:#4ade80">apoio ANTT</span>' : '') + '</span>',
         { direction: 'top', offset: [0, -(sz/2) - 4] }
       );
@@ -2230,6 +3371,7 @@ function renderEsqs(q) {
     return !nq
       || norm(e.id_esquema).includes(nq)
       || norm(e.nome_linha).includes(nq)
+      || norm(e.cod_linha || '').includes(nq)
       || norm(e.horario || '').includes(nq)
       || norm(e.sentido || '').includes(nq)
       || norm(e.partida || '').includes(nq)
@@ -2262,6 +3404,7 @@ function renderEsqs(q) {
             + '<div class="sdi-main">' + hl(e.id_esquema + ' — ' + e.nome_linha, q) + '</div>'
             + '<div class="sdi-meta">'
             + (e.horario ? '<span style="background:#fff8e1;color:#f47920;border:1px solid #ffe082;border-radius:3px;padding:0 5px;margin-right:4px;font-size:10px;">' + esc(e.horario) + '</span>' : '')
+            + _codLinhaBadge(e)
             + esc(e.sentido || '')
             + '</div></div>';
         }).join('');
@@ -2282,14 +3425,20 @@ function selecionarEsq(esq) {
   esconderHome();
   _isNovo = false;
   _sel    = esq;
-  document.getElementById('esqSearch').value = esq.id_esquema + ' — ' + esq.nome_linha;
+  // Título/subtítulo do PDF são por esquema: zera para o próximo recalcular o padrão.
+  _pdfTitle = ''; _pdfSubtitle = '';
+  var _codSel = _codLinhaTxt(esq);
+  document.getElementById('esqSearch').value = esq.id_esquema + ' — ' + esq.nome_linha + (_codSel ? ' (' + _codSel + ')' : '');
   document.getElementById('esqDrop').classList.remove('open');
   renderBadge(esq);
   document.getElementById('fNome').value  = esq.nome_linha || '';
+  document.getElementById('fCod').value   = _codLinhaTxt(esq);
   document.getElementById('fHor').value   = esq.horario   || '';
   document.getElementById('fSent').value  = esq.sentido   || 'Ida';
   document.getElementById('esqForm').style.display = '';
   document.getElementById('btnSalvEsq').textContent = 'Atualizar Esquema';
+  document.getElementById('btnAjustado').style.display = '';
+  _setAjustadoBtn(_isAjustado(esq));
   _updateHdrEsq(esq);
   carregarPontos(esq.id_esquema);
 }
@@ -2300,6 +3449,7 @@ function renderBadge(esq) {
   el.innerHTML = '<div class="esq-badge">'
     + '<div class="eid">' + esc(esq.id_esquema) + '</div>'
     + '<div class="einfo"><strong>' + esc(esq.nome_linha) + '</strong>'
+    + (_codLinhaTxt(esq) ? ' ' + _codLinhaBadge(esq) : '')
     + (esq.horario ? '<br>' + esc(esq.horario) : '')
     + (esq.sentido ? ' &middot; ' + esc(esq.sentido) : '')
     + '</div></div>';
@@ -2309,28 +3459,69 @@ function _updateHdrEsq(esq) {
   var btn   = document.getElementById('hdrEsqBtn');
   var label = document.getElementById('hdrEsqLabel');
   if (esq) {
-    label.innerHTML = ico('clipboard', 14) + ' ' + esc(esq.nome_linha || ('Esquema #' + esq.id_esquema));
+    label.innerHTML = esc(esq.nome_linha || ('Esquema #' + esq.id_esquema))
+      + (_codLinhaTxt(esq) ? ' <span class="hdr-cod">(' + esc(_codLinhaTxt(esq)) + ')</span>' : '');
     btn.classList.add('has-schema');
   } else {
-    label.innerHTML = ico('clipboard', 14) + ' Selecionar Esquema';
+    label.innerHTML = 'Selecionar Esquema';
     btn.classList.remove('has-schema');
   }
+  _updateEsqNav(esq);
+}
+
+// Esquemas ordenados por id_esquema (numérico quando possível). Base da navegação.
+function _esqsOrdenados() {
+  return _esqs.slice().sort(function(a, b) {
+    var na = parseInt(a.id_esquema, 10), nb = parseInt(b.id_esquema, 10);
+    if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+    return String(a.id_esquema).localeCompare(String(b.id_esquema), undefined, { numeric: true });
+  });
+}
+
+// Atualiza o indicador "X / N" e habilita/desabilita os botões de navegação.
+function _updateEsqNav(esq) {
+  var nav = document.getElementById('hdrEsqNav');
+  if (!nav) return;
+  if (!esq) { nav.style.display = 'none'; return; }
+  var ord = _esqsOrdenados();
+  var idx = ord.findIndex(function(e) { return String(e.id_esquema) === String(esq.id_esquema); });
+  if (idx === -1) { nav.style.display = 'none'; return; }
+  nav.style.display = '';
+  document.getElementById('hdrEsqPos').textContent = (idx + 1) + ' / ' + ord.length;
+  document.getElementById('hdrEsqPrev').disabled = idx <= 0;
+  document.getElementById('hdrEsqNext').disabled = idx >= ord.length - 1;
+}
+
+// Navega para o esquema anterior (-1) ou próximo (+1) na ordem por ID.
+function irParaEsquemaRel(delta) {
+  if (!_sel) return;
+  var ord = _esqsOrdenados();
+  var idx = ord.findIndex(function(e) { return String(e.id_esquema) === String(_sel.id_esquema); });
+  if (idx === -1) return;
+  var alvo = ord[idx + delta];
+  if (alvo) selecionarEsq(alvo);
 }
 
 function novoEsquema() {
   esconderHome();
   _isNovo = true; _sel = null; _seq = []; _seqDirt = false;
-  _osrmLegs = undefined; _osrmSeqKey = ''; _osrmGeometry = null;
-  _comercialTimes = {}; _customStopTimes = {}; _legVia = {}; _horStartIdx = 0; _osrmStatus = 'pending';
+  _osrmLegs = undefined; _osrmSeqKey = ''; _osrmGeometry = null; _osrmLegGeoms = null;
+  _comercialTimes = {}; _customStopTimes = {}; _legVia = {}; _legVelPers = {}; _horStartIdx = 0; _osrmStatus = 'pending';
+  _pdfTitle = ''; _pdfSubtitle = '';
   _clearAnttMapLayers();
+  _clearComercialMapLayers();
+  _clearLegHoverLayers();
+  document.getElementById('hdrEsqNav').style.display = 'none';
   document.getElementById('importRow').style.display = 'none';
   document.getElementById('esqSearch').value = '';
   document.getElementById('esqBadge').style.display = 'none';
   document.getElementById('fNome').value = '';
+  document.getElementById('fCod').value  = '';
   document.getElementById('fHor').value  = '';
   document.getElementById('fSent').value = 'Ida';
   document.getElementById('esqForm').style.display = '';
   document.getElementById('btnSalvEsq').textContent = 'Criar Esquema';
+  document.getElementById('btnAjustado').style.display = 'none';
   document.getElementById('ptCard').style.display = 'none';
   document.getElementById('map').style.display = 'none';
   document.getElementById('mapPh').style.display = '';
@@ -2347,15 +3538,163 @@ function novoEsquema() {
   document.getElementById('fNome').focus();
 }
 
+// ── Sugestões de cód. da linha ───────────────────────────────
+// Monta { cod, nomes[] } a partir dos esquemas já cadastrados (fonte do código).
+function _codCandidatos() {
+  var m = {};
+  _esqs.forEach(function(e) {
+    var c = (e.cod_linha || '').trim();
+    if (!c) return;
+    if (!m[c]) m[c] = { cod: c, nomes: {} };
+    if (e.nome_linha) m[c].nomes[String(e.nome_linha).trim()] = true;
+  });
+  return Object.keys(m).map(function(c) { return { cod: m[c].cod, nomes: Object.keys(m[c].nomes) }; });
+}
+
+// Tokens significativos (≥3 letras) de um nome de linha, para casar por similaridade.
+function _codTokens(s) {
+  return norm(s).split(/[^a-z0-9]+/).filter(function(t) { return t.length >= 3; });
+}
+
+// Renderiza as sugestões: campo vazio → puxa códigos de linhas com nome igual/parecido;
+// com texto digitado → filtra por código ou nome.
+function _codSugRender() {
+  var drop = document.getElementById('fCodDrop');
+  if (!drop) return;
+  var fc   = document.getElementById('fCod');
+  var q    = (fc ? fc.value : '').trim();
+  var nq   = norm(q);
+  var nome = (document.getElementById('fNome').value || '').trim();
+  var nomeN = norm(nome);
+  var nomeTokens = _codTokens(nome);
+
+  var cand = _codCandidatos().filter(function(c) { return c.cod !== q; });
+  cand.forEach(function(c) {
+    var best = 0;
+    c.nomes.forEach(function(nm) {
+      var nmN = norm(nm);
+      if (nomeN && nmN === nomeN) { best = Math.max(best, 100); return; }
+      var t = _codTokens(nm), shared = 0;
+      nomeTokens.forEach(function(tk) { if (t.indexOf(tk) !== -1) shared++; });
+      if (shared) best = Math.max(best, shared);
+    });
+    c._score  = best;
+    c._matchQ = nq && (norm(c.cod).indexOf(nq) !== -1 || c.nomes.some(function(nm) { return norm(nm).indexOf(nq) !== -1; }));
+  });
+
+  var list = nq ? cand.filter(function(c) { return c._matchQ; })
+                : cand.filter(function(c) { return c._score > 0; });
+  list.sort(function(a, b) { return (b._score - a._score) || a.cod.localeCompare(b.cod); });
+  list = list.slice(0, 8);
+
+  if (!list.length) {
+    if (!nq && !nomeTokens.length) { drop.classList.remove('open'); return; }
+    drop.innerHTML = '<div class="codsug-empty">Nenhuma sugestão' + (nome ? ' para esta linha' : '') + '</div>';
+    drop.classList.add('open');
+    return;
+  }
+
+  drop.innerHTML = '<div class="codsug-h">' + (nq ? 'Códigos que combinam' : 'Códigos desta linha') + '</div>'
+    + list.map(function(c) {
+        var nomeTxt = c.nomes.length ? c.nomes[0] + (c.nomes.length > 1 ? ' +' + (c.nomes.length - 1) : '') : '';
+        var right = c._score >= 100 ? '<span class="codsug-tag">mesma linha</span>'
+                                    : '<span class="codsug-nome">' + esc(nomeTxt) + '</span>';
+        return '<div class="codsug-i" data-cod="' + esc(c.cod) + '"><span class="codsug-cod">' + hl(c.cod, q) + '</span>' + right + '</div>';
+      }).join('');
+  drop.classList.add('open');
+  drop.querySelectorAll('.codsug-i').forEach(function(el) {
+    el.addEventListener('mousedown', function(ev) {
+      ev.preventDefault();
+      document.getElementById('fCod').value = el.getAttribute('data-cod');
+      drop.classList.remove('open');
+    });
+  });
+}
+
+// ── Marcador "ajustado" (coluna F da aba ESQUEMAS) ───────────
+function _isAjustado(e) { return !!(e && e.ajustado); }
+
+// Atualiza o rótulo/estado do botão de marcar ajustado no editor.
+function _setAjustadoBtn(on) {
+  var b = document.getElementById('btnAjustado');
+  if (!b) return;
+  b.classList.toggle('on', !!on);
+  b.innerHTML = on
+    ? ico('check', 13) + ' Ajustado — clique para desmarcar'
+    : ico('check', 13) + ' Marcar como ajustado';
+}
+
+// Liga/desliga o marcador do esquema atual e propaga para a home.
+function toggleAjustado() {
+  if (!_sel) return;
+  var b = document.getElementById('btnAjustado');
+  var novo = !_isAjustado(_sel);
+  if (b) b.disabled = true;
+  google.script.run
+    .withSuccessHandler(function(estado) {
+      if (b) b.disabled = false;
+      _sel.ajustado = estado;
+      _setAjustadoBtn(estado);
+      if (typeof renderHome === 'function') renderHome();
+      toast(estado ? 'Esquema marcado como ajustado.' : 'Marcação removida.', 'success');
+    })
+    .withFailureHandler(function(e) {
+      if (b) b.disabled = false;
+      toast('Erro: ' + (e.message || e), 'error');
+    })
+    .marcarEsquemaAjustado(_sel.id_esquema, novo);
+}
+
+// Selo "Ajustado" para os cards/linhas da home.
+function _ajustadoBadge(e) {
+  return _isAjustado(e) ? '<span class="home-ajust-badge">' + ico('check', 10) + ' Ajustado</span>' : '';
+}
+
+// Botão toggle "Marcar analisado" usado dentro do modal de análise em grupo.
+function _ajustToggleBtn(id) {
+  var e  = _esqs.find(function(x) { return String(x.id_esquema) === String(id); });
+  var on = _isAjustado(e);
+  return '<button type="button" id="ajustBtn_' + esc(String(id)) + '" class="an-mark-btn' + (on ? ' on' : '') + '" '
+    + 'onclick="toggleAjustadoModal(\'' + esc(String(id)) + '\')">'
+    + ico('check', 12) + (on ? 'Analisado' : 'Marcar analisado') + '</button>';
+}
+
+function _setMarkBtn(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle('on', !!on);
+  btn.innerHTML = ico('check', 12) + (on ? 'Analisado' : 'Marcar analisado');
+}
+
+// Marca/desmarca o esquema como analisado a partir do modal de análise.
+function toggleAjustadoModal(id) {
+  var e = _esqs.find(function(x) { return String(x.id_esquema) === String(id); });
+  if (!e) return;
+  var novo = !_isAjustado(e);
+  var btn  = document.getElementById('ajustBtn_' + id);
+  if (btn) btn.disabled = true;
+  google.script.run
+    .withSuccessHandler(function(estado) {
+      e.ajustado = estado;
+      if (btn) { btn.disabled = false; _setMarkBtn(btn, estado); }
+      // Sincroniza o botão do editor, se este esquema estiver aberto lá.
+      if (_sel && String(_sel.id_esquema) === String(id)) { _sel.ajustado = estado; _setAjustadoBtn(estado); }
+      if (typeof renderHome === 'function') renderHome();
+      toast(estado ? 'Esquema #' + id + ' marcado como analisado.' : 'Marcação removida.', 'success');
+    })
+    .withFailureHandler(function(err) { if (btn) btn.disabled = false; toast('Erro: ' + (err.message || err), 'error'); })
+    .marcarEsquemaAjustado(id, novo);
+}
+
 function salvarEsquema() {
   var nome  = document.getElementById('fNome').value.trim();
+  var cod   = document.getElementById('fCod').value.trim();
   var hor   = document.getElementById('fHor').value.trim();
   var sent  = document.getElementById('fSent').value;
   if (!nome) { toast('Nome da linha é obrigatório.', 'error'); return; }
 
   var btn = document.getElementById('btnSalvEsq');
   btn.disabled = true;
-  var dados = { nomeLinha: nome, horario: hor, sentido: sent };
+  var dados = { nomeLinha: nome, horario: hor, sentido: sent, codLinha: cod };
 
   if (_isNovo) {
     loading('Criando esquema…');
@@ -2363,7 +3702,7 @@ function salvarEsquema() {
       .withSuccessHandler(function(r) {
         doneLoading();
         btn.disabled = false;
-        var novoEsq = { id_esquema: String(r.id), nome_linha: nome, horario: hor, sentido: sent };
+        var novoEsq = { id_esquema: String(r.id), nome_linha: nome, horario: hor, sentido: sent, cod_linha: cod };
         _esqs.push(novoEsq);
         _isNovo = false;
         document.getElementById('btnNovo').style.display = ''; // restaura sempre
@@ -2388,9 +3727,11 @@ function salvarEsquema() {
       .withSuccessHandler(function() {
         doneLoading();
         btn.disabled = false;
-        _sel.nome_linha = nome; _sel.horario = hor; _sel.sentido = sent;
+        _sel.nome_linha = nome; _sel.horario = hor; _sel.sentido = sent; _sel.cod_linha = cod;
         renderBadge(_sel);
         _updateHdrEsq(_sel);
+        var _c = _codLinhaTxt(_sel);
+        document.getElementById('esqSearch').value = _sel.id_esquema + ' — ' + _sel.nome_linha + (_c ? ' (' + _c + ')' : '');
         toast('Esquema atualizado!', 'success');
       })
       .withFailureHandler(function(e) {
@@ -2418,6 +3759,7 @@ function carregarPontos(idEsq) {
       _osrmLegs       = undefined;
       _osrmSeqKey     = '';
       _osrmGeometry   = null;
+      _osrmLegGeoms   = null;
       _comercialTimes = {};
       pontos.forEach(function(p) {
         var t = _normalizeHHMM(p.horarioComercial);
@@ -2426,15 +3768,14 @@ function carregarPontos(idEsq) {
       // tempo_local não é mais usado como fallback: parada vem da aba e, fora
       // dela, do padrão fixo de 30 min. _customStopTimes só guarda edições da sessão.
       _customStopTimes = {};
-      _legVia = {};
-      pontos.forEach(function(p) {
-        if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho;
-      });
+      _legVia = {}; _legVelPers = {};
+      pontos.forEach(function(p) { _setLegViaRaw(p.idPonto, p.tipoTrecho); });
       try {
         var lsVia = JSON.parse(localStorage.getItem('vc_legVia_' + _sel.id_esquema) || '{}');
-        Object.keys(lsVia).forEach(function(k) { if (!_legVia[k]) _legVia[k] = lsVia[k]; });
+        Object.keys(lsVia).forEach(function(k) { if (!_legVia[k]) _setLegViaRaw(k, lsVia[k]); });
       } catch(e) {}
       _horStartIdx    = 0;
+      _seqHintPending = true;
       renderSeq();
       updateInsAfter();
       updateMap();
@@ -2488,6 +3829,7 @@ function carregarPontos(idEsq) {
 // ============================================================
 //  Sequence
 // ============================================================
+var _seqHintPending = false; // dispara a dica de arraste uma vez ao abrir o esquema
 function renderSeq() {
   var list = document.getElementById('seqList');
   var savedScroll = list ? list.scrollTop : 0;
@@ -2525,9 +3867,16 @@ function renderSeq() {
   list.innerHTML = parts.join('');
   list.scrollTop = savedScroll;
 
+  // Dica de arraste: roda só uma vez ao abrir o esquema (não a cada reorder).
+  if (_seqHintPending && _seq.length) {
+    _seqHintPending = false;
+    list.classList.add('seq-hint');
+    setTimeout(function() { var l = document.getElementById('seqList'); if (l) l.classList.remove('seq-hint'); }, 2600);
+  }
+
   list.querySelectorAll('.seq-insert').forEach(function(el) {
     el.addEventListener('click', function() {
-      document.getElementById('insAfter').value = el.getAttribute('data-after');
+      _setInsAfter(el.getAttribute('data-after'));
       document.getElementById('ptSearch').focus();
     });
   });
@@ -2570,15 +3919,53 @@ function renderSeq() {
   });
 }
 
+// Valor atual do "Inserir após" ('-1' = início; senão índice do ponto). Fonte
+// de verdade do dropdown customizado (substitui o antigo <select>.value).
+var _insAfterVal = '-1';
+function _getInsAfter() { return parseInt(_insAfterVal, 10); }
+
+function _setInsAfter(v) {
+  _insAfterVal = String(v);
+  _setInsAfterTxt();
+  var wrap = document.getElementById('insAfterWrap');
+  if (wrap) wrap.querySelectorAll('.cs-opt').forEach(function(el) {
+    el.classList.toggle('sel', el.getAttribute('data-idx') === _insAfterVal);
+  });
+}
+
+function _setInsAfterTxt() {
+  var txt = document.getElementById('insAfterTxt');
+  if (!txt) return;
+  var i = parseInt(_insAfterVal, 10);
+  txt.textContent = (i >= 0 && _seq[i]) ? ('Após ' + (i + 1) + '. ' + _seq[i].nomePonto) : '↑ No início da sequência';
+}
+
+function _toggleInsAfterDrop(ev) {
+  ev.stopPropagation();
+  var wrap = document.getElementById('insAfterWrap');
+  if (!wrap) return;
+  if (wrap.classList.toggle('open')) {
+    var sel = wrap.querySelector('.cs-opt.sel');
+    if (sel) sel.scrollIntoView({ block: 'nearest' });
+  }
+}
+
+function _selectInsAfter(v) {
+  _setInsAfter(v);
+  var wrap = document.getElementById('insAfterWrap');
+  if (wrap) wrap.classList.remove('open');
+}
+
 function updateInsAfter() {
-  var sel  = document.getElementById('insAfter');
-  var prev = sel.value;
-  sel.innerHTML = '<option value="-1">↑ No início da sequência</option>'
+  var drop = document.getElementById('insAfterDrop');
+  if (!drop) return;
+  var prev = _insAfterVal;
+  drop.innerHTML = '<div class="cs-opt" role="option" data-idx="-1" onclick="_selectInsAfter(\'-1\')"><span class="cs-opt-num">↑</span>No início da sequência</div>'
     + _seq.map(function(p, i) {
-        return '<option value="' + i + '">Após ' + (i + 1) + '. ' + esc(p.nomePonto) + '</option>';
+        return '<div class="cs-opt" role="option" data-idx="' + i + '" onclick="_selectInsAfter(\'' + i + '\')"><span class="cs-opt-num">' + (i + 1) + '</span>' + esc(p.nomePonto) + '</div>';
       }).join('');
-  if (prev !== '-1' && parseInt(prev) < _seq.length) sel.value = prev;
-  else sel.value = _seq.length > 0 ? String(_seq.length - 1) : '-1';
+  var novo = (prev !== '-1' && parseInt(prev, 10) < _seq.length) ? prev : (_seq.length > 0 ? String(_seq.length - 1) : '-1');
+  _setInsAfter(novo);
 }
 
 function _markDirty() {
@@ -2594,8 +3981,11 @@ function dirtySeq() {
   _osrmLegs        = undefined;
   _osrmSeqKey      = '';
   _osrmGeometry    = null;
+  _osrmLegGeoms    = null;
   _horStartIdx     = 0;
   _clearAnttMapLayers();
+  _clearComercialMapLayers();
+  _clearLegHoverLayers();
   document.getElementById('ptUnsaved').style.display = '';
   document.getElementById('btnSalvSeq').disabled = false;
   var s = document.getElementById('btnSalvar');
@@ -2627,7 +4017,13 @@ var HOME_GROUPS = {
   partida: { keyOf: function(e){ return (e.partida && String(e.partida).trim()) ? String(e.partida).trim() : 'Sem partida'; } },
   fim:     { keyOf: function(e){ return (e.fim     && String(e.fim).trim())     ? String(e.fim).trim()     : 'Sem encerramento'; } },
   linha:   { keyOf: function(e){ return (e.nome_linha && String(e.nome_linha).trim()) ? String(e.nome_linha).trim() : '—'; } },
+  codigo:  { keyOf: function(e){ return (e.cod_linha  && String(e.cod_linha).trim())  ? String(e.cod_linha).trim()  : 'Sem código'; } },
   sentido: { order: ['Ida', 'Volta'],   keyOf: function(e){ return (e.sentido && String(e.sentido).trim()) ? String(e.sentido).trim() : '—'; } },
+  // Filtro-eixo: mostra só os esquemas sem pontos (os com pontos não geram chave).
+  pontos:  { keysOf: function(e){ return e.temPontos ? [] : ['Sem pontos']; } },
+  // Filtro-eixo: esquemas com pontos cadastrados mas nenhum com horário comercial
+  // preenchido (no modo Hor. Comercial, o PDF desses sai com a tabela vazia).
+  horcom:  { keysOf: function(e){ return (e.temPontos && !e.temHorarioComercial) ? ['Sem horário comercial'] : []; } },
   // Eixo de busca por local: o usuário escolhe um local cadastrado e vê as
   // linhas que passam por ele. Casa por CÓDIGO do ponto (preciso), não por texto.
   // Sem local selecionado, não devolve seções (renderHome mostra o prompt).
@@ -2697,6 +4093,14 @@ function setHomeGroup(g) {
   // Escolher qualquer outro eixo sai do modo 'local'.
   if (_homeGroupKeys.indexOf('local') !== -1) { _homeGroupKeys = []; _homeLocalSel = null; }
 
+  // "Sem pontos" mostra esquemas vazios: desliga o "ocultar sem pontos" se estiver ligado.
+  if (g === 'pontos' && _homeHideEmpty) {
+    _homeHideEmpty = false;
+    var hb = document.getElementById('homeBtnHideEmpty');
+    if (hb) hb.classList.remove('active');
+    try { localStorage.setItem('vc_homeHideEmpty', ''); } catch (e) {}
+  }
+
   var idx = _homeGroupKeys.indexOf(g);
   if (idx !== -1) {
     // já está ativo: remove (mas mantém ao menos 1)
@@ -2712,6 +4116,26 @@ function setHomeGroup(g) {
 function _updateGroupBar() {
   var bar = document.getElementById('homeGroupBar');
   if (!bar) return;
+
+  // "Sem pontos" só faz sentido quando existe ao menos um esquema sem pontos.
+  var temSem    = (_esqs || []).some(function(e) { return !e.temPontos; });
+  var pontosBtn = bar.querySelector('.home-gbtn[data-g="pontos"]');
+  if (pontosBtn) pontosBtn.style.display = temSem ? '' : 'none';
+  if (!temSem && _homeGroupKeys.indexOf('pontos') !== -1) {
+    _homeGroupKeys = _homeGroupKeys.filter(function(k) { return k !== 'pontos'; });
+    if (!_homeGroupKeys.length) _homeGroupKeys = ['regiao'];
+  }
+
+  // "Sem horário comercial" só aparece quando há esquema com pontos mas nenhum
+  // horário comercial preenchido.
+  var temSemHorCom = (_esqs || []).some(function(e) { return e.temPontos && !e.temHorarioComercial; });
+  var horComBtn = bar.querySelector('.home-gbtn[data-g="horcom"]');
+  if (horComBtn) horComBtn.style.display = temSemHorCom ? '' : 'none';
+  if (!temSemHorCom && _homeGroupKeys.indexOf('horcom') !== -1) {
+    _homeGroupKeys = _homeGroupKeys.filter(function(k) { return k !== 'horcom'; });
+    if (!_homeGroupKeys.length) _homeGroupKeys = ['regiao'];
+  }
+
   bar.querySelectorAll('.home-gbtn').forEach(function(b) {
     var g   = b.getAttribute('data-g');
     var idx = _homeGroupKeys.indexOf(g);
@@ -2830,7 +4254,7 @@ function _sortItems(items) {
 }
 
 var _LIST_HEADER = '<div class="home-list-header">'
-  + '<span>Linha</span><span style="text-align:center;">Hor.</span>'
+  + '<span>Linha</span><span>Código</span><span style="text-align:center;">Hor.</span>'
   + '<span>Partida</span><span>Encerramento</span><span>Sentido</span><span></span>'
   + '</div>';
 
@@ -2868,9 +4292,111 @@ function _renderGroups(esqs, keys, depth, isList) {
   }).join('');
 }
 
+// ── Sidebar de navegação (scrollspy) ─────────────────────────
+// Lista vertical das LINHAS (seções) renderizadas; conforme o usuário rola, o
+// item correspondente à linha visível no topo da tela fica em destaque. Clicar
+// num item rola até a linha. Só aparece no agrupamento por "Linha".
+var _sideNavRows       = [];     // [{ id, el }] na ordem em que aparecem
+var _sideNavSpyBound   = false;  // listener de scroll preso uma única vez
+
+function _renderSideNav(body) {
+  var aside  = document.getElementById('homeSideNav');
+  var list   = document.getElementById('homeSideNavList');
+  var screen = document.getElementById('homeScreen');
+  if (!aside || !list || !screen) return;
+
+  var secs = body.querySelectorAll(':scope > .home-region');
+  // Só no agrupamento por Linha e com ao menos 2 linhas.
+  if (_homeGroupKeys[0] !== 'linha' || secs.length < 2) {
+    aside.style.display = 'none';
+    screen.classList.remove('has-sidenav');
+    list.innerHTML = '';
+    _sideNavRows = [];
+    return;
+  }
+
+  var html = [];
+  _sideNavRows = [];
+  secs.forEach(function(sec, i) {
+    var id = 'homesec-' + i;
+    sec.id = id;
+    var nameEl = sec.querySelector('.home-region-name');
+    var cEl    = sec.querySelector('.home-region-c');
+    var name   = nameEl ? nameEl.textContent : ('Linha ' + (i + 1));
+    _sideNavRows.push({ id: id, el: sec });
+    var cor = _lineColor(name);
+    html.push('<button type="button" class="home-sidenav-item" data-id="' + id + '" style="border-left-color:' + cor + ';">'
+      + '<span class="home-sidenav-name">' + esc(name) + '</span>'
+      + (cEl ? '<span class="home-sidenav-c">' + esc(cEl.textContent) + '</span>' : '')
+      + '</button>');
+  });
+
+  list.innerHTML = html.join('');
+  aside.style.display = '';
+  screen.classList.add('has-sidenav');
+
+  list.querySelectorAll('.home-sidenav-item').forEach(function(it) {
+    it.addEventListener('click', function() {
+      var id  = it.getAttribute('data-id');
+      var hit = _sideNavRows.find(function(r) { return r.id === id; });
+      if (hit) {
+        hit.el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        _flashRegion(hit.el);
+      }
+    });
+  });
+
+  if (!_sideNavSpyBound) {
+    var ticking = false;
+    screen.addEventListener('scroll', function() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(function() { ticking = false; _updateSideNavActive(screen); });
+    });
+    _sideNavSpyBound = true;
+  }
+  _updateSideNavActive(screen);
+}
+
+function _updateSideNavActive(screen) {
+  if (!_sideNavRows.length) return;
+  // Linha de referência: logo abaixo das barras fixas (header + guia).
+  var refTop  = screen.getBoundingClientRect().top + 120;
+  var active  = _sideNavRows[0];
+  for (var i = 0; i < _sideNavRows.length; i++) {
+    if (_sideNavRows[i].el.getBoundingClientRect().top <= refTop) active = _sideNavRows[i];
+    else break;
+  }
+
+  var list = document.getElementById('homeSideNavList');
+  if (!list) return;
+  list.querySelectorAll('.home-sidenav-item').forEach(function(it) {
+    var on = it.getAttribute('data-id') === active.id;
+    it.classList.toggle('active', on);
+    if (on) {
+      // Mantém o item ativo visível dentro da própria sidebar (sem mexer na página).
+      var top = it.offsetTop, bot = top + it.offsetHeight;
+      if (top < list.scrollTop) list.scrollTop = top - 8;
+      else if (bot > list.scrollTop + list.clientHeight) list.scrollTop = bot - list.clientHeight + 8;
+    }
+  });
+}
+
+// Pisca um realce ao redor do bloco da linha quando o usuário chega nele
+// via sidebar, para sinalizar onde os esquemas daquela linha estão.
+function _flashRegion(el) {
+  if (!el) return;
+  el.classList.remove('flash');
+  void el.offsetWidth;          // reflow: reinicia a animação se clicar de novo
+  el.classList.add('flash');
+  setTimeout(function() { el.classList.remove('flash'); }, 1900);
+}
+
 function renderHome() {
   var body = document.getElementById('homeBody');
   if (!body) return;
+
+  _updateGroupBar();   // mantém o botão "Sem pontos" coerente com os dados atuais
 
   var esqs = _homeHideEmpty ? _esqs.filter(function(e) { return e.temPontos; }) : _esqs;
 
@@ -2895,6 +4421,7 @@ function renderHome() {
   }
 
   body.innerHTML = _renderGroups(esqs, _homeGroupKeys, 0, isList);
+  _renderSideNav(body);
 
   body.classList.toggle('selecting', _homeSelectMode);
   body.querySelectorAll('.home-card, .home-row').forEach(function(el) {
@@ -2922,13 +4449,21 @@ function renderHome() {
 }
 
 // Abre o editor de um esquema numa nova aba (deep-link ?page=manager&esq=ID).
+// Usa um <a target="_blank"> sintético em vez de window.open: dentro do iframe
+// sandbox do Apps Script, window.open no clique esquerdo costuma ser bloqueado
+// como popup, enquanto o clique programático num link é tratado como navegação.
 function _abrirEsqNovaAba(id) {
   if (!id) return;
   if (typeof WEB_APP_URL === 'undefined' || !WEB_APP_URL) {
     toast('URL do app indisponível para abrir em nova aba.', 'error');
     return;
   }
-  window.open(WEB_APP_URL + '?page=manager&esq=' + encodeURIComponent(id), '_blank');
+  var url = WEB_APP_URL + '?page=manager&esq=' + encodeURIComponent(id);
+  var a = document.createElement('a');
+  a.href = url; a.target = '_blank'; a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
 }
 
 function _homeCardHtml(e) {
@@ -2939,8 +4474,10 @@ function _homeCardHtml(e) {
     +   '<span class="home-card-check">' + ico('check', 12) + '</span>'
     +   '<span class="home-card-id">#' + esc(e.id_esquema) + '</span>'
     +   (vazio ? '<span class="home-card-nopts">sem pontos</span>' : _sentidoTag(e.sentido))
+    +   _ajustadoBadge(e)
     + '</div>'
     + '<div class="home-card-name">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</div>'
+    + (_codLinhaTxt(e) ? '<div class="home-card-cod">' + esc(_codLinhaTxt(e)) + '</div>' : '')
     + (e.horario ? '<div class="home-card-hor-row">' + ico('clock', 12) + ' <strong>' + esc(e.horario) + '</strong></div>' : '')
     + '<div class="home-card-meta">'
     +   (e.partida ? '<span class="home-card-loc">' + ico('send', 10)    + ' ' + esc(e.partida) + '</span>' : '')
@@ -2962,7 +4499,9 @@ function _homeRowHtml(e) {
     +   '<span class="home-row-id">#' + esc(e.id_esquema) + '</span>'
     +   '<span class="home-row-label">' + esc(e.nome_linha || ('Esquema #' + e.id_esquema)) + '</span>'
     +   (vazio ? '<span class="home-card-nopts" style="flex-shrink:0;">sem pontos</span>' : '')
+    +   _ajustadoBadge(e)
     + '</span>'
+    + '<span class="home-row-cod">' + (_codLinhaTxt(e) ? esc(_codLinhaTxt(e)) : '—') + '</span>'
     + '<span class="home-row-hor">' + (e.horario ? esc(e.horario) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.partida ? esc(e.partida) : '—') + '</span>'
     + '<span class="home-row-loc">' + (e.fim     ? esc(e.fim)     : '—') + '</span>'
@@ -3092,6 +4631,9 @@ function _updateHomeSelUI() {
   _updateHomeSelCount();
 }
 
+// Máximo de esquemas por análise de IA em grupo (limite de tokens/min do plano).
+var MAX_ANALISE_IA_GRUPO = 10;
+
 function _updateHomeSelCount() {
   var n = Object.keys(_homeSelected).length;
   var c = document.getElementById('homeSelCount');
@@ -3099,7 +4641,16 @@ function _updateHomeSelCount() {
   var d = document.getElementById('homeSelDownload');
   if (d) d.textContent = 'Baixar PDFs (' + n + ')';
   var a = document.getElementById('homeSelAnalise');
-  if (a) a.textContent = 'Analisar grupo (' + n + ')';
+  if (a) {
+    a.textContent = 'Analisar grupo (' + n + ')';
+    var excede = n > MAX_ANALISE_IA_GRUPO;
+    a.disabled = excede;
+    a.style.opacity = excede ? '0.5' : '';
+    a.style.cursor = excede ? 'not-allowed' : '';
+    a.title = excede
+      ? 'A IA aceita no máximo ' + MAX_ANALISE_IA_GRUPO + ' esquemas por vez. Reduza a seleção para analisar.'
+      : '';
+  }
 }
 
 // ============================================================
@@ -3111,12 +4662,16 @@ function _loadPdfPrefs() {
     if (c) _pdfCols = c;
     var m = localStorage.getItem('vc_pdfMode');
     if (m) _pdfMode = m;
+    var pc = JSON.parse(localStorage.getItem('vc_pdfPersonConfig') || 'null');
+    if (pc && pc.formato) _pdfPersonConfig.formato = pc.formato;
+    // pontos (seleção) é específico do esquema — não restauramos entre sessões
   } catch (e) {}
 }
 function _savePdfPrefs() {
   try {
     localStorage.setItem('vc_pdfCols', JSON.stringify(_pdfCols));
     localStorage.setItem('vc_pdfMode', _pdfMode);
+    localStorage.setItem('vc_pdfPersonConfig', JSON.stringify({ formato: _pdfPersonConfig.formato }));
   } catch (e) {}
 }
 
@@ -3156,15 +4711,29 @@ function abrirModalPdfLote(lista) {
         + '<div style="margin-bottom:16px;">'
           + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Modo</div>'
           + '<div style="display:flex;gap:8px;">'
-            + '<label id="pdfLoteModeNormalLabel" onclick="pdfLoteModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode !== 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode !== 'comercial' ? '#fff8f0' : '#fff') + ';">'
-              + '<input type="radio" name="pdfLoteMode" value="normal"' + (_pdfMode !== 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal</label>'
+            + '<label id="pdfLoteModeNormalLabel" onclick="pdfLoteModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'normal' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'normal' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLoteMode" value="normal"' + (_pdfMode === 'normal' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal</label>'
             + '<label id="pdfLoteModeComercialLabel" onclick="pdfLoteModeSelect(\'comercial\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'comercial' ? '#fff8f0' : '#fff') + ';">'
               + '<input type="radio" name="pdfLoteMode" value="comercial"' + (_pdfMode === 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Hor. Comercial</label>'
+            + '<label id="pdfLoteModePersonalizadoLabel" onclick="pdfLoteModeSelect(\'personalizado\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'personalizado' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'personalizado' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLoteMode" value="personalizado"' + (_pdfMode === 'personalizado' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Personalizado</label>'
           + '</div>'
         + '</div>'
         + '<div>'
           + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
           + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
+        + '</div>'
+        + '<div id="pdfLotePersonConfig" style="' + (_pdfMode === 'personalizado' ? '' : 'display:none;') + 'margin-top:14px;padding-top:14px;border-top:1px solid #f0f2f8;">'
+          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Formato de horário</div>'
+          + '<div style="display:flex;gap:8px;">'
+            + '<label id="pdfLotePersonFmtHhmmLabel" onclick="pdfLotePersonFormatoSelect(\'hhmm\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato !== 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato !== 'min' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLotePersonFormato" id="pdfLotePersonFmtHhmm" value="hhmm"' + (_pdfPersonConfig.formato !== 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> HH:MM'
+            + '</label>'
+            + '<label id="pdfLotePersonFmtMinLabel" onclick="pdfLotePersonFormatoSelect(\'min\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato === 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato === 'min' ? '#fff8f0' : '#fff') + ';">'
+              + '<input type="radio" name="pdfLotePersonFormato" id="pdfLotePersonFmtMin" value="min"' + (_pdfPersonConfig.formato === 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Minutos'
+            + '</label>'
+          + '</div>'
+          + '<p style="font-size:10px;color:#9aa0ad;margin-top:8px;">Pontos: todos os pontos de cada esquema (seleção individual não disponível no lote).</p>'
         + '</div>'
       + '</div>'
       + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
@@ -3182,19 +4751,39 @@ function fecharModalPdfLote() {
 }
 
 function pdfLoteModeSelect(mode) {
-  var isCom = (mode === 'comercial');
+  var isCom  = (mode === 'comercial');
+  var isPers = (mode === 'personalizado');
   var nLbl = document.getElementById('pdfLoteModeNormalLabel');
   var cLbl = document.getElementById('pdfLoteModeComercialLabel');
-  if (nLbl) { nLbl.style.borderColor = isCom ? '#d4d8e8' : '#f47920'; nLbl.style.background = isCom ? '#fff' : '#fff8f0'; }
-  if (cLbl) { cLbl.style.borderColor = isCom ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom ? '#fff8f0' : '#fff'; }
+  var pLbl = document.getElementById('pdfLoteModePersonalizadoLabel');
+  if (nLbl) { nLbl.style.borderColor = (!isCom && !isPers) ? '#f47920' : '#d4d8e8'; nLbl.style.background = (!isCom && !isPers) ? '#fff8f0' : '#fff'; }
+  if (cLbl) { cLbl.style.borderColor = isCom  ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom  ? '#fff8f0' : '#fff'; }
+  if (pLbl) { pLbl.style.borderColor = isPers ? '#f47920' : '#d4d8e8'; pLbl.style.background = isPers ? '#fff8f0' : '#fff'; }
   var nr = document.querySelector('input[name="pdfLoteMode"][value="normal"]');
   var cr = document.querySelector('input[name="pdfLoteMode"][value="comercial"]');
-  if (nr) nr.checked = !isCom;
-  if (cr) cr.checked =  isCom;
+  var pr = document.querySelector('input[name="pdfLoteMode"][value="personalizado"]');
+  if (nr) nr.checked = (!isCom && !isPers);
+  if (cr) cr.checked = isCom;
+  if (pr) pr.checked = isPers;
   ['comercial','dif'].forEach(function(k) {
     var lbl = document.getElementById('pdfLoteColLabel_' + k);
     if (lbl) { lbl.style.opacity = isCom ? '0.4' : ''; lbl.style.pointerEvents = isCom ? 'none' : ''; }
   });
+  var sec = document.getElementById('pdfLotePersonConfig');
+  if (sec) sec.style.display = isPers ? '' : 'none';
+}
+
+function pdfLotePersonFormatoSelect(fmt) {
+  _pdfPersonConfig.formato = fmt;
+  var hLbl = document.getElementById('pdfLotePersonFmtHhmmLabel');
+  var mLbl = document.getElementById('pdfLotePersonFmtMinLabel');
+  var hRad = document.getElementById('pdfLotePersonFmtHhmm');
+  var mRad = document.getElementById('pdfLotePersonFmtMin');
+  var isMin = (fmt === 'min');
+  if (hLbl) { hLbl.style.borderColor = isMin ? '#d4d8e8' : '#f47920'; hLbl.style.background = isMin ? '#fff' : '#fff8f0'; }
+  if (mLbl) { mLbl.style.borderColor = isMin ? '#f47920' : '#d4d8e8'; mLbl.style.background = isMin ? '#fff8f0' : '#fff'; }
+  if (hRad) hRad.checked = !isMin;
+  if (mRad) mRad.checked =  isMin;
 }
 
 function gerarPdfsLote() {
@@ -3204,6 +4793,11 @@ function gerarPdfsLote() {
   });
   var mEl = document.querySelector('input[name="pdfLoteMode"]:checked');
   _pdfMode = mEl ? mEl.value : 'normal';
+  if (_pdfMode === 'personalizado') {
+    var fEl = document.querySelector('input[name="pdfLotePersonFormato"]:checked');
+    _pdfPersonConfig.formato = fEl ? fEl.value : 'hhmm';
+    _pdfPersonConfig.pontos  = null; // lote não filtra pontos individualmente
+  }
   _savePdfPrefs();
 
   var esqList = ((_pdfLoteList && _pdfLoteList.length) ? _pdfLoteList : _esqs)
@@ -3236,25 +4830,121 @@ function _iniciarLoteServer(esqList) {
   google.script.run
     .withSuccessHandler(function(pontosByEsq) {
       pontosByEsq = pontosByEsq || {};
-      var seen = {}, allPairs = [];
-      esqList.forEach(function(e) {
-        var pts = (pontosByEsq[e.id_esquema] || []).filter(function(p) {
-          var l = _lMap[String(p.idPonto)]; return l && l.lat && l.lng;
-        });
-        for (var i = 0; i < pts.length - 1; i++) {
-          var a = pts[i].idPonto, b = pts[i + 1].idPonto;
-          var k = a <= b ? a + ':' + b : b + ':' + a;
-          if (!seen[k]) { seen[k] = 1; allPairs.push({ a: a, b: b }); }
-        }
+      // No modo "Hor. Comercial", pontos sem horário comercial são descartados
+      // da tabela (imprimirHorario). Se nenhum ponto do esquema tiver horário
+      // comercial, o PDF sairia com o corpo vazio — trata como "sem pontos".
+      var semPontos = esqList.filter(function(e) {
+        var pts = pontosByEsq[e.id_esquema] || [];
+        if (!pts.length) return true;
+        if (_pdfMode === 'comercial') return !pts.some(function(p) { return p.horarioComercial; });
+        return false;
       });
-      if (!allPairs.length) { _processLote(esqList, pontosByEsq, {}); return; }
-      google.script.run
-        .withSuccessHandler(function(cacheMap) { _processLote(esqList, pontosByEsq, cacheMap || {}); })
-        .withFailureHandler(function() { _processLote(esqList, pontosByEsq, {}); })
-        .getDistanciasCached(allPairs);
+      if (semPontos.length) {
+        doneLoading();
+        _abrirModalSemPontos(esqList, pontosByEsq, semPontos);
+        return;
+      }
+      _continuarLoteComPontos(esqList, pontosByEsq);
     })
     .withFailureHandler(function(e) { doneLoading(); toast('Erro ao carregar pontos: ' + (e.message || e), 'error'); })
     .getTodosPontosParaFormulario();
+}
+
+function _continuarLoteComPontos(esqList, pontosByEsq) {
+  loading('Preparando dados…');
+  var seen = {}, allPairs = [];
+  esqList.forEach(function(e) {
+    var pts = (pontosByEsq[e.id_esquema] || []).filter(function(p) {
+      var l = _lMap[String(p.idPonto)]; return l && l.lat && l.lng;
+    });
+    for (var i = 0; i < pts.length - 1; i++) {
+      var a = pts[i].idPonto, b = pts[i + 1].idPonto;
+      var k = a <= b ? a + ':' + b : b + ':' + a;
+      if (!seen[k]) { seen[k] = 1; allPairs.push({ a: a, b: b }); }
+    }
+  });
+  if (!allPairs.length) { _processLote(esqList, pontosByEsq, {}); return; }
+  google.script.run
+    .withSuccessHandler(function(cacheMap) { _processLote(esqList, pontosByEsq, cacheMap || {}); })
+    .withFailureHandler(function() { _processLote(esqList, pontosByEsq, {}); })
+    .getDistanciasCached(allPairs);
+}
+
+// ── Aviso de esquemas sem pontos ───────────────────────────────────────────
+var _loteSemPontosCtx = null;
+
+function _abrirModalSemPontos(esqList, pontosByEsq, semPontos) {
+  _loteSemPontosCtx = { esqList: esqList, pontosByEsq: pontosByEsq };
+  var ex = document.getElementById('pdfSemPontosOverlay');
+  if (ex) ex.remove();
+
+  var itens = semPontos.map(function(e) {
+    var sent   = e.sentido ? ' · ' + esc(e.sentido) : '';
+    var hor    = e.horario ? ' · ' + esc(e.horario) : '';
+    var pts    = pontosByEsq[e.id_esquema] || [];
+    var motivo = !pts.length ? 'sem pontos cadastrados' : 'sem horário comercial em nenhum ponto';
+    return '<li style="list-style:none;font-size:12px;color:#3a3f52;margin:2px 0;">'
+      + '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">'
+      + '<input type="checkbox" class="pdfSemPtChk" value="' + esc(e.id_esquema) + '" checked style="cursor:pointer;">'
+      + '#' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + hor + sent
+      + ' <span style="color:#e0a000;">(' + motivo + ')</span>'
+      + '</label></li>';
+  }).join('');
+
+  var isComercial = (_pdfMode === 'comercial');
+
+  var modal =
+    '<div id="pdfSemPontosOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
+    + '<div style="background:#fff;border-radius:12px;width:460px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
+      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
+        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('alert-triangle', 15) + ' Esquemas sem pontos</div>'
+        + '<button onclick="_fecharModalSemPontos()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
+      + '</div>'
+      + '<div style="padding:18px 20px;overflow-y:auto;">'
+        + '<p style="font-size:13px;color:#3a3f52;margin:0 0 12px;">' + semPontos.length + (semPontos.length === 1 ? ' esquema vai gerar PDF em branco' : ' esquemas vão gerar PDF em branco')
+          + (isComercial ? ' — no modo Hor. Comercial, esquemas sem nenhum ponto com horário comercial preenchido ficam sem linhas na tabela.' : ' — não têm pontos cadastrados.')
+          + ' Eles já vêm marcados para serem ignorados — desmarque para tentar mesmo assim (provavelmente sairá em branco).</p>'
+        + '<ul style="margin:0;padding-left:18px;">' + itens + '</ul>'
+      + '</div>'
+      + '<div style="padding:12px 20px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
+        + '<button onclick="_fecharModalSemPontos()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
+        + '<button onclick="_ignorarTodosSemPontos()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;font-weight:700;cursor:pointer;color:#5a6070;">Ignorar tudo</button>'
+        + '<button onclick="_confirmarLoteSemPontos()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Continuar</button>'
+      + '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', modal);
+  document.getElementById('pdfSemPontosOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalSemPontos(); });
+}
+
+function _fecharModalSemPontos() {
+  var m = document.getElementById('pdfSemPontosOverlay');
+  if (m) m.remove();
+  _loteSemPontosCtx = null;
+}
+
+function _confirmarLoteSemPontos() {
+  var ctx = _loteSemPontosCtx;
+  if (!ctx) return;
+  var ignorados = {};
+  document.querySelectorAll('.pdfSemPtChk').forEach(function(chk) {
+    if (chk.checked) ignorados[chk.value] = true;
+  });
+  _fecharModalSemPontos();
+  var esqList = ctx.esqList.filter(function(e) { return !ignorados[e.id_esquema]; });
+  if (!esqList.length) { toast('Nenhum esquema com pontos para gerar.', 'error'); return; }
+  _continuarLoteComPontos(esqList, ctx.pontosByEsq);
+}
+
+// Ignora todos os esquemas sem pontos listados, sem depender do estado dos checkboxes.
+function _ignorarTodosSemPontos() {
+  var ctx = _loteSemPontosCtx;
+  if (!ctx) return;
+  var semPontosIds = {};
+  document.querySelectorAll('.pdfSemPtChk').forEach(function(chk) { semPontosIds[chk.value] = true; });
+  _fecharModalSemPontos();
+  var esqList = ctx.esqList.filter(function(e) { return !semPontosIds[e.id_esquema]; });
+  if (!esqList.length) { toast('Nenhum esquema com pontos para gerar.', 'error'); return; }
+  _continuarLoteComPontos(esqList, ctx.pontosByEsq);
 }
 
 // ── Aviso de esquemas duplicados ───────────────────────────────────────────
@@ -3269,7 +4959,11 @@ function _abrirModalDuplicados(esqList, dups) {
     var nome  = _loteFilename(g[0]).replace(/\.pdf$/i, '');
     var itens = g.map(function(e) {
       var sent = e.sentido ? ' · ' + esc(e.sentido) : '';
-      return '<li style="font-size:12px;color:#3a3f52;margin:2px 0;">#' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + sent + '</li>';
+      return '<li style="list-style:none;font-size:12px;color:#3a3f52;margin:2px 0;">'
+        + '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">'
+        + '<input type="checkbox" class="pdfDupChk" value="' + esc(e.id_esquema) + '" checked style="cursor:pointer;">'
+        + '#' + esc(e.id_esquema) + ' — ' + esc(e.nome_linha) + sent
+        + '</label></li>';
     }).join('');
     return '<div style="margin-bottom:12px;">'
       + '<div style="font-size:12px;font-weight:700;color:#1a1d23;margin-bottom:3px;">' + esc(nome) + ' <span style="color:#e0a000;font-weight:700;">×' + g.length + '</span></div>'
@@ -3286,12 +4980,12 @@ function _abrirModalDuplicados(esqList, dups) {
       + '</div>'
       + '<div style="padding:18px 20px;overflow-y:auto;">'
         + '<p style="font-size:13px;color:#3a3f52;margin:0 0 12px;">' + dups.length + (dups.length === 1 ? ' nome de arquivo se repete' : ' nomes de arquivo se repetem')
-          + ' (mesma linha, horário e sentido). Se gerar assim, os repetidos recebem sufixo <strong>(2)</strong>, <strong>(3)</strong>… Revise os esquemas abaixo se forem duplicatas indevidas.</p>'
+          + ' (mesma linha, horário e sentido). Os repetidos recebem sufixo <strong>(2)</strong>, <strong>(3)</strong>… Desmarque abaixo os esquemas que não devem entrar no lote.</p>'
         + listHtml
       + '</div>'
       + '<div style="padding:12px 20px 18px;display:flex;gap:8px;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
         + '<button onclick="_fecharModalDup()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
-        + '<button onclick="_confirmarLoteComDup()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Gerar mesmo assim</button>'
+        + '<button onclick="_confirmarLoteComDup()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Gerar selecionados</button>'
       + '</div>'
     + '</div></div>';
   document.body.insertAdjacentHTML('beforeend', modal);
@@ -3306,8 +5000,16 @@ function _fecharModalDup() {
 
 function _confirmarLoteComDup() {
   var lista = _loteDupPending;
+  var excluidos = {};
+  document.querySelectorAll('.pdfDupChk').forEach(function(chk) {
+    if (!chk.checked) excluidos[chk.value] = true;
+  });
   _fecharModalDup();
-  if (lista && lista.length) _iniciarLoteServer(lista);
+  if (lista && lista.length) {
+    lista = lista.filter(function(e) { return !excluidos[e.id_esquema]; });
+    if (!lista.length) { toast('Nenhum esquema selecionado para gerar.', 'error'); return; }
+    _iniciarLoteServer(lista);
+  }
 }
 
 // ============================================================
@@ -3975,7 +5677,15 @@ function renderRotasList() {
 
 function _refreshRotas(cb) {
   google.script.run
-    .withSuccessHandler(function(list) { _setRotasAjust(list || []); if (cb) cb(); })
+    .withSuccessHandler(function(list) {
+      _setRotasAjust(list || []);
+      // Invalida o cache do mapa do esquema: um ajuste pode ter mudado o
+      // traçado (km/tempo/desvio) de um trecho que este esquema usa.
+      _osrmSeqKey = ''; _osrmGeometry = null; _osrmLegGeoms = null;
+      if (_view === 'mapa' && _map) updateMap();
+      else if (_view === 'horario') renderHorario();
+      if (cb) cb();
+    })
     .withFailureHandler(function() { if (cb) cb(); })
     .getRotasAjustadas();
 }
@@ -4024,7 +5734,7 @@ function massaRotaExcluir(codA, codB) {
 }
 
 // ── Mapa-arrasta do ajuste de rota (Leaflet + OSRM) ──────────
-var _rotaMap = null, _rotaLine = null, _rotaVias = [], _rotaViaMarkers = [], _rotaABMarkers = [];
+var _rotaMap = null, _rotaLine = null, _rotaLineHit = null, _rotaVias = [], _rotaViaMarkers = [], _rotaABMarkers = [];
 var _rotaResult = { km: 0, min: 0, geom: null };
 
 function _rotaHasCoords(p) { return !!(p && p.lat != null && p.lng != null && !isNaN(+p.lat) && !isNaN(+p.lng)); }
@@ -4042,7 +5752,10 @@ function _rotaPointsChanged() {
     if (clearBtn) clearBtn.style.display = 'none';
     return;
   }
-  _rotaVias = [];
+  var existing = _findRotaAjusteEntry(String(a.codigo), String(b.codigo));
+  _rotaVias = existing ? _viasFromEntry(existing) : [];
+  var motivoEl = document.getElementById('ra_motivo');
+  if (motivoEl) motivoEl.value = existing ? (existing.entry.motivo || '') : '';
   _rotaInitMap();
   _rotaRoute();
 }
@@ -4058,7 +5771,7 @@ function _rotaInitMap() {
 
 function _rotaDestroyMap() {
   if (_rotaMap) { try { _rotaMap.remove(); } catch (e) {} _rotaMap = null; }
-  _rotaLine = null; _rotaViaMarkers = []; _rotaABMarkers = [];
+  _rotaLine = null; _rotaLineHit = null; _rotaViaMarkers = []; _rotaABMarkers = [];
 }
 
 function _rotaWaypoints() {
@@ -4097,9 +5810,16 @@ function _hhmmFromMin(min) { min = Math.round(min || 0); var h = Math.floor(min 
 
 function _rotaDrawRoute(geom, wp) {
   if (!_rotaMap) return;
-  if (_rotaLine) { _rotaMap.removeLayer(_rotaLine); _rotaLine = null; }
-  _rotaLine = L.polyline(geom, { color: '#f47920', weight: 5, opacity: 0.9 }).addTo(_rotaMap);
-  _rotaLine.on('click', function(e) { _rotaAddVia(e.latlng); });
+  if (_rotaLine)    { _rotaMap.removeLayer(_rotaLine);    _rotaLine    = null; }
+  if (_rotaLineHit) { _rotaMap.removeLayer(_rotaLineHit); _rotaLineHit = null; }
+  _rotaLine = L.polyline(geom, { color: '#f47920', weight: 5, opacity: 0.9, interactive: false }).addTo(_rotaMap);
+  // Camada invisível bem mais espessa por cima, só pra facilitar pegar a
+  // linha com o mouse (5px de traço é fácil de errar e acaba arrastando o
+  // mapa inteiro em vez do traçado — no estilo Google Maps).
+  _rotaLineHit = L.polyline(geom, { color: '#000', weight: 22, opacity: 0 }).addTo(_rotaMap);
+  _rotaLineHit.on('mousedown', _rotaLineDragStart);
+  _rotaLineHit.on('mouseover', function() { if (_rotaMap) _rotaMap.getContainer().style.cursor = 'grab'; });
+  _rotaLineHit.on('mouseout',  function() { if (_rotaMap) _rotaMap.getContainer().style.cursor = ''; });
 
   _rotaABMarkers.forEach(function(m) { _rotaMap.removeLayer(m); });
   _rotaABMarkers = [];
@@ -4132,6 +5852,45 @@ function _rotaAddVia(latlng) {
   _rotaVias.push({ lat: latlng.lat, lng: latlng.lng });
   _rotaSortVias();
   _rotaRoute();
+}
+
+// Arrastar o traçado (igual Google Maps): mousedown na linha cria um ponto
+// de desvio ali mesmo e o segue durante o arraste (preview em linha reta,
+// leve); ao soltar, refaz a rota real pelo OSRM.
+function _rotaLineDragStart(e) {
+  if (!_rotaMap) return;
+  L.DomEvent.stopPropagation(e);
+  _rotaMap.dragging.disable();
+
+  var pt = { lat: e.latlng.lat, lng: e.latlng.lng };
+  _rotaVias.push(pt);
+  _rotaSortVias();
+  _rotaDrawPreview();
+
+  function onMove(ev) {
+    pt.lat = ev.latlng.lat; pt.lng = ev.latlng.lng;
+    _rotaSortVias();
+    _rotaDrawPreview();
+  }
+  function onUp() {
+    _rotaMap.off('mousemove', onMove);
+    _rotaMap.off('mouseup', onUp);
+    if (_rotaMap) _rotaMap.dragging.enable();
+    _rotaSortVias();
+    _rotaRoute();
+  }
+  _rotaMap.on('mousemove', onMove);
+  _rotaMap.on('mouseup', onUp);
+}
+
+// Prévia leve (linha reta pelos waypoints) durante o arraste — sem chamar o
+// OSRM a cada pixel. A rota real (seguindo a via) é buscada só ao soltar.
+function _rotaDrawPreview() {
+  if (!_rotaLine) return;
+  var wp = _rotaWaypoints();
+  var lls = wp.map(function(p) { return [p.lat, p.lng]; });
+  _rotaLine.setLatLngs(lls);
+  if (_rotaLineHit) _rotaLineHit.setLatLngs(lls);
 }
 
 // Ordena os vias pela projeção no eixo A→B (mantém a ordem ao longo do trecho).
@@ -4205,13 +5964,17 @@ function appConfirmClose() { if (window._appConfirmCleanup) { window._appConfirm
 function abrirAnaliseEsquema() {
   if (!_sel) return;
   var ex = document.getElementById('analiseOverlay'); if (ex) ex.remove();
-  var titulo = '#' + esc(_sel.id_esquema) + ' — ' + esc(_sel.nome_linha || '');
+  var titulo = '#' + esc(_sel.id_esquema) + ' — ' + esc(_sel.nome_linha || '')
+    + (_codLinhaTxt(_sel) ? ' (' + esc(_codLinhaTxt(_sel)) + ')' : '');
   var modal =
     '<div id="analiseOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
     + '<div style="background:#fff;border-radius:12px;width:580px;max-width:96vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
       + '<div style="background:#1a1d23;padding:16px 22px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
         + '<div style="font-size:14px;font-weight:800;color:#fff;">Análise do esquema</div>'
-        + '<button onclick="fecharAnalise()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 16) + '</button>'
+        + '<div style="display:flex;align-items:center;gap:10px;">'
+          + '<button type="button" class="an-fix-btn" onclick="fecharAnalise()" title="Fechar a análise e voltar ao editor para ajustar este esquema.">' + ico('pencil', 12) + 'Corrigir</button>'
+          + '<button onclick="fecharAnalise()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 16) + '</button>'
+        + '</div>'
       + '</div>'
       + '<div style="padding:10px 22px 0;font-size:12px;color:#7a8299;flex-shrink:0;font-weight:600;">' + titulo + '</div>'
       + '<div id="analiseBody" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>'
@@ -4232,10 +5995,40 @@ function abrirAnaliseEsquema() {
 function fecharAnalise() { var o = document.getElementById('analiseOverlay'); if (o) o.remove(); }
 
 // ── Análise em grupo (esquemas selecionados) ──────────────────
+// Esquemas já analisados nesta sessão (para o "próximo grupo" avançar mesmo
+// antes de o usuário marcar como ajustado).
+var _analiseVistos = {};
+
 function analisarSelecionados() {
-  var lista = _selectedEsqList();
+  _executarAnaliseGrupo(_selectedEsqList());
+}
+
+// Próximos N esquemas disponíveis: com pontos, não-ajustados e ainda não
+// analisados nesta sessão. Segue a ordem da aba ESQUEMAS.
+function _proximosDisponiveis(n) {
+  var out = _esqs.filter(function(e) {
+    return e.temPontos && !_isAjustado(e) && !_analiseVistos[e.id_esquema];
+  });
+  return n ? out.slice(0, n) : out;
+}
+
+function analisarProximoGrupo() {
+  var prox = _proximosDisponiveis(MAX_ANALISE_IA_GRUPO);
+  if (prox.length < 2) {
+    toast('Não há mais esquemas disponíveis para analisar (todos ajustados ou já vistos).', 'info');
+    return;
+  }
+  _executarAnaliseGrupo(prox);
+}
+
+function _executarAnaliseGrupo(lista) {
   if (lista.length < 2) { toast('Selecione ao menos 2 esquemas para comparar.', 'error'); return; }
+  if (lista.length > MAX_ANALISE_IA_GRUPO) {
+    toast('A IA compara no máximo ' + MAX_ANALISE_IA_GRUPO + ' esquemas por vez. Reduza a seleção (você tem ' + lista.length + ').', 'error');
+    return;
+  }
   var ids = lista.map(function(e) { return e.id_esquema; });
+  ids.forEach(function(id) { _analiseVistos[id] = true; });
 
   var ex = document.getElementById('analiseOverlay'); if (ex) ex.remove();
   var modal =
@@ -4277,12 +6070,31 @@ function _renderAnaliseGrupo(r) {
   var regrasHtml = comRegras.length
     ? comRegras.map(function(g) {
         var itens = g.regras.map(function(x) { return '<div class="an-item">' + (badge[x.nivel] || '') + '<span>' + esc(x.msg) + '</span></div>'; }).join('');
-        return '<div style="margin-top:10px;"><div style="font-size:12px;font-weight:700;color:#3a3f52;margin-bottom:4px;">#' + esc(g.idEsquema) + ' — ' + esc(g.nomeLinha || '') + '</div>' + itens + '</div>';
+        var btn = '<button type="button" class="an-fix-btn" onclick="_abrirEsqNovaAba(\'' + esc(String(g.idEsquema)) + '\')" title="Abrir o esquema numa nova aba para ajustar nome, cód. de linha, horário e demais campos.">' + ico('external-link', 12) + 'Corrigir</button>';
+        return '<div style="margin-top:10px;">'
+          + '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:4px;">'
+          +   '<div style="font-size:12px;font-weight:700;color:#3a3f52;">#' + esc(g.idEsquema) + ' — ' + esc(g.nomeLinha || '') + '</div>'
+          +   '<div style="display:flex;align-items:center;gap:6px;flex-shrink:0;">' + _ajustToggleBtn(g.idEsquema) + btn + '</div>'
+          + '</div>' + itens + '</div>';
       }).join('')
     : '<div class="an-ok">' + ico('check', 14) + ' Nenhuma anomalia pelas regras automáticas.</div>';
 
-  b.innerHTML = '<div class="np-sec" style="margin-top:0;">Comparação entre as linhas (IA)</div>' + iaHtml
-    + '<div class="np-sec">Regras automáticas por esquema</div>' + regrasHtml;
+  var flat = [];
+  (r.regras || []).forEach(function(g) { (g.regras || []).forEach(function(x) { flat.push(x); }); });
+
+  // Avançar para o próximo grupo de disponíveis (não-ajustados e não-vistos).
+  var restantes = _proximosDisponiveis(0).length;
+  var proxHtml = restantes >= 2
+    ? '<button type="button" class="an-next-btn" onclick="analisarProximoGrupo()">'
+        + ico('arrow-right', 14) + ' Analisar próximo grupo (' + Math.min(restantes, MAX_ANALISE_IA_GRUPO) + ')'
+      + '</button>'
+      + '<div class="an-muted" style="text-align:center;margin-top:6px;">' + restantes + ' esquema' + (restantes > 1 ? 's' : '') + ' restante' + (restantes > 1 ? 's' : '') + ' (não ajustados)</div>'
+    : '<div class="an-ok" style="margin-top:14px;">' + ico('check', 14) + ' Todos os esquemas disponíveis já foram analisados ou ajustados.</div>';
+
+  b.innerHTML = _gravidadeResumo(flat)
+    + '<div class="np-sec" style="margin-top:0;">Comparação entre as linhas (IA)</div>' + iaHtml
+    + '<div class="np-sec">Regras automáticas por esquema</div>' + regrasHtml
+    + '<div class="an-next-wrap">' + proxHtml + '</div>';
 }
 
 function _renderAnalise(r) {
@@ -4299,13 +6111,47 @@ function _renderAnalise(r) {
   else iaHtml = '<div class="an-ia">' + _mdLite(r.ia.texto || '(sem resposta)') + '</div>'
     + (r.ia.model ? '<div class="an-muted" style="margin-top:8px;">via Groq · ' + esc(r.ia.model) + '</div>' : '');
 
-  b.innerHTML = '<div class="np-sec" style="margin-top:0;">Regras automáticas</div>' + regrasHtml
+  b.innerHTML = _gravidadeResumo(regras)
+    + '<div class="np-sec" style="margin-top:0;">Regras automáticas</div>' + regrasHtml
     + '<div class="np-sec">Análise da IA</div>' + iaHtml;
 }
 
-// Markdown leve: **negrito**, bullets (-, *, •) e quebras de linha.
+// Resumo de gravidade dos achados (média ponderada: Alto=3, Médio=2, Baixo=1).
+// 100% = todos os achados são Alto; ~33% = todos Baixo. Recebe a lista plana de
+// achados ({nivel}). Retorna '' quando não há nenhum.
+function _gravidadeResumo(itens) {
+  var peso = { alto: 3, medio: 2, baixo: 1 };
+  var c = { alto: 0, medio: 0, baixo: 0 };
+  (itens || []).forEach(function(x) { if (c[x.nivel] !== undefined) c[x.nivel]++; });
+  var total = c.alto + c.medio + c.baixo;
+  if (!total) return '';
+  var soma = c.alto * peso.alto + c.medio * peso.medio + c.baixo * peso.baixo;
+  var pct  = Math.round((soma / (total * 3)) * 100);
+  var cor  = pct >= 67 ? '#c62828' : (pct >= 34 ? '#c47f17' : '#2e7d32');
+  var partes = [];
+  if (c.alto)  partes.push(c.alto + ' alto');
+  if (c.medio) partes.push(c.medio + ' médio');
+  if (c.baixo) partes.push(c.baixo + ' baixo');
+  return '<div class="an-grav">'
+    + '<div class="an-grav-top"><span>Gravidade dos erros</span><strong style="color:' + cor + ';">' + pct + '%</strong></div>'
+    + '<div class="an-grav-bar"><span style="width:' + pct + '%;background:' + cor + ';"></span></div>'
+    + '<div class="an-grav-meta">' + total + ' achado' + (total > 1 ? 's' : '') + ' · ' + partes.join(' · ') + '</div>'
+    + '</div>';
+}
+
+// Transforma referências "#N" (N = id de esquema existente) em links que abrem
+// o esquema numa nova aba. Ignora "#N" que não corresponda a nenhum esquema.
+function _linkifyEsq(html) {
+  return html.replace(/#(\d+)\b/g, function(m, id) {
+    var existe = _esqs && _esqs.some(function(e) { return String(e.id_esquema) === id; });
+    if (!existe) return m;
+    return '<a class="an-esqlink" onclick="_abrirEsqNovaAba(\'' + id + '\')" title="Abrir o esquema #' + id + ' numa nova aba para ajustar.">#' + id + '</a>';
+  });
+}
+
+// Markdown leve: **negrito**, bullets (-, *, •), links de esquema e quebras de linha.
 function _mdLite(s) {
-  var t = esc(String(s || '')).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  var t = _linkifyEsq(esc(String(s || '')).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>'));
   return t.split('\n').map(function(l) {
     var x = l.trim();
     if (/^[-*•]\s+/.test(x)) return '<div class="an-bullet">' + x.replace(/^[-*•]\s+/, '') + '</div>';
@@ -4342,6 +6188,14 @@ document.addEventListener('click', function(e) {
   });
 });
 
+// Fecha os dropdowns customizados (ponto de partida / inserir após) ao clicar fora.
+document.addEventListener('click', function(e) {
+  ['horStartWrap', 'insAfterWrap'].forEach(function(id) {
+    var w = document.getElementById(id);
+    if (w && w.classList.contains('open') && !w.contains(e.target)) w.classList.remove('open');
+  });
+});
+
 function _processLote(esqList, pontosByEsq, cacheMap) {
   if (typeof PDFLib === 'undefined' || typeof JSZip === 'undefined') {
     doneLoading(); toast('Bibliotecas de PDF não carregaram. Recarregue a página.', 'error'); return;
@@ -4357,6 +6211,7 @@ function _processLote(esqList, pontosByEsq, cacheMap) {
     if (!pts.length) { fail++; return; }
     try {
       _setupEsqStateLote(e, pts);
+      _pdfTitle = ''; _pdfSubtitle = '';
       _restoreHorConfig(e);
       _osrmLegs   = _legsFromCacheMap(cacheMap);
       _osrmStatus = (_osrmLegs && _osrmLegs.some(function(l) { return l; })) ? 'cache' : 'unavailable';
@@ -4453,8 +6308,8 @@ function _setupEsqStateLote(e, pts) {
   _comercialTimes = {};
   pts.forEach(function(p) { var t = _normalizeHHMM(p.horarioComercial); if (t) _comercialTimes[p.idPonto] = t; });
   _customStopTimes = {};  // tempo_local não é mais fallback (aba → 30 min fixo)
-  _legVia = {};
-  pts.forEach(function(p) { if (p.tipoTrecho) _legVia[p.idPonto] = p.tipoTrecho; });
+  _legVia = {}; _legVelPers = {};
+  pts.forEach(function(p) { _setLegViaRaw(p.idPonto, p.tipoTrecho); });
   _horStartIdx  = 0;
   _osrmGeometry = null;
 }
@@ -4473,25 +6328,64 @@ function _legsFromCacheMap(cacheMap) {
 
 function _snapshotEsqState() {
   return {
-    sel: _sel, seq: _seq, com: _comercialTimes, cst: _customStopTimes, lv: _legVia,
+    sel: _sel, seq: _seq, com: _comercialTimes, cst: _customStopTimes, lv: _legVia, lvp: _legVelPers,
     hsi: _horStartIdx, legs: _osrmLegs, st: _osrmStatus, geo: _osrmGeometry,
     partida: (document.getElementById('horHoraPartida') || {}).value,
     vel:     (document.getElementById('horVelMedia')   || {}).value
   };
 }
 function _restoreEsqState(s) {
-  _sel = s.sel; _seq = s.seq; _comercialTimes = s.com; _customStopTimes = s.cst; _legVia = s.lv;
+  _sel = s.sel; _seq = s.seq; _comercialTimes = s.com; _customStopTimes = s.cst; _legVia = s.lv; _legVelPers = s.lvp || {};
   _horStartIdx = s.hsi; _osrmLegs = s.legs; _osrmStatus = s.st; _osrmGeometry = s.geo;
   var hp = document.getElementById('horHoraPartida'); if (hp && s.partida != null) hp.value = s.partida;
   var hv = document.getElementById('horVelMedia');    if (hv && s.vel != null)     hv.value = s.vel;
 }
 
+// Sufixo "(COD_LINHA)" — só quando há código e ele ainda não está embutido no
+// nome da linha (evita duplicar, ex.: "NATAL X SP (RNSP...) (RNSP...)").
+function _codLinhaSuffix(nomeLinha, codLinha) {
+  var cod = String(codLinha || '').trim();
+  if (!cod) return '';
+  if (String(nomeLinha || '').toUpperCase().indexOf(cod.toUpperCase()) !== -1) return '';
+  return ' (' + cod + ')';
+}
+
+// Hora padronizada para o título: "HHhMM" (zero à esquerda). Aceita "21:00",
+// "9:00", "21h00", "21:00:00". Retorna '' quando não há hora válida.
+function _horaTitulo(h) {
+  var m = String(h || '').match(/(\d{1,2})[:hH](\d{2})/);
+  return m ? ('0' + m[1]).slice(-2) + 'h' + m[2] : '';
+}
+
+// Sentido com capitalização consistente: "VOLTA"/"volta" → "Volta".
+function _sentidoTitulo(s) {
+  s = String(s || '').trim();
+  return s ? s.charAt(0).toUpperCase() + s.slice(1).toLowerCase() : '';
+}
+
+// Título padrão do esquema: "08h00 - NOME DA LINHA (COD_LINHA) (Sentido)".
+// Usado tanto no título do PDF quanto no nome do arquivo.
+function _tituloPadraoEsquema(e) {
+  var hor  = _horaTitulo(e.horario);
+  var nome = String(e.nome_linha || ('Esquema ' + e.id_esquema)).replace(/\s+/g, ' ').trim();
+  var cod  = _codLinhaSuffix(e.nome_linha, e.cod_linha);
+  var sent = _sentidoTitulo(e.sentido);
+  return (hor ? hor + ' - ' : '') + nome + cod + (sent ? ' (' + sent + ')' : '');
+}
+
 function _loteFilename(e) {
-  // Sem o código de sequência do esquema; com o sentido entre parênteses.
-  var sent = e.sentido ? ' (' + e.sentido + ')' : '';
-  var base = (e.horario || '').replace(':', 'h') + ' - ' + (e.nome_linha || ('Esquema ' + e.id_esquema)) + sent;
-  base = base.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
+  var base = _tituloPadraoEsquema(e).replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, ' ').trim();
   return (base || ('esquema_' + e.id_esquema)) + '.pdf';
+}
+
+// Código da linha em texto curto (ou '' se ausente).
+function _codLinhaTxt(e) {
+  return e && e.cod_linha ? String(e.cod_linha).trim() : '';
+}
+// Badge HTML do código da linha para listas, cards e cabeçalhos (ou '' se ausente).
+function _codLinhaBadge(e) {
+  var c = _codLinhaTxt(e);
+  return c ? '<span class="cod-linha-badge">' + esc(c) + '</span>' : '';
 }
 
 function _baixarBlob(blob, filename) {
@@ -4534,6 +6428,7 @@ function iniciarViagemVolta() {
   _voltaSnapshot = {
     seq:             _seq.map(function(p){ return Object.assign({}, p); }),
     legVia:          Object.assign({}, _legVia),
+    legVelPers:      Object.assign({}, _legVelPers),
     customStopTimes: Object.assign({}, _customStopTimes)
   };
   _voltaMode = true;
@@ -4543,12 +6438,14 @@ function iniciarViagemVolta() {
   var sentAtual = _sel.sentido || 'Ida';
   var sentVolta = sentAtual === 'Volta' ? 'Ida' : 'Volta';
   document.getElementById('fNome').value  = _sel.nome_linha || '';
+  document.getElementById('fCod').value   = _codLinhaTxt(_sel);
   document.getElementById('fHor').value   = '';
   document.getElementById('fSent').value  = sentVolta;
   document.getElementById('esqSearch').value = '';
   document.getElementById('esqBadge').style.display  = 'none';
   document.getElementById('esqForm').style.display   = '';
   document.getElementById('btnSalvEsq').textContent  = 'Criar Viagem de Volta';
+  document.getElementById('btnAjustado').style.display = 'none';
   document.getElementById('btnNovo').style.display   = 'none'; // oculta durante o fluxo
   document.getElementById('btnFecharModalEsq').style.display = '';
   abrirModalEsquema();
@@ -4568,9 +6465,16 @@ function _aplicarVoltaESpelhar(novoEsq, snapshot) {
   // Mapeia tipo de trecho para a rota inversa:
   // Trecho X→Y (orig) = mesmo trecho físico Y→X (volta), tipo = snapshot.legVia[X]
   // Logo: voltaLegVia[Y] = snapshot.legVia[X]  (onde Y vem após X na original)
+  // Serializa o tipo do trecho preservando a velocidade dos trechos personalizados
+  function _viaSerial(idPt) {
+    var v = snapshot.legVia[idPt];
+    if (!v) return '';
+    if (v === 'Pers') { var vel = (snapshot.legVelPers || {})[idPt]; return vel > 0 ? 'Pers:' + vel : ''; }
+    return v;
+  }
   var voltaLegVia = {};
   for (var i = 0; i < orig.length - 1; i++) {
-    voltaLegVia[orig[i + 1].idPonto] = snapshot.legVia[orig[i].idPonto] || 'BR';
+    voltaLegVia[orig[i + 1].idPonto] = _viaSerial(orig[i].idPonto) || 'BR';
   }
 
   var payload = reversed.map(function(p) {
@@ -4581,7 +6485,7 @@ function _aplicarVoltaESpelhar(novoEsq, snapshot) {
       horarioComercial: '',
       tempoLocal:      snapshot.customStopTimes[p.idPonto] != null
                          ? snapshot.customStopTimes[p.idPonto] : '',
-      tipoTrecho:      voltaLegVia[p.idPonto] || snapshot.legVia[p.idPonto] || ''
+      tipoTrecho:      voltaLegVia[p.idPonto] || _viaSerial(p.idPonto) || ''
     };
   });
 
@@ -4645,7 +6549,7 @@ function renderPts(q) {
   // ── ANTT context ──────────────────────────────────────────────
   _updateAnttWarnBar();
   var nearLimit = _anttStatus && _anttStatus.accumKm > ANTT_WARN_KM;
-  var insertIdx = parseInt(document.getElementById('insAfter').value) || 0;
+  var insertIdx = _getInsAfter() || 0;
   var refPt     = _seq[insertIdx] || null; // último ponto antes da inserção
 
   // Fase 3 — Ordena apoio para o topo quando próximo do limite
@@ -4707,17 +6611,320 @@ function renderPts(q) {
   });
 }
 
+// ============================================================
+//  Preencher esquema a partir de um print do itinerário comercial
+//  (lê a imagem via IA de visão, casa com os locais e pede revisão)
+// ============================================================
+// HTML da zona de colar exibida no centro quando o esquema está vazio.
+function _itinPasteZoneHtml() {
+  return '<div class="itin-paste" id="itinPasteZone" tabindex="0">'
+    + '<div class="itin-paste-ico">'
+    +   '<svg xmlns="http://www.w3.org/2000/svg" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>'
+    + '</div>'
+    + '<div class="itin-paste-title">Cole aqui o print do itinerário</div>'
+    + '<div class="itin-paste-sub">Tire um print do <strong>Mapa de Viagem</strong> e pressione <kbd>Ctrl</kbd> + <kbd>V</kbd> &nbsp;·&nbsp; ou arraste a imagem para esta área.</div>'
+    + '</div>';
+}
+
+// Liga o arrastar-e-soltar na zona (o Ctrl+V é tratado por um listener global).
+function _bindItinDropZone() {
+  var zone = document.getElementById('itinPasteZone');
+  if (!zone) return;
+  ['dragenter', 'dragover'].forEach(function(ev) {
+    zone.addEventListener(ev, function(e) { e.preventDefault(); zone.classList.add('dragging'); });
+  });
+  ['dragleave', 'dragend'].forEach(function(ev) {
+    zone.addEventListener(ev, function() { zone.classList.remove('dragging'); });
+  });
+  zone.addEventListener('drop', function(e) {
+    e.preventDefault();
+    zone.classList.remove('dragging');
+    var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) _processarImagemItinerario(f);
+  });
+}
+
+// Lê a imagem (de paste ou drop), reduz e envia para a extração.
+function _processarImagemItinerario(file) {
+  if (!file || !/^image\//.test(file.type)) { toast('O conteúdo colado não é uma imagem.', 'error'); return; }
+  var reader = new FileReader();
+  reader.onload = function(ev) {
+    _downscaleDataUrl(ev.target.result, 1600, function(small) { _enviarPrintItinerario(small); });
+  };
+  reader.onerror = function() { toast('Não foi possível ler a imagem.', 'error'); };
+  reader.readAsDataURL(file);
+}
+
+// Ctrl+V em qualquer lugar do editor, com o esquema vazio, cola o print.
+document.addEventListener('paste', function(e) {
+  if (!_sel || _seq.length) return;                    // só com esquema selecionado e vazio
+  var home = document.getElementById('homeScreen');
+  if (home && home.classList.contains('open')) return; // não interfere na home
+  if (document.getElementById('itinOverlay')) return;  // modal de revisão já aberto
+  var items = (e.clipboardData && e.clipboardData.items) || [];
+  for (var i = 0; i < items.length; i++) {
+    if (items[i].type && items[i].type.indexOf('image') === 0) {
+      var file = items[i].getAsFile();
+      if (file) { e.preventDefault(); _processarImagemItinerario(file); return; }
+    }
+  }
+});
+
+// Reduz a imagem antes de enviar (limita custo/payload sem perder legibilidade).
+function _downscaleDataUrl(dataUrl, maxDim, cb) {
+  var img = new Image();
+  img.onload = function() {
+    var w = img.width, h = img.height, scale = Math.min(1, maxDim / Math.max(w, h));
+    var cw = Math.max(1, Math.round(w * scale)), ch = Math.max(1, Math.round(h * scale));
+    var c = document.createElement('canvas'); c.width = cw; c.height = ch;
+    c.getContext('2d').drawImage(img, 0, 0, cw, ch);
+    try { cb(c.toDataURL('image/jpeg', 0.85)); } catch (e) { cb(dataUrl); }
+  };
+  img.onerror = function() { cb(dataUrl); };
+  img.src = dataUrl;
+}
+
+function _enviarPrintItinerario(dataUrl) {
+  loading('Lendo o print do itinerário…');
+  google.script.run
+    .withSuccessHandler(function(r) {
+      doneLoading();
+      if (!r || r.erro) { toast(r && r.erro ? r.erro : 'Falha ao ler a imagem.', 'error'); return; }
+      if (!r.paradas || !r.paradas.length) { toast('Nenhuma parada encontrada na imagem.', 'error'); return; }
+      _abrirRevisaoItinerario(r.paradas);
+    })
+    .withFailureHandler(function(e) { doneLoading(); toast('Erro: ' + (e.message || e), 'error'); })
+    .extrairItinerarioDeImagem(dataUrl);
+}
+
+// Casa uma parada (cidade + UF) com os locais cadastrados. Devolve os melhores
+// candidatos (até 8), o primeiro sendo o mais provável.
+function _matchLocalParaParada(cidade, uf) {
+  var nc = norm(cidade), nu = norm(uf);
+  var words = nc.split(/\s+/).filter(function(w) { return w.length > 2; });
+  return _locais.map(function(l) {
+    var nd = norm(l.descricao);
+    var score = 0;
+    if (nc && nd.indexOf(nc) !== -1) score += 12;                 // cidade inteira como substring
+    words.forEach(function(w) { if (nd.indexOf(w) !== -1) score += 3; });
+    if (nu && new RegExp('(^|[^a-z])' + nu + '([^a-z]|$)').test(nd)) score += 5;   // UF presente
+    if (/rodoviari/.test(nd)) score += 1;                         // leve preferência por rodoviárias
+    return { l: l, score: score };
+  }).filter(function(x) { return x.score >= 8; })
+    .sort(function(a, b) { return b.score - a.score; })
+    .slice(0, 8)
+    .map(function(x) { return x.l; });
+}
+
+function _abrirRevisaoItinerario(paradas) {
+  _fecharRevisaoItinerario();
+
+  var rows = paradas.map(function(p, i) {
+    var cands = _matchLocalParaParada(p.cidade, p.uf);
+    var best  = cands.length ? cands[0] : null;
+    // Campo de busca (combobox) por linha: input mostra o local escolhido, o
+    // código real fica em data-cod; o dropdown é compartilhado (position fixed).
+    var pick = '<div class="itin-pick" data-cod="' + (best ? esc(best.codigo) : '') + '">'
+      + '<input class="itin-pick-input" type="text" autocomplete="off" placeholder="Buscar local…" '
+      +   'value="' + (best ? esc(best.descricao) : '') + '" />'
+      + '</div>';
+    return '<div class="itin-row' + (best ? '' : ' unmatched') + '">'
+      + '<span class="itin-rownum">' + (i + 1) + '</span>'
+      + '<div class="itin-detected">'
+      +   '<div class="itin-cidade">' + esc(p.cidade) + (p.uf ? ' - ' + esc(p.uf) : '') + '</div>'
+      +   '<div class="itin-orig">' + (best ? 'detectado no print' : '⚠ sem correspondência — escolha o local') + '</div>'
+      + '</div>'
+      + pick
+      + '<input class="itin-hora" type="text" value="' + esc(p.hora || '') + '" placeholder="HH:MM" maxlength="5" />'
+      + '</div>';
+  }).join('');
+
+  var html = '<div id="itinOverlay" class="itin-overlay">'
+    + '<div class="itin-modal">'
+    +   '<div class="itin-head">'
+    +     '<div class="itin-title">' + ico('map-pin', 16) + ' Revisar itinerário detectado</div>'
+    +     '<button class="itin-x" onclick="_fecharRevisaoItinerario()">' + ico('x', 16) + '</button>'
+    +   '</div>'
+    +   '<div class="itin-sub">Confira cada parada e o local correspondente. Ajuste o que precisar; o que ficar sem local não entra na sequência.</div>'
+    +   '<div class="itin-list" id="itinRevList">' + rows + '</div>'
+    +   '<div class="itin-foot">'
+    +     '<span class="itin-count">' + paradas.length + ' paradas detectadas</span>'
+    +     '<div style="display:flex;gap:8px;">'
+    +       '<button class="btn btn-ghost" onclick="_fecharRevisaoItinerario()">Cancelar</button>'
+    +       '<button class="btn btn-dark" onclick="_aplicarItinerario()">Preencher esquema</button>'
+    +     '</div>'
+    +   '</div>'
+    + '</div></div>';
+  document.body.insertAdjacentHTML('beforeend', html);
+  var ov = document.getElementById('itinOverlay');
+  ov.addEventListener('click', function(e) { if (e.target === ov) _fecharRevisaoItinerario(); });
+
+  // Dropdown compartilhado (fora do modal para não ser cortado pelo overflow).
+  var drop = document.createElement('div');
+  drop.id = 'itinPickDrop';
+  drop.className = 'sd itin-pick-drop';
+  document.body.appendChild(drop);
+
+  _bindItinPicks(ov);
+}
+
+// ── Combobox de local (busca) na revisão do itinerário ──────────
+var _itinActivePick = null;     // .itin-pick em edição no momento
+
+function _bindItinPicks(modal) {
+  modal.querySelectorAll('.itin-pick-input').forEach(function(inp) {
+    inp.addEventListener('focus', function() {
+      var wrap = inp.closest('.itin-pick');
+      if (_itinActivePick && _itinActivePick !== wrap) _revertItinPick(_itinActivePick);
+      _itinActivePick = wrap;
+      _positionItinDrop(inp);
+      _renderItinPick('');        // ao focar, mostra todos
+      inp.select();
+    });
+    inp.addEventListener('input', function() {
+      _itinActivePick = inp.closest('.itin-pick');
+      _positionItinDrop(inp);
+      _renderItinPick(inp.value);
+    });
+    // Reabre ao clicar num input já focado (após uma seleção que fechou o drop).
+    inp.addEventListener('click', function() {
+      var drop = document.getElementById('itinPickDrop');
+      if (drop && !drop.classList.contains('open')) {
+        _itinActivePick = inp.closest('.itin-pick');
+        _positionItinDrop(inp);
+        _renderItinPick('');
+        inp.select();
+      }
+    });
+  });
+  var listEl = modal.querySelector('.itin-list');
+  if (listEl) listEl.addEventListener('scroll', _closeItinPickDrop);
+}
+
+function _renderItinPick(q) {
+  var drop = document.getElementById('itinPickDrop');
+  if (!drop) return;
+  var nq = norm(q);
+  var list = _locais.filter(function(l) {
+    return !nq || norm(l.descricao).includes(nq) || norm(l.codigo).includes(nq) || norm(l.tipo || '').includes(nq);
+  }).slice(0, 60);
+
+  var items = '<div class="sdi itin-pick-ignore" data-cod="">— Ignorar esta parada —</div>';
+  if (!list.length && nq) {
+    items += '<div class="sd-empty">Nenhum local encontrado</div>';
+  } else {
+    items += list.map(function(l) {
+      return '<div class="sdi" data-cod="' + esc(l.codigo) + '">'
+        + '<div class="sdi-main">' + hl(l.descricao, q) + '</div>'
+        + '<div class="sdi-meta">' + hl(l.codigo, q) + (l.tipo ? ' · ' + esc(l.tipo) : '') + '</div>'
+        + '</div>';
+    }).join('');
+  }
+  drop.innerHTML = items;
+  drop.classList.add('open');
+}
+
+function _positionItinDrop(input) {
+  var d = document.getElementById('itinPickDrop');
+  if (!d) return;
+  var r = input.getBoundingClientRect();
+  var below = window.innerHeight - r.bottom - 8;
+  d.style.left  = r.left + 'px';
+  d.style.width = r.width + 'px';
+  if (below < 180 && r.top > below) {            // não cabe abaixo → abre acima
+    d.style.top = 'auto';
+    d.style.bottom = (window.innerHeight - r.top + 4) + 'px';
+  } else {
+    d.style.bottom = 'auto';
+    d.style.top = (r.bottom + 4) + 'px';
+  }
+}
+
+function _setItinPick(wrap, cod) {
+  wrap.dataset.cod = cod || '';
+  var input = wrap.querySelector('.itin-pick-input');
+  var row   = wrap.closest('.itin-row');
+  if (cod) {
+    var l = _locais.find(function(x) { return x.codigo === cod; });
+    input.value = l ? l.descricao : '';
+    if (row) row.classList.remove('unmatched', 'ignored');
+  } else {
+    input.value = '';
+    if (row) { row.classList.add('ignored'); row.classList.remove('unmatched'); }
+  }
+}
+
+// Texto do input volta a refletir o código já escolhido (descarta busca não confirmada).
+function _revertItinPick(wrap) {
+  var cod = wrap.dataset.cod;
+  var l   = cod ? _locais.find(function(x) { return x.codigo === cod; }) : null;
+  wrap.querySelector('.itin-pick-input').value = l ? l.descricao : '';
+}
+
+function _closeItinPickDrop() {
+  var d = document.getElementById('itinPickDrop');
+  if (d) d.classList.remove('open');
+  _itinActivePick = null;
+}
+
+// Seleção/fechamento do combobox (um listener global, ativo só com o modal aberto).
+document.addEventListener('mousedown', function(e) {
+  if (!document.getElementById('itinOverlay')) return;
+  var drop = document.getElementById('itinPickDrop');
+  if (drop && drop.contains(e.target)) {
+    var it = e.target.closest('.sdi');
+    if (it && _itinActivePick) {
+      e.preventDefault();                         // mantém o foco no input
+      _setItinPick(_itinActivePick, it.getAttribute('data-cod'));
+      _closeItinPickDrop();
+    }
+    return;
+  }
+  if (_itinActivePick && _itinActivePick.contains(e.target)) return;  // clicou no próprio input
+  if (_itinActivePick) { _revertItinPick(_itinActivePick); _closeItinPickDrop(); }
+});
+
+function _fecharRevisaoItinerario() {
+  var ov = document.getElementById('itinOverlay');
+  if (ov) ov.remove();
+  var drop = document.getElementById('itinPickDrop');
+  if (drop) drop.remove();
+  _itinActivePick = null;
+}
+
+function _aplicarItinerario() {
+  var rows  = document.querySelectorAll('#itinRevList .itin-row');
+  var novos = [], times = {};
+  rows.forEach(function(r) {
+    var cod = r.querySelector('.itin-pick').dataset.cod;
+    if (!cod) return;                                   // sem local → ignorada
+    var l = _locais.find(function(x) { return x.codigo === cod; });
+    if (!l) return;
+    novos.push({ idPonto: l.codigo, nomePonto: l.descricao, tipo: l.tipo || '',
+                 lat: l.lat || null, lng: l.lng || null, isNew: true });
+    var hm = (r.querySelector('.itin-hora').value || '').match(/(\d{1,2}):(\d{2})/);
+    if (hm) times[l.codigo] = ('0' + hm[1]).slice(-2) + ':' + hm[2];
+  });
+  if (!novos.length) { toast('Selecione ao menos uma parada para preencher.', 'info'); return; }
+
+  _seq = novos;
+  Object.keys(times).forEach(function(k) { _comercialTimes[k] = times[k]; });
+  _fecharRevisaoItinerario();
+  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+  toast(novos.length + ' paradas preenchidas. Revise os horários e salve.', 'success', 4000);
+}
+
 function addPonto(local) {
   document.getElementById('ptDrop').classList.remove('open');
   document.getElementById('ptSearch').value = '';
-  var after = parseInt(document.getElementById('insAfter').value);
+  var after = _getInsAfter();
   _seq.splice(after + 1, 0, {
     idPonto: local.codigo, nomePonto: local.descricao,
     tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
   });
   _pendingSelectIdx = after + 1;
   dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
-  document.getElementById('insAfter').value = String(after + 1);
+  _setInsAfter(after + 1);
 }
 
 /** Adiciona ponto sempre no final da sequência (usado pelas sugestões ANTT no painel lateral). */
@@ -4729,7 +6936,7 @@ function addPontoNoFim(local) {
   });
   _pendingSelectIdx = insertAt;
   dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
-  document.getElementById('insAfter').value = String(insertAt);
+  _setInsAfter(insertAt);
   var list = document.getElementById('seqList');
   if (list) list.scrollTop = list.scrollHeight;
 }
@@ -4767,7 +6974,7 @@ function addPontoNoMapa(local) {
   });
   _pendingSelectIdx = afterIdx + 1;
   dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
-  document.getElementById('insAfter').value = String(afterIdx + 1);
+  _setInsAfter(afterIdx + 1);
   // Rola a lista até o item inserido
   var list = document.getElementById('seqList');
   if (list) {
@@ -4813,7 +7020,7 @@ function salvarSeq() {
         idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
         horarioComercial: _comercialTimes[p.idPonto] || '',
         tempoLocal: _customStopTimes[p.idPonto] != null ? _customStopTimes[p.idPonto] : '',
-        tipoTrecho: _legVia[p.idPonto] || ''
+        tipoTrecho: _legViaSerialized(p.idPonto)
       };
     }));
 }

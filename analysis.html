@@ -6,7 +6,7 @@
 
   const AnalysisModule = (() => {
 
-    var TEMPO_ESPERADO_PADRAO = 40 * 60;
+    var TEMPO_ESPERADO_PADRAO = 30 * 60; // fallback 00:30 (fora da aba TEMPO_PERMANENCIA)
     var TOLERANCIA_S = 5 * 60; // margem de segurança antes de marcar excesso
 
     // Ajuste manual de status por ponto (seq → 'apoio' | 'ignorar').
@@ -87,11 +87,16 @@
     var _lastGrupoIdx = null;
 
     // Lê os vínculos do AppModule e monta as faixas de seq coloridas, ordenadas.
-    function _buildGruposMotorista() {
+    // soIdx (opcional): restringe o agrupamento a um único vínculo (modo "Por
+    // Motorista"). Sem ele, monta todos os grupos (modo Completo). Restringir
+    // evita que o ponto de rendição — extremo compartilhado entre dois
+    // motoristas — receba o cabeçalho do motorista anterior.
+    function _buildGruposMotorista(soIdx) {
       _grupos = [];
       var vinc = (typeof AppModule !== 'undefined' && AppModule.getVinculos) ? (AppModule.getVinculos() || []) : [];
       vinc.forEach(function(v, i) {
         if (v.seqMin == null || v.seqMax == null) return;
+        if (soIdx != null && i !== soIdx) return; // só o motorista ativo
         _grupos.push({
           idx:  i,
           min:  Math.min(v.seqMin, v.seqMax),
@@ -149,14 +154,16 @@
      * Renderiza a tabela de eventos (pontos) na nova coluna da direita.
      * @param {Array} enrichedTrip
      * @param {Array} [comparacao]
+     * @param {number} [grupoFiltroIdx] índice do vínculo ativo — restringe o
+     *   agrupamento a um único motorista (modo "Por Motorista").
      */
-    function renderPontosTable(enrichedTrip, comparacao) {
+    function renderPontosTable(enrichedTrip, comparacao, grupoFiltroIdx) {
       const tbody = document.getElementById('tbodyPontos');
       if (!tbody) return;
       tbody.innerHTML = '';
       _lastTrip = enrichedTrip || null;
       _lastComp = comparacao || null;
-      _buildGruposMotorista();
+      _buildGruposMotorista(grupoFiltroIdx);
       _lastGrupoIdx = null;
 
       // Mapa código → comparação
@@ -489,97 +496,245 @@
     //  renderAlertas — cards no novo layout + grid legado
     // ============================================================
 
-    function renderAlertas(alerts) {
-      // Nova seção de alertas
+    // Metadados de severidade (emoji + rótulo) para o pill do card.
+    var _SEV_META = {
+      critico:     { emoji: '🔴', label: 'Crítico' },
+      atencao:     { emoji: '🟠', label: 'Atenção' },
+      revisar:     { emoji: '🟡', label: 'Revisar' },
+      justificado: { emoji: '🟢', label: 'Justificado' }
+    };
+    var _TIPO_LABEL = {
+      VELOCIDADE_EXCESSIVA:   'Excesso Crítico de Velocidade',
+      VELOCIDADE_ALTA:        'Excesso de Velocidade',
+      VELOCIDADE_BAIXA:       'Velocidade Abaixo do Ideal',
+      PARADA_PROIBIDA:        'Parada em Local Proibido',
+      PARADA_LONGA:           'Parada Prolongada',
+      LOCAL_NAO_IDENTIFICADO: 'Local Não Identificado',
+      PONTO_NAO_VISITADO:     'Ponto Não Visitado'
+    };
+
+    function _sevFromTipo(tipo) {
+      if (tipo === 'VELOCIDADE_EXCESSIVA' || tipo === 'PARADA_PROIBIDA') return 'critico';
+      if (tipo === 'LOCAL_NAO_IDENTIFICADO' || tipo === 'PONTO_NAO_VISITADO') return 'revisar';
+      return 'atencao';
+    }
+
+    // Agrupa os alertas pendentes por categoria (para as subseções).
+    var _GRUPO_ORDEM = ['velocidade', 'parada_irregular', 'parada_longa', 'nao_visitado', 'nao_id', 'outros'];
+    function _grupoAlerta(tipo) {
+      if (String(tipo).indexOf('VELOCIDADE') === 0) return { key: 'velocidade',       label: 'Velocidade' };
+      if (tipo === 'PARADA_PROIBIDA')               return { key: 'parada_irregular', label: 'Paradas Irregulares' };
+      if (tipo === 'PARADA_LONGA')                  return { key: 'parada_longa',     label: 'Paradas Prolongadas' };
+      if (tipo === 'PONTO_NAO_VISITADO')            return { key: 'nao_visitado',     label: 'Pontos Não Visitados' };
+      if (tipo === 'LOCAL_NAO_IDENTIFICADO')        return { key: 'nao_id',           label: 'Locais Não Identificados' };
+      return { key: 'outros', label: 'Outros' };
+    }
+
+    var _PIN_SVG = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>';
+
+    function _chip(ico, val, label, hl) {
+      return '<span class="op-chip' + (hl ? ' hl' : '') + '">'
+        + ico + ' '
+        + (label ? '<span style="color:var(--text3);">' + label + '</span> ' : '')
+        + '<strong>' + _escHtml(val) + '</strong></span>';
+    }
+
+    // ============================================================
+    //  renderAlertas — cards modernos + severidade + justificativa
+    //  justState = { hash, justificativas: { alertKey: {categoria,motivo,observacao,status} } }
+    // ============================================================
+
+    function renderAlertas(alerts, justState) {
       var container = document.getElementById('alertasGrid');
-      if (container) {
-        container.innerHTML = '';
-      }
+      if (!container) return;
+      container.innerHTML = '';
 
-      var tipoConfig = {
-        VELOCIDADE_EXCESSIVA:  { label: 'Excesso Crítico de Velocidade', nivel: 'critico'      },
-        VELOCIDADE_ALTA:       { label: 'Excesso de Velocidade',         nivel: 'atencao'      },
-        VELOCIDADE_BAIXA:      { label: 'Velocidade Abaixo do Ideal',    nivel: 'atencao'      },
-        PARADA_PROIBIDA:       { label: 'Parada em Local Proibido',      nivel: 'critico'      },
-        PARADA_LONGA:          { label: 'Parada Prolongada',             nivel: 'parada'       },
-        LOCAL_NAO_IDENTIFICADO:{ label: 'Local Não Identificado',        nivel: 'info'         },
-        PONTO_NAO_VISITADO:    { label: 'Ponto Não Visitado',            nivel: 'nao-visitado' }
-      };
+      justState = justState || {};
+      var manualMap = justState.justificativas || {};
 
-      // Tipos válidos — alertas já foram filtrados na origem com tolerâncias corretas
-      var tiposValidos = Object.keys(tipoConfig);
-      var operacionais = alerts.filter(function(a) {
-        return tiposValidos.indexOf(a.tipo) !== -1;
+      var operacionais = (alerts || []).filter(function(a) {
+        return _TIPO_LABEL.hasOwnProperty(a.tipo);
       });
 
-      // Atualiza contadores
-      _setText('countAlertas', operacionais.length);
-
-      // Seção alertas visível apenas se há alertas
       var sectionAlertas = document.getElementById('sectionAlertas');
       if (sectionAlertas) {
         sectionAlertas.style.display = operacionais.length > 0 ? 'block' : 'none';
       }
 
-      if (container) {
-        if (operacionais.length === 0) {
-          container.innerHTML = '<div class="no-alerts">Nenhum alerta operacional identificado nesta viagem.</div>';
+      // Resolve o status de cada alerta: auto-justificado, override "reaberto",
+      // justificativa manual, ou pendente.
+      var pendentes = [], justificados = [];
+      operacionais.forEach(function(a) {
+        var manual   = manualMap[a.alertKey];
+        var reaberto = manual && manual.status === 'reaberto';
+        var justObj = null, isJust = false;
+
+        if (manual && !reaberto) {
+          justObj = { categoria: manual.categoria, motivo: manual.motivo, observacao: manual.observacao, auto: false };
+          isJust = true;
+        } else if (a.autoJustificado && !reaberto) {
+          justObj = a.justificativa || { categoria: '—', auto: true };
+          justObj.auto = true;
+          isJust = true;
+        }
+
+        var sev = isJust ? 'justificado' : (a.severidade || _sevFromTipo(a.tipo));
+        var entry = { a: a, sev: sev, justObj: justObj };
+        if (isJust) justificados.push(entry); else pendentes.push(entry);
+      });
+
+      var ordemSev = { critico: 0, atencao: 1, revisar: 2 };
+      pendentes.sort(function(x, y) {
+        var px = ordemSev[x.sev] == null ? 9 : ordemSev[x.sev];
+        var py = ordemSev[y.sev] == null ? 9 : ordemSev[y.sev];
+        return px - py;
+      });
+
+      // Contadores: badge = pendências; nota verde = justificados.
+      _setText('countAlertas', pendentes.length);
+      var jb = document.getElementById('countAlertasJustificados');
+      if (jb) {
+        if (justificados.length) {
+          jb.textContent = justificados.length + ' justificado' + (justificados.length > 1 ? 's' : '');
+          jb.style.display = '';
         } else {
-          var ordem = ['VELOCIDADE_EXCESSIVA', 'VELOCIDADE_ALTA', 'VELOCIDADE_BAIXA', 'PARADA_PROIBIDA', 'PARADA_LONGA', 'LOCAL_NAO_IDENTIFICADO', 'PONTO_NAO_VISITADO'];
-          var grupos = {};
-          operacionais.forEach(function(a) {
-            if (!grupos[a.tipo]) grupos[a.tipo] = [];
-            grupos[a.tipo].push(a);
-          });
-
-          ordem.forEach(function(tipo) {
-            if (!grupos[tipo]) return;
-            var cfg = tipoConfig[tipo] || { label: tipo, nivel: 'info' };
-            grupos[tipo].forEach(function(alerta) {
-              var card = document.createElement('div');
-              card.className = 'alert-card ' + cfg.nivel;
-
-              // Monta linha de contexto para alertas de velocidade (campos novos)
-              var ctxHtml = '';
-              if (alerta.velocidadeKmh != null && alerta.distKm != null && alerta.tempoMin != null) {
-                var classTxt = alerta.classificacao === 'EXCESSO_CRITICO' ? 'Excesso crítico'
-                             : alerta.classificacao === 'EXCESSO'         ? 'Excesso de velocidade'
-                             : alerta.classificacao === 'BAIXA'           ? 'Abaixo do ideal'
-                             : '';
-                ctxHtml = '<div class="alert-ctx">'
-                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg> ' + _escHtml(alerta.trecho || '') + '</span>'
-                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M5 3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2H5z"/><line x1="3" y1="9" x2="7" y2="9"/><line x1="3" y1="14" x2="5" y2="14"/><line x1="10" y1="3" x2="10" y2="7"/><line x1="15" y1="3" x2="15" y2="5"/></svg> ' + alerta.distKm.toFixed(1) + ' km</span>'
-                  + '<span class="alert-ctx-item">⏱ ' + alerta.tempoMin + ' min</span>'
-                  + '<span class="alert-ctx-item"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="m12 14 4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg> ' + alerta.velocidadeKmh + ' km/h</span>'
-                  + (classTxt ? '<span class="alert-ctx-badge">' + classTxt + '</span>' : '')
-                  + '</div>';
-              } else if (alerta.trecho) {
-                ctxHtml = '<div class="alert-trecho">Trecho: ' + _escHtml(alerta.trecho) + '</div>';
-              }
-
-              var btnOcorrencia = tipo === 'PARADA_PROIBIDA' && alerta.seq != null
-                ? '<div style="margin-top:6px;">'
-                  + '<button '
-                  + 'onclick="if(typeof AppModule!==\'undefined\')AppModule.criarParadaIrregularInline(this,' + Number(alerta.seq) + ')" '
-                  + 'style="font-size:11px;padding:2px 10px;border-radius:4px;border:1px solid #c0392b;background:transparent;color:#c0392b;cursor:pointer;font-weight:600;" '
-                  + 'onmouseover="if(!this.disabled){this.style.background=\'#c0392b\';this.style.color=\'#fff\';}" '
-                  + 'onmouseout="if(!this.disabled){this.style.background=\'transparent\';this.style.color=\'#c0392b\';}"'
-                  + '>+ Criar ocorrência</button></div>'
-                : '';
-
-              card.innerHTML =
-                '<span class="alert-icon"></span>' +
-                '<div class="alert-body">' +
-                  '<div class="alert-title">' + cfg.label + '</div>' +
-                  '<div class="alert-desc">' + _escHtml(alerta.descricao) + '</div>' +
-                  ctxHtml +
-                  btnOcorrencia +
-                '</div>';
-              container.appendChild(card);
-            });
-          });
+          jb.style.display = 'none';
         }
       }
+
+      if (operacionais.length === 0) {
+        container.innerHTML = '<div class="op-empty"><span class="op-empty-ico">✅</span>Nenhum alerta operacional identificado nesta viagem.</div>';
+        return;
+      }
+
+      if (pendentes.length > 0) {
+        // Agrupa por categoria (Velocidade, Paradas Irregulares, etc.)
+        var grupos = {};
+        pendentes.forEach(function(e) {
+          var g = _grupoAlerta(e.a.tipo);
+          if (!grupos[g.key]) grupos[g.key] = { label: g.label, items: [] };
+          grupos[g.key].items.push(e);
+        });
+
+        _GRUPO_ORDEM.forEach(function(gkey) {
+          var grp = grupos[gkey];
+          if (!grp) return;
+
+          var head = document.createElement('div');
+          head.className = 'op-subgroup';
+          head.setAttribute('data-guide-anchor', '');
+          head.setAttribute('data-guide-label', grp.label + ' (' + grp.items.length + ')');
+          head.innerHTML =
+            '<span>' + grp.label + '</span>'
+            + '<span class="op-subgroup-count">' + grp.items.length + '</span>'
+            + '<span class="op-subgroup-line"></span>';
+          container.appendChild(head);
+
+          grp.items.forEach(function(e) {
+            container.appendChild(_buildAlertCard(e.a, e.sev, e.justObj));
+          });
+        });
+      } else {
+        var clear = document.createElement('div');
+        clear.className = 'op-empty';
+        clear.innerHTML = '<span class="op-empty-ico">✅</span>Nenhuma pendência — todos os alertas foram justificados.';
+        container.appendChild(clear);
+      }
+
+      if (justificados.length) {
+        var divider = document.createElement('div');
+        divider.className = 'op-group-divider collapsed';
+        divider.setAttribute('data-guide-anchor', '');
+        divider.setAttribute('data-guide-label', 'Justificados (' + justificados.length + ')');
+        divider.innerHTML =
+          '<svg class="op-group-caret" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="12" height="12"><polyline points="6 9 12 15 18 9"/></svg>'
+          + '<span>Justificados</span>'
+          + '<span class="op-group-count">' + justificados.length + '</span>'
+          + '<span class="op-group-line"></span>';
+
+        var body = document.createElement('div');
+        body.className = 'op-group-body collapsed';
+        justificados.forEach(function(e) {
+          body.appendChild(_buildAlertCard(e.a, 'justificado', e.justObj));
+        });
+
+        divider.addEventListener('click', function() {
+          divider.classList.toggle('collapsed');
+          body.classList.toggle('collapsed');
+        });
+
+        container.appendChild(divider);
+        container.appendChild(body);
+      }
+
+      // Atualiza o guia lateral (subseções Pendentes/Justificados mudaram)
+      if (typeof SectionGuide !== 'undefined') SectionGuide.refresh();
+    }
+
+    function _buildAlertCard(a, sev, justObj) {
+      var meta = _SEV_META[sev] || { emoji: '⚪', label: 'Info' };
+      var titulo = _TIPO_LABEL[a.tipo] || a.tipo;
+      var isVel = a.velocidadeKmh != null && a.distKm != null;
+
+      var card = document.createElement('div');
+      card.className = 'op-alert-card sev-' + sev;
+      card.dataset.alertKey    = a.alertKey || '';
+      card.dataset.alertTipo   = a.tipo || '';
+      card.dataset.alertTitle  = titulo;
+      card.dataset.alertTrecho = a.trecho || '';
+
+      var html = ''
+        + '<div class="op-alert-head">'
+        +   '<div class="op-alert-head-left">'
+        +     '<span class="op-sev-pill">' + meta.emoji + ' ' + meta.label + '</span>'
+        +     '<span class="op-alert-title">' + _escHtml(titulo) + '</span>'
+        +   '</div>'
+        + '</div>';
+
+      if (a.trecho) {
+        html += '<div class="op-alert-trecho">' + _PIN_SVG + '<span>' + _escHtml(a.trecho) + '</span></div>';
+      }
+
+      var chips = [];
+      if (a.distKm != null)        chips.push(_chip('📏', a.distKm.toFixed(1) + ' km'));
+      if (a.tempoMin != null)      chips.push(_chip('⏱', _fmtHHMM(a.tempoMin), 'HH:mm'));
+      if (a.velocidadeKmh != null) chips.push(_chip('🚍', a.velocidadeKmh + ' km/h', 'média'));
+      if (isVel)                   chips.push(_chip('🎯', (a.velEsperadaMin || 80) + '–' + (a.velEsperadaMax || 90) + ' km/h', 'esperada', true));
+      if (a.contextoLabel)         chips.push(_chip('🛣️', a.contextoLabel));
+      if (chips.length) html += '<div class="op-chips">' + chips.join('') + '</div>';
+
+      if (a.diagnostico) {
+        html += '<div class="op-diag"><span class="op-diag-ico">🧠</span>'
+          + '<div><strong>Diagnóstico:</strong> ' + _escHtml(a.diagnostico) + '</div></div>';
+      }
+
+      if (justObj) {
+        html += '<div class="op-just">'
+          + '<div class="op-just-head">📝 Justificativa'
+          + (justObj.auto ? ' <span class="op-just-auto">(automática)</span>' : '')
+          + '</div>'
+          + '<span class="op-just-cat">' + _escHtml(justObj.categoria || '—') + '</span>'
+          + (justObj.motivo ? ' ' + _escHtml(justObj.motivo) : '')
+          + (justObj.observacao ? '<div style="margin-top:5px;">' + _escHtml(justObj.observacao) + '</div>' : '')
+          + '</div>';
+      }
+
+      var actions = [];
+      if (sev !== 'justificado') {
+        actions.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.abrirModalJustificar(this)">📝 Justificar</button>');
+        if (a.tipo === 'PARADA_PROIBIDA' && a.seq != null) {
+          actions.push('<button type="button" class="op-btn-sm danger" onclick="AppModule.criarParadaIrregularInline(this,' + Number(a.seq) + ')">+ Criar ocorrência</button>');
+        } else if (a.tipo === 'PARADA_LONGA' && a.seq != null) {
+          actions.push('<button type="button" class="op-btn-sm" onclick="AppModule.criarExcessoPermanenciaInline(this,' + Number(a.seq) + ')">+ Criar ocorrência</button>');
+        }
+      } else {
+        var autoFlag = (justObj && justObj.auto) ? '1' : '';
+        actions.push('<button type="button" class="op-btn-sm" data-auto="' + autoFlag + '" onclick="AppModule.reabrirAlerta(this)">↩ Reabrir</button>');
+      }
+      if (actions.length) html += '<div class="op-alert-actions">' + actions.join('') + '</div>';
+
+      card.innerHTML = html;
+      return card;
     }
 
     // ============================================================
@@ -797,12 +952,13 @@
       return '<span class="tag tag-status-critico" title="Excesso crítico de ' + Math.round(excessoS/60) + ' min">Crítico</span>';
     }
 
+    // Tempo de parada esperado (segundos). Fonte única: aba TEMPO_PERMANENCIA
+    // (por código), calculada no servidor e entregue em ponto.tempoEsperadoMin.
+    // Quem não está na aba usa o fallback de 30min (TEMPO_ESPERADO_PADRAO).
     function _getTempoEsperado(ponto) {
       if (!ponto) return TEMPO_ESPERADO_PADRAO;
       if (ponto.proibido42) return 0; // qualquer parada em local proibido = excesso total
-      var nome = String(ponto.ponto || '').toUpperCase();
-      if (/RODOVI[AÁ]RIA|RODOVIARIA/.test(nome)) return 15 * 60;
-      if (/GARAGEM/.test(nome)) return 20 * 60;
+      if (ponto.tempoEsperadoMin != null) return ponto.tempoEsperadoMin * 60;
       return TEMPO_ESPERADO_PADRAO;
     }
 
@@ -866,6 +1022,15 @@
       if (h > 0 && m > 0) return h + 'h ' + m + 'min';
       if (h > 0) return h + 'h';
       return m + 'min';
+    }
+
+    // Formata minutos como "HH:mm" (ex.: 227 → "03:47").
+    function _fmtHHMM(minutes) {
+      if (minutes == null) return '—';
+      var total = Math.round(minutes);
+      var h = Math.floor(total / 60);
+      var m = total % 60;
+      return (h < 10 ? '0' + h : h) + ':' + (m < 10 ? '0' + m : m);
     }
 
     // Extrai "HH:MM" de um timestamp ("YYYY-MM-DD HH:MM:SS" ou "HH:MM").

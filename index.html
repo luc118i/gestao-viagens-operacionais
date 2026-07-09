@@ -25,6 +25,12 @@
   </head>
   <body>
     <div class="app-wrapper">
+      <!-- ========== GUIA DE SEÇÕES (rail lateral) ========== -->
+      <nav class="section-guide" id="sectionGuide" aria-label="Guia de seções">
+        <div class="guide-title">Seções</div>
+        <ul class="guide-list" id="guideList"></ul>
+      </nav>
+
       <!-- ========== HEADER ========== -->
       <header class="app-header">
         <div class="header-left">
@@ -203,6 +209,23 @@
 
       </section>
 
+      <!-- ========== ALTERNADOR DE VISÃO (Relatório × Diagnóstico) ========== -->
+      <section id="sectionViewSwitcher" style="display:none; padding:16px 24px 20px; max-width:1200px; margin:0 auto; width:100%;">
+        <div class="view-switcher" role="tablist">
+          <button id="viewBtn_REPORT" class="view-tab active" role="tab" aria-selected="true"
+                  onclick="DiagnosticoModule.showView('REPORT')">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            Relatório Operacional
+          </button>
+          <button id="viewBtn_DIAG" class="view-tab" role="tab" aria-selected="false"
+                  onclick="DiagnosticoModule.showView('DIAG')">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>
+            Diagnóstico Inteligente
+            <span class="view-tab-badge">IA</span>
+          </button>
+        </div>
+      </section>
+
       <!-- ========== SEÇÃO RESUMO ========== -->
       <section
         class="section section-resumo"
@@ -344,10 +367,16 @@
         >
           <div style="font-size: 13px; font-weight: 700; color: var(--text)">
             Alertas Operacionais
+            <span id="countAlertasJustificados" style="display:none; font-weight:600; font-size:11px; color:var(--verde); margin-left:6px;"></span>
           </div>
           <span id="countAlertas" class="count-badge">0</span>
         </div>
-        <div class="alertas-list" id="alertasGrid"></div>
+        <div class="op-alerts" id="alertasGrid"></div>
+      </section>
+
+      <!-- ========== SEÇÃO DIAGNÓSTICO INTELIGENTE ========== -->
+      <section id="sectionDiagnostico" style="display:none; padding:0 24px 24px; max-width:1200px; margin:0 auto; width:100%;">
+        <div id="diagContent"></div>
       </section>
 
       <!-- ========== SEÇÃO VELOCIDADE (tabs legado — oculto, para compatibilidade) ========== -->
@@ -489,6 +518,55 @@
       </div>
     </div>
 
+    <!-- Modal: Justificar Alerta -->
+    <div class="modal-overlay" id="modalJustificarAlerta">
+      <div class="modal">
+        <div class="modal-header">
+          <span class="modal-title">Justificar alerta</span>
+          <button class="modal-close" id="btnCloseJustificar" type="button" onclick="AppModule.fecharModalJustificar()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="op-alert-ref" id="justificarRef">—</div>
+        <div class="form-group">
+          <label class="form-label">Categoria da justificativa</label>
+          <select class="form-input" id="justificarCategoria">
+            <option value="Via urbana">Via urbana</option>
+            <option value="Trânsito intenso">Trânsito intenso</option>
+            <option value="Obras">Obras</option>
+            <option value="Acesso à garagem">Acesso à garagem</option>
+            <option value="Condição operacional prevista">Condição operacional prevista</option>
+            <option value="Outro">Outro</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Motivo</label>
+          <input type="text" class="form-input" id="justificarMotivo" placeholder="Ex: trecho em área urbana com semáforos" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">Observação (opcional)</label>
+          <textarea class="form-input" id="justificarObs" placeholder="Detalhes adicionais para auditoria..."></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" id="btnCancelJustificar" type="button" onclick="AppModule.fecharModalJustificar()">Cancelar</button>
+          <button class="btn btn-primary" id="btnConfirmJustificar" type="button" onclick="AppModule.salvarJustificativa()">Salvar justificativa</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Aviso de alertas pendentes antes de gerar o relatório -->
+    <div class="modal-overlay" id="modalConfirmarPendencias" style="z-index: 1200;">
+      <div class="modal">
+        <div class="modal-header">
+          <span class="modal-title" style="display:flex;align-items:center;gap:8px;"><span style="font-size:18px;">⚠️</span> Alertas pendentes</span>
+          <button class="modal-close" type="button" onclick="AppModule.fecharModalPendencias()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div id="pendenciasMsg" style="font-size:13px;color:var(--text2);line-height:1.6;"></div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" type="button" onclick="AppModule.fecharModalPendencias()">Revisar alertas</button>
+          <button class="btn btn-primary" type="button" onclick="AppModule.confirmarGerarComPendencias()">Gerar mesmo assim</button>
+        </div>
+      </div>
+    </div>
+
     <!-- Modal: Motoristas da Viagem -->
     <div class="modal-overlay" id="modalMotorista">
       <div class="modal" style="width:520px; max-height:85vh; display:flex; flex-direction:column; overflow:hidden;">
@@ -513,13 +591,21 @@
       </div>
     </div>
 
-    <!-- Modal: Gerar Relatório -->
-    <div class="modal-overlay" id="modalRelatorio">
-      <div class="modal" style="width: 480px">
-        <div class="modal-header">
-          <span class="modal-title">Gerar Relatório</span>
-          <button class="modal-close" id="btnCloseRelatorioModal"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+    <!-- Tela: Gerar Relatório -->
+    <div class="report-screen" id="modalRelatorio">
+      <div class="report-screen-panel">
+        <div class="report-screen-header">
+          <button class="rs-back" id="btnCloseRelatorioModal" title="Voltar">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="18" height="18"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+          </button>
+          <div>
+            <div class="report-screen-title">Gerar Relatório</div>
+            <div class="report-screen-sub">Configure as opções e gere o relatório da viagem</div>
+          </div>
         </div>
+        <div class="report-screen-body">
+          <div class="report-screen-body-inner">
+            <div class="rs-cols">
         <div class="form-group">
           <label class="form-label">Tipo de Relatório</label>
           <div style="display: flex; gap: 16px; margin-top: 6px; flex-wrap: wrap;">
@@ -569,6 +655,20 @@
             </label>
           </div>
         </div>
+        <div class="form-group">
+          <label class="form-label">Formato do arquivo</label>
+          <div class="fmt-switch" style="margin-top:6px;">
+            <label class="fmt-opt">
+              <input type="radio" name="formatoRelatorioModal" value="pdf" checked />
+              <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>PDF</span>
+            </label>
+            <label class="fmt-opt">
+              <input type="radio" name="formatoRelatorioModal" value="docx" />
+              <span><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>Word (.docx)</span>
+            </label>
+          </div>
+        </div>
+            </div><!-- /rs-cols -->
         <div id="relMotoristaFields">
           <div class="form-group">
             <label class="form-label">Motorista Vinculado</label>
@@ -586,6 +686,32 @@
             <div class="form-group">
               <label class="form-label">Ponto B (fim)</label>
               <select class="form-input" id="relPontoBModal"></select>
+            </div>
+          </div>
+          <div class="form-group" style="margin-top: 2px;">
+            <label class="form-label">Responsáveis pelo trecho (opcional)</label>
+            <div id="relMotoristasTrechoList" style="display:flex;flex-direction:column;gap:8px;"></div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+              <button
+                type="button"
+                id="btnAddMotoristaTrecho"
+                class="btn btn-ghost"
+                style="font-size:12px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+                Adicionar motorista
+              </button>
+              <button
+                type="button"
+                id="btnCadastrarMotoristaTrecho"
+                style="font-size:12px;padding:6px 12px;display:inline-flex;align-items:center;gap:6px;cursor:pointer;border:1px solid var(--laranja);background:transparent;color:var(--laranja);border-radius:8px;font-weight:600;transition:all 0.15s;"
+                onmouseover="this.style.background='var(--laranja)';this.style.color='#fff';"
+                onmouseout="this.style.background='transparent';this.style.color='var(--laranja)';"
+                title="Cadastrar um motorista novo no sistema e vinculá-lo a este trecho"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg>
+                Cadastrar novo motorista
+              </button>
             </div>
           </div>
         </div>
@@ -615,12 +741,14 @@
             </span>
           </label>
         </div>
-        <div class="modal-footer">
+          </div><!-- /report-screen-body-inner -->
+        </div><!-- /report-screen-body -->
+        <div class="report-screen-footer">
           <button class="btn btn-ghost" id="btnCancelRelatorioModal">
             Cancelar
           </button>
           <button class="btn btn-primary" id="btnConfirmRelatorioModal">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>Gerar
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:5px;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>Gerar Relatório
           </button>
         </div>
       </div>
@@ -654,5 +782,6 @@
     <script>var WEB_APP_URL = '<?= webAppUrl ?>';</script>
     <?!= include('map') ?> <?!= include('analysis') ?> <?!= include('ui') ?>
     <?!= include('app') ?>
+    <?!= include('diagnostico') ?>
   </body>
 </html>

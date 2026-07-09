@@ -170,7 +170,9 @@ var EsquemasService = (() => {
       nome_linha: ['nome_linha', 'nome', 'linha', 'descricao'],
       horario:    ['horario', 'hora', 'hora_partida', 'horario_partida', 'time'],
       sentido:    ['sentido', 'direcao', 'direction', 'destino', 'tipo_viagem', 'tipo', 'volta_ida', 'ida_volta', 'sentido_linha'],
-      tipo_via:   ['tipo_via', 'tipovia', 'tipo_de_via', 'via_padrao', 'via']
+      tipo_via:   ['tipo_via', 'tipovia', 'tipo_de_via', 'via_padrao', 'via'],
+      cod_linha:  ['cod_linha', 'codigo_linha', 'cod_da_linha', 'codlinha'],
+      ajustado:   ['ajustado', 'analisado', 'revisado', 'ajuste']
     });
 
     var esquemas = [];
@@ -181,6 +183,8 @@ var EsquemasService = (() => {
       var horario   = colMap.horario !== undefined ? _formatHorario(row[colMap.horario]) : '';
       var sentido   = _getCell(row, colMap.sentido);
       var tipoVia   = _getCell(row, colMap.tipo_via);
+      var codLinha  = _getCell(row, colMap.cod_linha);
+      var ajustado  = _getCell(row, colMap.ajustado);
 
       // Fallback: extrai IDA/VOLTA do nome_linha quando coluna sentido está vazia
       if (!sentido && nomeLinha) {
@@ -195,7 +199,9 @@ var EsquemasService = (() => {
         nome_linha: nomeLinha,
         horario:    horario,
         sentido:    sentido,
-        tipo_via:   tipoVia
+        tipo_via:   tipoVia,
+        cod_linha:  codLinha,
+        ajustado:   _ehAjustado(ajustado)
       });
     }
 
@@ -283,6 +289,16 @@ var EsquemasService = (() => {
       }
     });
     return result;
+  }
+
+  /**
+   * Interpreta o valor da coluna "ajustado" como booleano.
+   * Considera marcado quando há conteúdo que não seja um "não" explícito.
+   */
+  function _ehAjustado(val) {
+    var s = String(val == null ? '' : val).trim().toLowerCase();
+    if (!s) return false;
+    return ['nao', 'não', 'n', 'no', 'false', '0', 'pendente'].indexOf(s) === -1;
   }
 
   /**

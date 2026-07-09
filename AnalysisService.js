@@ -17,10 +17,23 @@ var AnalysisService = (() => {
   const DIST_MIN_ALERTA_KM = 3;   // segmento mínimo para gerar alerta de velocidade
   const TEMPO_MIN_ALERTA_S = 90;  // tempo mínimo (1,5 min) para calcular velocidade
 
+  // ── Detecção de contexto urbano (auto-justifica velocidade baixa) ──
+  // Trechos curtos com acesso a garagem/terminal ou velocidade cadastrada
+  // baixa são reduções operacionais normais (trânsito, semáforos, acesso),
+  // NÃO inconsistências. Só se aplica a VELOCIDADE_BAIXA.
+  const DIST_URBANO_TERMINAL_KM = 15; // trecho ≤ isso perto de terminal → urbano
+  const DIST_URBANO_KM          = 12; // trecho ≤ isso + via lenta → urbano
+  const DIST_URBANO_FRACO_KM    = 8;  // trecho muito curto → revisar (sinal fraco)
+  const VEL_CADASTRO_URBANO     = 60; // vel. máx. cadastrada do local ≤ isso → via lenta
+
   // ── Paradas ──────────────────────────────────────────────────
   const LIMITE_PARADA_MINIMA_S  = 5 * 60; // ignora micromanobras / cercas curtas
   const LIMITE_PARADA_LONGA_MIN = 30;     // minutos
   const LIMITE_PARADA_TERMINAL  = 60;     // minutos (garagem/rodoviária)
+
+  // Tempo de parada esperado para pontos fora da aba TEMPO_PERMANENCIA.
+  // Mesmo padrão usado no editor de esquemas (STOP_PADRAO_MIN = 30).
+  const STOP_PADRAO_MIN = 30;
 
   // ============================================================
   //  PARSE DO CSV
@@ -41,6 +54,10 @@ var AnalysisService = (() => {
 
     const locais = SheetsService.getLocais();
     const locaisMap = _buildLocaisMap(locais);
+
+    // Tempo de permanência por código de local (aba TEMPO_PERMANENCIA).
+    // { codigo: minutos } — quem não está na aba usa STOP_PADRAO_MIN (30).
+    const temposPerm = SheetsService.getTemposPermanencia();
 
     const lines = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
     const nonEmpty = lines.filter(l => l.trim() !== '');
@@ -85,6 +102,12 @@ var AnalysisService = (() => {
       // Matching com a base de locais
       const localMatch = _matchLocal(pontoBruto, locaisMap);
 
+      // Tempo de parada esperado: aba TEMPO_PERMANENCIA (por código) → fallback 30min.
+      const codigoLocal = localMatch ? String(localMatch.codigo) : null;
+      const tempoEsperadoMin = (codigoLocal != null && temposPerm[codigoLocal] !== undefined)
+        ? temposPerm[codigoLocal]
+        : STOP_PADRAO_MIN;
+
       enriched.push({
         seq:          i,
         veiculo:      veiculo,
@@ -104,6 +127,7 @@ var AnalysisService = (() => {
         rodoviaria:   localMatch ? localMatch.rodoviaria   : false,
         garagem:      localMatch ? localMatch.garagem      : false,
         codigo:       localMatch ? localMatch.codigo       : null,
+        tempoEsperadoMin: tempoEsperadoMin,
         matched:      localMatch !== null
       });
     }
@@ -228,6 +252,9 @@ var AnalysisService = (() => {
           });
         }
         // VEL_BAIXA_MAX ≤ vel ≤ VEL_EXCESSO_MIN → faixa ideal, sem alerta
+
+        // Classifica severidade + contexto + diagnóstico (auto-justifica urbano)
+        segAlertas.forEach(function (a) { _classificarSegAlerta(a, A, B); });
       }
 
       segments.push({
@@ -252,45 +279,53 @@ var AnalysisService = (() => {
     enrichedTrip.forEach((pt, idx) => {
       // Local não identificado
       if (!pt.matched) {
-        alerts.push({
+        alerts.push(_classificarPtAlerta({
           tipo: 'LOCAL_NAO_IDENTIFICADO',
           descricao: `Ponto "${pt.ponto}" não encontrado na base de locais`,
           nivel: 'info',
+          severidade: 'revisar',
           seq: pt.seq,
-          trecho: pt.ponto
-        });
+          trecho: pt.ponto,
+          diagnostico: `O ponto "${pt.ponto}" não foi encontrado na base de locais. Sem coordenadas, distância e velocidade do trecho não podem ser validadas — recomenda-se cadastrar o local.`
+        }, pt));
       }
 
       // Parada em local proibido (tipo 42 — aceita "42", "Local Não Autorizado - 42", etc.)
       const _isTipo42 = (t) => { const s = String(t || '').trim(); if (/\b42\b/.test(s)) return true; return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').includes('nao autorizado'); };
       if (pt.matched && _isTipo42(pt.tipo) && pt.parada_s > 0) {
         pt.proibido42 = true;
-        alerts.push({
+        alerts.push(_classificarPtAlerta({
           tipo: 'PARADA_PROIBIDA',
           descricao: `Parada de ${TimeUtils.formatDuration(pt.parada_s)} em local proibido: "${pt.ponto}"`,
           nivel: 'critico',
+          severidade: 'critico',
           seq: pt.seq,
-          trecho: pt.ponto
-        });
+          trecho: pt.ponto,
+          diagnostico: `Parada de ${TimeUtils.formatDuration(pt.parada_s)} registrada em local não autorizado ("${pt.ponto}"). Configura inconsistência operacional crítica que deve ser tratada como ocorrência.`
+        }, pt));
       }
 
       // Parada longa
       if (pt.parada_s > 0) {
         const paradaMin = TimeUtils.toMinutes(pt.parada_s);
-        const nomePt = String(pt.ponto || '').toUpperCase();
-        const limiteMin = /RODOVI[AÁ]RIA|RODOVIARIA/.test(nomePt) ? 15
-          : /GARAGEM/.test(nomePt) ? 20
-          : 40; // padrão: controles e outros pontos operacionais
+        // Limite = aba TEMPO_PERMANENCIA (por código) → fallback 30min.
+        const limiteMin = (pt.tempoEsperadoMin != null) ? pt.tempoEsperadoMin : STOP_PADRAO_MIN;
         const TOLERANCIA_MIN = 5;
 
         if (paradaMin > limiteMin + TOLERANCIA_MIN) {
-          alerts.push({
+          const excedente = Math.round(paradaMin - limiteMin);
+          alerts.push(_classificarPtAlerta({
             tipo: 'PARADA_LONGA',
             descricao: `Parada de ${TimeUtils.formatDuration(pt.parada_s)} em "${pt.ponto}" (limite: ${limiteMin}min)`,
             nivel: paradaMin > limiteMin * 2 ? 'critico' : 'atencao',
+            severidade: paradaMin > limiteMin * 2 ? 'critico' : 'atencao',
             seq: pt.seq,
-            trecho: pt.ponto
-          });
+            trecho: pt.ponto,
+            diagnostico: `Permanência de ${TimeUtils.formatDuration(pt.parada_s)} em "${pt.ponto}", ${excedente} min acima do limite de ${limiteMin} min. `
+              + (paradaMin > limiteMin * 2
+                  ? 'Excesso expressivo — forte indício de parada não prevista.'
+                  : 'Excesso moderado — vale revisar o motivo da permanência.')
+          }, pt));
         }
       }
     });
@@ -328,11 +363,131 @@ var AnalysisService = (() => {
       velocidadeMedia: veloMedia,
       maiorParada:     maiorParada,
       totalAlertas:    alerts.length,
-      alertasCriticos: alerts.filter(a => a.nivel === 'critico').length,
+      alertasCriticos: alerts.filter(a => a.severidade === 'critico' || a.nivel === 'critico').length,
+      alertasJustificados: alerts.filter(a => a.autoJustificado || a.severidade === 'justificado').length,
+      alertasPendentes:    alerts.filter(a => !(a.autoJustificado || a.severidade === 'justificado')).length,
       pontosNaoId:     enrichedTrip.filter(p => !p.matched).length
     };
 
     return { segments, alerts, summary };
+  }
+
+  // ============================================================
+  //  CLASSIFICAÇÃO CONTEXTUAL DE ALERTAS
+  // ============================================================
+
+  /**
+   * Detecta o contexto operacional de um trecho A→B para decidir se uma
+   * velocidade baixa é justificável (via urbana / acesso a garagem /
+   * saída-chegada de terminal) em vez de inconsistência.
+   * @returns {{contexto:string, label:(string|null), categoria:(string|null)}}
+   */
+  function _detectarContexto(A, B, distKm) {
+    const nomeA = String((A && A.ponto) || '').toUpperCase();
+    const nomeB = String((B && B.ponto) || '').toUpperCase();
+    const reTerminal = /TERMINAL|RODOVIARIA|RODOVIÁRIA/;
+
+    const garagem  = (A && A.garagem) || (B && B.garagem) || /GARAGEM/.test(nomeA) || /GARAGEM/.test(nomeB);
+    const terminal = (A && A.rodoviaria) || (B && B.rodoviaria) || reTerminal.test(nomeA) || reTerminal.test(nomeB);
+    const velLenta = ((A && A.vel_max > 0 && A.vel_max <= VEL_CADASTRO_URBANO)) ||
+                     ((B && B.vel_max > 0 && B.vel_max <= VEL_CADASTRO_URBANO));
+
+    if (garagem) {
+      return { contexto: 'garagem', label: 'Acesso à garagem', categoria: 'Acesso à garagem' };
+    }
+    if (terminal && distKm != null && distKm <= DIST_URBANO_TERMINAL_KM) {
+      return { contexto: 'terminal', label: 'Saída/chegada de terminal', categoria: 'Condição operacional prevista' };
+    }
+    if (distKm != null && distKm <= DIST_URBANO_KM && (velLenta || terminal)) {
+      return { contexto: 'urbano', label: 'Área urbana', categoria: 'Via urbana' };
+    }
+    if (distKm != null && distKm <= DIST_URBANO_FRACO_KM) {
+      // Sinal fraco: trecho curto, mas sem flag urbano/terminal — só revisar.
+      return { contexto: 'urbano_fraco', label: 'Trecho curto', categoria: null };
+    }
+    return { contexto: 'rodovia', label: null, categoria: null };
+  }
+
+  /**
+   * Enriquece um alerta de segmento (velocidade) com severidade, contexto,
+   * diagnóstico determinístico e — quando o contexto é justificável —
+   * auto-justificativa. Muta e retorna o próprio alerta.
+   */
+  function _classificarSegAlerta(a, A, B) {
+    a.velEsperadaMin = VEL_IDEAL_MIN;
+    a.velEsperadaMax = VEL_IDEAL_MAX;
+    a.alertKey = a.tipo + '|' + (a.trecho || ((A && A.ponto) + ' → ' + (B && B.ponto)));
+
+    const ctx = _detectarContexto(A, B, a.distKm);
+    a.contexto      = ctx.contexto;
+    a.contextoLabel = ctx.label;
+
+    if (a.tipo === 'VELOCIDADE_EXCESSIVA') {
+      a.severidade = 'critico';
+    } else if (a.tipo === 'VELOCIDADE_ALTA') {
+      a.severidade = 'atencao';
+    } else if (a.tipo === 'VELOCIDADE_BAIXA') {
+      if (ctx.categoria) {
+        // Contexto justificável → nasce Justificado (reversível pelo usuário).
+        a.severidade     = 'justificado';
+        a.autoJustificado = true;
+        a.justificativa  = { categoria: ctx.categoria, motivo: ctx.label, observacao: '', auto: true };
+      } else if (ctx.contexto === 'urbano_fraco') {
+        a.severidade = 'revisar';
+      } else {
+        a.severidade = 'atencao';
+      }
+    } else {
+      a.severidade = a.severidade || (a.nivel === 'critico' ? 'critico' : 'atencao');
+    }
+
+    a.diagnostico = _diagnosticoTexto(a);
+    return a;
+  }
+
+  /**
+   * Enriquece um alerta por-ponto (parada / local) com chave e diagnóstico.
+   * Severidade já é passada pelo chamador. Muta e retorna o alerta.
+   */
+  function _classificarPtAlerta(a, pt) {
+    a.alertKey = a.tipo + '|' + (a.trecho || (pt && pt.ponto) || '') + '|' + (a.seq != null ? a.seq : '');
+    a.contexto = a.contexto || 'ponto';
+    if (!a.severidade) a.severidade = a.nivel === 'critico' ? 'critico' : 'atencao';
+    return a;
+  }
+
+  /**
+   * Texto de diagnóstico em linguagem natural (determinístico), montado a
+   * partir do tipo do alerta + contexto + números. Reutilizável no relatório.
+   */
+  function _diagnosticoTexto(a) {
+    const vel = a.velocidadeKmh;
+    const min = a.velEsperadaMin || VEL_IDEAL_MIN;
+    const max = a.velEsperadaMax || VEL_IDEAL_MAX;
+
+    switch (a.tipo) {
+      case 'VELOCIDADE_BAIXA':
+        if (a.autoJustificado) {
+          return 'Velocidade média de ' + vel + ' km/h, inferior à faixa esperada (' + min + '–' + max + ' km/h). '
+               + 'Entretanto, o trecho ocorre em ' + String(a.contextoLabel || 'via de fluxo reduzido').toLowerCase()
+               + ', onde a redução é comportamento operacional normal (trânsito, semáforos, cruzamentos, acesso). '
+               + 'Sem indício de inconsistência.';
+        }
+        if (a.severidade === 'revisar') {
+          return 'Velocidade média de ' + vel + ' km/h abaixo do esperado (' + min + '–' + max + ' km/h) em trecho curto. '
+               + 'Pode ser condição de via local — recomenda-se revisar antes de considerar inconsistência.';
+        }
+        return 'Velocidade média de ' + vel + ' km/h em trecho de rodovia de fluxo livre (esperado ' + min + '–' + max + ' km/h). '
+             + 'Tempo excessivo para a distância percorrida — forte indício de inconsistência operacional.';
+      case 'VELOCIDADE_ALTA':
+        return 'Velocidade média de ' + vel + ' km/h acima da faixa segura (' + min + '–' + max + ' km/h). '
+             + 'Risco operacional — requer atenção.';
+      case 'VELOCIDADE_EXCESSIVA':
+        return 'Excesso crítico: ' + vel + ' km/h, muito acima da faixa segura (' + min + '–' + max + ' km/h). '
+             + 'Risco elevado que deve ser tratado como ocorrência.';
+      default:
+        return a.diagnostico || a.descricao || '';
+    }
   }
 
   // ============================================================

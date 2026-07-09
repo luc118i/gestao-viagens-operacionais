@@ -29,10 +29,13 @@
       </div>
       <div class="hor-config-group">
         <div class="hor-config-label">Ponto de partida</div>
-        <select id="horStartPt" class="fs" style="width:190px;font-size:12px;padding:6px 8px;"
-                onchange="_horStartIdx=+this.value; renderHorario();">
-          <option value="0">—</option>
-        </select>
+        <div class="cs" id="horStartWrap">
+          <button type="button" class="cs-btn" id="horStartBtn" onclick="_toggleStartDrop(event)" aria-haspopup="listbox">
+            <span class="cs-txt" id="horStartTxt">—</span>
+            <span class="cs-arrow"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg></span>
+          </button>
+          <div class="cs-drop" id="horStartDrop" role="listbox"></div>
+        </div>
       </div>
     </div>
 
@@ -43,6 +46,7 @@
 
     <!-- Footer -->
     <div class="hor-footer">
+      <button class="btn btn-ghost btn-sm" id="btnIaDivergencia" onclick="analisarDivergenciaComercial()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg> Analisar com IA</button>
       <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Baixar PDF</button>
     </div>
   </div><!-- /hor-panel -->
@@ -52,6 +56,10 @@
     <p>Selecione ou crie um esquema para visualizar o traçado</p>
   </div>
   <div id="map"></div>
+  <div class="map-mode-toggle" id="mapModeToggle">
+    <button type="button" class="map-mode-btn active" data-mode="antt"      onclick="setMapMode('antt')"      title="Limites de km sem apoio (regras ANTT)">ANTT</button>
+    <button type="button" class="map-mode-btn"        data-mode="comercial" onclick="setMapMode('comercial')" title="Consistência do trecho frente ao horário comercial">Comercial</button>
+  </div>
   <div class="map-legend" id="mapLegend">
     <div class="leg-item"><div class="leg-dot" style="background:#22c97a;"></div> Início</div>
     <div class="leg-item"><div class="leg-dot" style="background:#e05050;"></div> Fim</div>
@@ -63,6 +71,13 @@
       <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#f59e0b;opacity:0.85;flex-shrink:0;"></div> Atenção</div>
       <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#ef4444;opacity:0.85;flex-shrink:0;"></div> Excede</div>
       <div class="leg-item"><div class="leg-dot" style="background:#6366f1;flex-shrink:0;"></div> Sugestão</div>
+    </div>
+    <!-- Comercial items — shown dynamically by _drawComercialOnMap() -->
+    <div class="leg-antt" id="mapComercialLegend" style="display:none;">
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#22c55e;opacity:0.85;flex-shrink:0;"></div> Folgado</div>
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#f59e0b;opacity:0.85;flex-shrink:0;"></div> Apertado</div>
+      <div class="leg-item"><div style="width:18px;height:4px;border-radius:2px;background:#ef4444;opacity:0.85;flex-shrink:0;"></div> Atrasa</div>
+      <div class="leg-item"><div style="width:16px;height:16px;border-radius:50%;background:#ef4444;color:#fff;font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0;">!</div> Vel. irreal</div>
     </div>
   </div>
 

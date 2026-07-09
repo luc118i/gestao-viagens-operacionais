@@ -230,6 +230,7 @@ var SheetsService = (() => {
       const lng = parseFloat(row[COL.LONGITUDE]);
       locais.push({
         codigo:    codigo,
+        codEmb:    String(row[1] || '').trim(),
         descricao: String(row[COL.DESCRICAO] || row[COL.DESC_RESUMIDA]).trim(),
         tipo:      String(row[COL.TIPO]).trim(),
         lat:       (!isNaN(lat) && lat !== 0) ? lat : null,

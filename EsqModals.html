@@ -20,7 +20,14 @@
     <div class="esq-modal-form" id="esqForm" style="display:none;">
       <div class="field" style="margin-top:10px;">
         <label class="fl">Nome da linha</label>
-        <input type="text" id="fNome" class="fi" placeholder="Ex: NATAL (RN) - SAO PAULO (SP)" />
+        <input type="text" id="fNome" class="fi" placeholder="Ex: NATAL (RN) - SAO PAULO (SP)" oninput="_codSugRender()" />
+      </div>
+      <div class="field codsug-wrap" style="margin-top:10px;">
+        <label class="fl">Cód. da linha</label>
+        <input type="text" id="fCod" class="fi" placeholder="Ex: RNBA0053054" autocomplete="off"
+               oninput="_codSugRender()" onfocus="_codSugRender()"
+               onblur="setTimeout(function(){var d=document.getElementById('fCodDrop');if(d)d.classList.remove('open');},150)" />
+        <div class="codsug" id="fCodDrop"></div>
       </div>
       <div class="row-fields">
         <div class="field">
@@ -44,6 +51,7 @@
         </div>
       </div>
       <button class="btn btn-dark btn-full" id="btnSalvEsq">Criar Esquema</button>
+      <button type="button" class="btn btn-ghost btn-full ajust-btn" id="btnAjustado" style="display:none;margin-top:8px;" onclick="toggleAjustado()"></button>
     </div>
     <div class="esq-modal-footer">
       <button class="btn btn-ghost btn-sm" id="btnNovo" onclick="novoEsquema()">+ Novo Esquema</button>

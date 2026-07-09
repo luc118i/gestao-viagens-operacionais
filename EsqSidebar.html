@@ -12,7 +12,13 @@
       <div class="card-controls">
         <div class="ins-row">
           <span class="ins-lbl">Inserir após:</span>
-          <select class="fs" id="insAfter" style="flex:1; font-size:12px; padding:5px 8px;"></select>
+          <div class="cs" id="insAfterWrap" style="flex:1;">
+            <button type="button" class="cs-btn" id="insAfterBtn" onclick="_toggleInsAfterDrop(event)" aria-haspopup="listbox">
+              <span class="cs-txt" id="insAfterTxt">↑ No início da sequência</span>
+              <span class="cs-arrow"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><polyline points="6 9 12 15 18 9"/></svg></span>
+            </button>
+            <div class="cs-drop" id="insAfterDrop" role="listbox"></div>
+          </div>
         </div>
         <div class="ins-row" id="importRow" style="display:none; margin-top:4px;">
           <button class="btn btn-ghost btn-sm" style="width:100%;font-size:11px;padding:5px 10px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;justify-content:center;" onclick="abrirImportarPontos()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="12" height="12"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Importar de outro horário</button>

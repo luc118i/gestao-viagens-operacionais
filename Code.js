@@ -29,6 +29,10 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('Gestão de Esquemas')
     .addItem('Cadastrar Ponto', 'abrirFormularioCadastroPonto')
+    .addSeparator()
+    .addItem('Diagnóstico Origem→Destino', 'diagnosticarOrigemDestino')
+    .addItem('Corrigir ID_ESQUEMA (prévia)', 'previewCorrecaoIdEsquema')
+    .addItem('Corrigir ID_ESQUEMA (aplicar)', 'corrigirIdEsquema')
     .addToUi();
 }
 
@@ -237,10 +241,14 @@ function salvarSequenciaPontos(idEsquema, pontos) {
 
     EsquemasService.invalidateCache();
 
-    // Deriva os trechos (legs) da sequência e salva tipo_via em DISTANCIAS
+    // Deriva os trechos (legs) da sequência e salva tipo_via em DISTANCIAS.
+    // Trechos personalizados ("Pers:72") são específicos do esquema: não vão para o
+    // cache global — grava 'BR' como neutro para não poluir os demais esquemas.
     var legs = [];
     for (var j = 0; j < pontos.length - 1; j++) {
-      legs.push({ pontoA: pontos[j].idPonto, pontoB: pontos[j + 1].idPonto, tipoVia: pontos[j].tipoTrecho || 'BR' });
+      var tv = pontos[j].tipoTrecho || 'BR';
+      if (/^Pers:/i.test(tv)) tv = 'BR';
+      legs.push({ pontoA: pontos[j].idPonto, pontoB: pontos[j + 1].idPonto, tipoVia: tv });
     }
     _atualizarTipoViaDistancias_(legs);
     _colorirEsquemaPontos_(sheet);
@@ -359,6 +367,7 @@ function _chamarGroqGrupo_(resumo) {
   var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
   var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe vários esquemas de viagem (cada um com sua sequência de paradas) e deve compará-los ENTRE SI, apontando APENAS o que está claramente fora do comum: '
     + 'um mesmo local (mesmo código) aparecendo com horários comerciais divergentes em linhas diferentes; partidas/encerramentos incoerentes com o nome da linha; cidades fora de ordem geográfica; o mesmo ponto cadastrado de formas diferentes; desvios grandes; e qualquer inconsistência relevante entre os esquemas. '
+    + 'REGRA OBRIGATÓRIA sobre o SENTIDO: o nome da linha cita as duas pontas SEM indicar ordem (ex.: "FORTALEZA X RECIFE"). No sentido "Ida" o trajeto vai da primeira ponta para a segunda; no sentido "Volta" vai da segunda para a primeira (INVERTIDO). Logo, um esquema "Volta" que começa na segunda cidade e termina na primeira está CORRETO — NUNCA aponte isso como incoerência. Só considere incoerente a partida/encerramento que não bata com NENHUMA das duas pontas da linha. '
     + 'Organize a resposta em bullets curtos, agrupando por tema e sempre citando os esquemas (pelo #) envolvidos. Se os esquemas forem coerentes entre si, diga que não encontrou inconsistências. Não invente dados que não estão no resumo.';
   var payload = {
     model: model, temperature: 0.2, max_tokens: 1200,
@@ -371,10 +380,111 @@ function _chamarGroqGrupo_(resumo) {
   });
   var code = res.getResponseCode();
   var body = res.getContentText();
-  if (code !== 200) return { erro: 'Groq HTTP ' + code + ': ' + String(body).slice(0, 300) };
+  if (code !== 200) return { erro: _groqErroAmigavel_(code, body, true) };
   var data = JSON.parse(body);
   var texto = (data && data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : '';
   return { texto: String(texto || '').trim(), model: model };
+}
+
+/**
+ * Converte um erro HTTP da Groq numa mensagem clara em português.
+ * @param {number}  code    código HTTP retornado.
+ * @param {string}  body    corpo da resposta (JSON da Groq).
+ * @param {boolean} emGrupo true quando o erro veio da análise em grupo (ajusta a dica).
+ */
+function _groqErroAmigavel_(code, body, emGrupo) {
+  var apiMsg = '';
+  try { var j = JSON.parse(body); apiMsg = (j && j.error && j.error.message) ? String(j.error.message) : ''; } catch (e) {}
+
+  if (code === 413 || /request too large|reduce your message size/i.test(apiMsg)) {
+    var lim = (apiMsg.match(/Limit\s+(\d+)/i) || [])[1];
+    var req = (apiMsg.match(/Requested\s+(\d+)/i) || [])[1];
+    var det = (lim && req) ? ' (limite de ' + lim + ' tokens/min, este pedido usou ' + req + ').' : '.';
+    return 'O texto enviado para a IA ficou grande demais para o limite do plano atual' + det
+      + (emGrupo ? ' Selecione menos esquemas por vez (até 10) e tente de novo.'
+                 : ' Tente novamente em instantes.');
+  }
+  if (code === 429 || /rate limit|too many requests/i.test(apiMsg)) {
+    return 'A IA recebeu muitos pedidos em sequência (limite por minuto). Aguarde alguns segundos e tente de novo.';
+  }
+  if (code === 401 || code === 403) {
+    return 'A chave de acesso à IA está inválida ou sem permissão. Verifique a configuração (GROQ_API_KEY).';
+  }
+  if (code === 404 || /model.*(not found|decommissioned|does not exist)/i.test(apiMsg)) {
+    return 'O modelo de IA configurado não está disponível. Verifique a configuração (GROQ_MODEL).';
+  }
+  if (code >= 500) {
+    return 'O serviço de IA está temporariamente indisponível. Tente novamente em alguns instantes.';
+  }
+  return 'Não foi possível consultar a IA' + (apiMsg ? ': ' + apiMsg : ' (erro ' + code + ').');
+}
+
+/**
+ * Lê um print do "Mapa de Viagem" (itinerário comercial) e devolve as paradas
+ * em ordem. Usa um modelo de VISÃO da Groq (configurável em GROQ_VISION_MODEL),
+ * separado do GROQ_MODEL de texto. Retorna { paradas:[{cidade,uf,hora}] } ou { erro }.
+ * @param {string} dataUrl imagem em data URL (data:image/...;base64,...)
+ */
+function extrairItinerarioDeImagem(dataUrl) {
+  var props = PropertiesService.getScriptProperties();
+  var key = props.getProperty('GROQ_API_KEY');
+  if (!key) return { erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
+  if (!dataUrl || String(dataUrl).indexOf('data:image') !== 0) return { erro: 'Imagem inválida.' };
+  var model = props.getProperty('GROQ_VISION_MODEL') || 'meta-llama/llama-4-scout-17b-16e-instruct';
+
+  var sys = 'Você extrai o itinerário de uma imagem (print) do "Mapa de Viagem" de uma linha rodoviária interestadual no Brasil. '
+    + 'A imagem lista as paradas EM ORDEM, cada uma como CIDADE - UF - DATA HORA (ex.: "RIBEIRAO PRETO - SP - 18/06/2026 15:15"). '
+    + 'Responda APENAS com JSON válido, sem nenhum texto fora do JSON, no formato exato: '
+    + '{"paradas":[{"cidade":"NOME DA CIDADE","uf":"XX","hora":"HH:MM"}]}. '
+    + 'Mantenha a ordem exata da imagem. "uf" com 2 letras maiúsculas. "hora" em 24h HH:MM; se não houver hora, use "". '
+    + 'Não invente paradas nem horas. Ignore legendas, títulos e tabelas que não sejam a lista de paradas.';
+
+  var payload = {
+    model: model, temperature: 0, max_tokens: 2500,
+    messages: [
+      { role: 'system', content: sys },
+      { role: 'user', content: [
+          { type: 'text', text: 'Extraia todas as paradas desta imagem, na ordem em que aparecem.' },
+          { type: 'image_url', image_url: { url: dataUrl } }
+      ] }
+    ]
+  };
+
+  var res = UrlFetchApp.fetch('https://api.groq.com/openai/v1/chat/completions', {
+    method: 'post', contentType: 'application/json',
+    headers: { Authorization: 'Bearer ' + key },
+    payload: JSON.stringify(payload), muteHttpExceptions: true
+  });
+  var code = res.getResponseCode();
+  var body = res.getContentText();
+  if (code !== 200) return { erro: _groqErroAmigavel_(code, body, false) };
+
+  var texto;
+  try { texto = JSON.parse(body).choices[0].message.content; }
+  catch (e) { return { erro: 'Resposta da IA ilegível.' }; }
+
+  var parsed = null;
+  try { parsed = JSON.parse(texto); }
+  catch (e) {
+    var m = String(texto).match(/\{[\s\S]*\}/);   // recorta o 1º bloco JSON, se vier com texto em volta
+    if (m) { try { parsed = JSON.parse(m[0]); } catch (e2) {} }
+  }
+  if (!parsed || !parsed.paradas || !parsed.paradas.length) {
+    return { erro: 'Não consegui ler as paradas na imagem. Tente um print mais nítido e completo.' };
+  }
+
+  var paradas = parsed.paradas.map(function(p) {
+    var hora = String(p.hora || '').trim();
+    var hm = hora.match(/(\d{1,2}):(\d{2})/);
+    return {
+      cidade: String(p.cidade || '').trim(),
+      uf:     String(p.uf || '').trim().toUpperCase().slice(0, 2),
+      hora:   hm ? (('0' + hm[1]).slice(-2) + ':' + hm[2]) : ''
+    };
+  }).filter(function(p) { return p.cidade; });
+
+  if (!paradas.length) return { erro: 'Nenhuma parada válida foi lida na imagem.' };
+  return { paradas: paradas, model: model };
 }
 
 /** Normaliza: maiúsculo, sem acento. */
@@ -388,6 +498,32 @@ function _linhaEndpoints_(nomeLinha) {
   return [parts[0], parts[parts.length - 1]];
 }
 
+/**
+ * Tokens "de cidade" de um texto: maiúsculo/sem acento, descartando prefixos de
+ * ponto (RODOVIARIA, TERMINAL…), conectivos (DE/DA/DO) e siglas de UF (2 letras).
+ */
+function _tokensCidade_(s) {
+  var stop = { DE:1, DA:1, DO:1, DAS:1, DOS:1, E:1, RODOVIARIA:1, RODOVIARIO:1,
+    TERMINAL:1, GARAGEM:1, ESTACAO:1, PONTO:1, PARADA:1, RODOV:1, NOVO:1, NOVA:1 };
+  return _upNorm_(s).split(/[^A-Z0-9]+/).filter(function(t) {
+    return t && t.length > 2 && !stop[t]; // descarta vazios, UFs (2 letras) e stopwords
+  });
+}
+
+/**
+ * Decide se o nome de um ponto bate com um extremo da linha, comparando pelo
+ * nome principal da cidade (tolera "RODOVIARIA DE", UF abreviada, "DE GOIAS"
+ * vs "GO" etc.). Casa quando compartilham ao menos um token significativo.
+ */
+function _pontoBateExtremo_(nomePonto, extremo) {
+  var tp = _tokensCidade_(nomePonto);
+  var te = _tokensCidade_(extremo);
+  if (!te.length || !tp.length) return false;
+  var sig = te.filter(function(t) { return t.length >= 4; });
+  if (!sig.length) sig = te; // extremo só com tokens curtos: usa todos
+  return sig.some(function(t) { return tp.indexOf(t) !== -1; });
+}
+
 /** Regras determinísticas de anomalia. Retorna [{nivel, tipo, msg}]. */
 function _analisarRegras_(esq, pontos, locMap) {
   var out = [];
@@ -396,10 +532,9 @@ function _analisarRegras_(esq, pontos, locMap) {
   var reais = pontos.filter(function(p) { return !/garagem/i.test(p.nome_ponto || '') && !/fechamento/i.test(p.tipo || ''); });
   var prim = reais[0], ult = reais[reais.length - 1];
   if (eps.length === 2 && prim && ult) {
-    var nP = _upNorm_(prim.nome_ponto), nU = _upNorm_(ult.nome_ponto);
-    if (!eps.some(function(c) { return nP.indexOf(c) !== -1; }))
+    if (!eps.some(function(c) { return _pontoBateExtremo_(prim.nome_ponto, c); }))
       out.push({ nivel: 'alto', tipo: 'partida', msg: 'Partida "' + prim.nome_ponto + '" não corresponde aos extremos da linha (' + eps.join(' / ') + ').' });
-    if (!eps.some(function(c) { return nU.indexOf(c) !== -1; }))
+    if (!eps.some(function(c) { return _pontoBateExtremo_(ult.nome_ponto, c); }))
       out.push({ nivel: 'alto', tipo: 'encerramento', msg: 'Encerramento "' + ult.nome_ponto + '" não corresponde aos extremos da linha (' + eps.join(' / ') + ').' });
   }
 
@@ -442,6 +577,7 @@ function _chamarGroq_(resumo) {
   var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
   var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe a sequência de paradas de um esquema de viagem e aponta APENAS o que está claramente fora do comum: '
     + 'encerramento ou partida incompatível com o nome da linha; cidades fora de ordem geográfica; desvios grandes; paradas que não fazem sentido para o trajeto; possíveis erros de cadastro. '
+    + 'REGRA OBRIGATÓRIA sobre o SENTIDO: o nome da linha cita as duas pontas SEM indicar ordem (ex.: "FORTALEZA X RECIFE"). No sentido "Ida" o trajeto vai da primeira ponta para a segunda; no sentido "Volta" vai da segunda para a primeira (INVERTIDO). Logo, um esquema "Volta" que começa na segunda cidade e termina na primeira está CORRETO — NUNCA aponte isso como incompatibilidade. Só considere incompatível a partida/encerramento que não bata com NENHUMA das duas pontas da linha. '
     + 'Responda em português, com bullets curtos e diretos, citando a posição do ponto. Se estiver tudo coerente, diga que não encontrou anomalias. Não invente dados que não estão no resumo.';
   var payload = {
     model: model, temperature: 0.2, max_tokens: 800,
@@ -454,7 +590,7 @@ function _chamarGroq_(resumo) {
   });
   var code = res.getResponseCode();
   var body = res.getContentText();
-  if (code !== 200) return { erro: 'Groq HTTP ' + code + ': ' + String(body).slice(0, 300) };
+  if (code !== 200) return { erro: _groqErroAmigavel_(code, body, false) };
   var data = JSON.parse(body);
   var texto = (data && data.choices && data.choices[0] && data.choices[0].message) ? data.choices[0].message.content : '';
   return { texto: String(texto || '').trim(), model: model };
@@ -1057,6 +1193,49 @@ function saveDistanciasCached(pairKms) {
   }
 }
 
+/**
+ * Sobrescreve (ou insere) o km de um par específico na aba DISTANCIAS.
+ * Diferente de saveDistanciasCached — que nunca sobrescreve km de pares já
+ * existentes (só preenche tipo_via) — esta função é para o usuário corrigir
+ * manualmente um valor cacheado que verificou estar desatualizado/errado.
+ * @param {string} a
+ * @param {string} b
+ * @param {number} km
+ * @returns {{ok:boolean, erro?:string}}
+ */
+function atualizarDistanciaCache(a, b, km) {
+  try {
+    var kmNum = parseFloat(km);
+    if (!a || !b || !(kmNum > 0)) return { ok: false, erro: 'Parâmetros inválidos.' };
+
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet) {
+      sheet = ss.insertSheet('DISTANCIAS');
+      sheet.getRange(1, 1, 1, 4).setValues([['codigo_ponto_A', 'codigo_ponto_B', 'km', 'tipo_via']]);
+    }
+
+    var norm      = _normPair_(a, b);
+    var kmArred   = Math.round(kmNum * 100) / 100;
+    var lastRow   = sheet.getLastRow();
+
+    if (lastRow >= 2) {
+      var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      for (var i = 0; i < data.length; i++) {
+        if (String(data[i][0]).trim() === norm[0] && String(data[i][1]).trim() === norm[1]) {
+          sheet.getRange(i + 2, 3).setValue(kmArred);
+          return { ok: true };
+        }
+      }
+    }
+    sheet.appendRow([norm[0], norm[1], kmArred, 'BR']);
+    return { ok: true };
+  } catch (e) {
+    Logger.log('[atualizarDistanciaCache] ' + (e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
 function _normPair_(a, b) {
   var sa = String(a).trim(), sb = String(b).trim();
   return sa <= sb ? [sa, sb] : [sb, sa];
@@ -1339,7 +1518,10 @@ function _getSchemaForLine_(lineName, departureTime) {
       var km = distCache[normPair2[0] + ':' + normPair2[1]];
       if (km !== undefined && km > 0) {
         ep.distanciaProxKm = km;
-        var vel = (ep.tipo_trecho && speeds[ep.tipo_trecho]) ? speeds[ep.tipo_trecho] : (speeds['BR'] || 85);
+        // Trecho personalizado ("Pers:72") traz a própria velocidade embutida
+        var persM = /^Pers:(\d+(?:\.\d+)?)$/i.exec(ep.tipo_trecho || '');
+        var vel = persM ? parseFloat(persM[1])
+                        : ((ep.tipo_trecho && speeds[ep.tipo_trecho]) ? speeds[ep.tipo_trecho] : (speeds['BR'] || 85));
         ep.tempoDeslocMin = Math.round(km / vel * 60);
       }
     }
@@ -1519,6 +1701,7 @@ function getDadosManager() {
       // Paradas distintas do esquema (para agrupar/buscar por local).
       // Lista de { cod, nome } na ordem da viagem, sem repetições (por código).
       var pts  = pontosPorEsq[String(e.id_esquema).trim()] || [];
+      e.temHorarioComercial = pts.some(function(p) { return p.horario_comercial; });
       var seen = {};
       e.paradas = [];
       pts.forEach(function(p) {
@@ -1564,6 +1747,9 @@ function criarEsquema(dados) {
     }
     var newId = maxId + 1;
     sheet.appendRow([newId, dados.nomeLinha || '', dados.horario || '', dados.sentido || '']);
+    if (dados.codLinha !== undefined) {
+      sheet.getRange(sheet.getLastRow(), _esquemasCodCol_(sheet)).setValue(dados.codLinha || '');
+    }
     EsquemasService.invalidateCache();
     return { id: newId };
   } catch (e) {
@@ -1572,9 +1758,85 @@ function criarEsquema(dados) {
 }
 
 /**
- * Atualiza NOME_LINHA, HORARIO e SENTIDO de um esquema existente.
+ * Resolve a coluna (1-based) do cod_linha na aba ESQUEMAS pelo cabeçalho.
+ * Se a coluna não existir, cria uma nova ao final com o header 'cod_linha'.
+ * @param {Sheet} sheet aba ESQUEMAS.
+ * @returns {number} índice 1-based da coluna do cod_linha.
+ */
+function _esquemasCodCol_(sheet) {
+  var lastCol  = sheet.getLastColumn();
+  var headers  = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(function(h) {
+    return String(h).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '_');
+  });
+  var aliases = ['cod_linha', 'codigo_linha', 'cod_da_linha', 'codlinha'];
+  for (var a = 0; a < aliases.length; a++) {
+    var idx = headers.indexOf(aliases[a]);
+    if (idx !== -1) return idx + 1;
+  }
+  var col = lastCol + 1;
+  sheet.getRange(1, col).setValue('cod_linha');
+  return col;
+}
+
+/**
+ * Resolve a coluna (1-based) do marcador "ajustado" na aba ESQUEMAS pelo
+ * cabeçalho. Se não existir, cria na coluna F (6ª) com o header 'ajustado'.
+ * @param {Sheet} sheet aba ESQUEMAS.
+ * @returns {number} índice 1-based da coluna do marcador.
+ */
+function _esquemasAjustadoCol_(sheet) {
+  var lastCol = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, Math.max(lastCol, 6)).getValues()[0].map(function(h) {
+    return String(h).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+      .replace(/\s+/g, '_').replace(/[^a-z0-9_]/g, '_');
+  });
+  var aliases = ['ajustado', 'analisado', 'revisado', 'ajuste'];
+  for (var a = 0; a < aliases.length; a++) {
+    var idx = headers.indexOf(aliases[a]);
+    if (idx !== -1) return idx + 1;
+  }
+  var col = 6; // coluna F, conforme convencionado
+  sheet.getRange(1, col).setValue('ajustado');
+  return col;
+}
+
+/**
+ * Marca ou desmarca um esquema como "ajustado" (coluna F da aba ESQUEMAS).
+ * @param {string}  idEsquema
+ * @param {boolean} ajustado  true → grava 'ajustado'; false → limpa a célula.
+ * @returns {boolean} o novo estado.
+ */
+function marcarEsquemaAjustado(idEsquema, ajustado) {
+  try {
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('ESQUEMAS');
+    if (!sheet) throw new Error('Aba "ESQUEMAS" não encontrada.');
+
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) throw new Error('Esquema não encontrado.');
+
+    var ids   = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    var idStr = String(idEsquema).trim();
+    var col   = _esquemasAjustadoCol_(sheet);
+
+    for (var i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === idStr) {
+        sheet.getRange(i + 2, col).setValue(ajustado ? 'ajustado' : '');
+        EsquemasService.invalidateCache();
+        return !!ajustado;
+      }
+    }
+    throw new Error('Esquema #' + idEsquema + ' não encontrado.');
+  } catch (e) {
+    throw new Error('Erro ao marcar esquema: ' + e.message);
+  }
+}
+
+/**
+ * Atualiza NOME_LINHA, HORARIO, SENTIDO e (opcional) COD_LINHA de um esquema.
  * @param {string} idEsquema
- * @param {{ nomeLinha: string, horario: string, sentido: string }} dados
+ * @param {{ nomeLinha: string, horario: string, sentido: string, codLinha?: string }} dados
  * @returns {boolean}
  */
 function atualizarEsquema(idEsquema, dados) {
@@ -1596,6 +1858,9 @@ function atualizarEsquema(idEsquema, dados) {
           dados.horario   || '',
           dados.sentido   || ''
         ]]);
+        if (dados.codLinha !== undefined) {
+          sheet.getRange(i + 2, _esquemasCodCol_(sheet)).setValue(dados.codLinha || '');
+        }
         EsquemasService.invalidateCache();
         return true;
       }
@@ -1822,6 +2087,38 @@ function gerarRelatorio(params) {
     }
 
     if (params.enviarAPI) {
+      // Anexa o Diagnóstico Inteligente ao PDF (não-fatal). Reusa o cache da
+      // aba ANALISE_IA via gerarDiagnostico — só chama a IA se ainda não existir.
+      if (params.incluirDiagnostico !== false) {
+        try {
+          // Escopo do diagnóstico = escopo do relatório. Para MOTORISTA/TRECHO o
+          // payload já traz o trecho filtrado (tripForMap) e o esquema do trecho
+          // (esquemaTrecho); para COMPLETO usa a viagem inteira.
+          var tripDiag = (payload && payload.tripForMap && payload.tripForMap.length)
+            ? payload.tripForMap : (params.enrichedTrip || []);
+          var esqDiag = (payload && payload.esquemaTrecho && payload.esquemaTrecho.length)
+            ? payload.esquemaTrecho : (params.esquemaPontos || []);
+          var escopoPdf = '';
+          if (params.tipo === 'MOTORISTA' && payload && payload.motorista && payload.motorista.nome) {
+            escopoPdf = 'Motorista: ' + payload.motorista.nome;
+          } else if (params.tipo === 'TRECHO' && payload && payload.trecho) {
+            escopoPdf = 'Trecho: ' + (payload.trecho.ponto_inicio || '') + ' → ' + (payload.trecho.ponto_fim || '');
+          }
+
+          var diag = gerarDiagnostico({
+            enrichedTrip:  tripDiag,
+            esquemaPontos: esqDiag,
+            nomeLinha:     params.nomeLinha || '',
+            idEsquema:     params.idEsquema || '',
+            escopo:        escopoPdf
+          });
+          if (diag && diag.ok) params.diagnostico = diag.diagnostico;
+          else Logger.log('[gerarRelatorio] diagnóstico p/ PDF indisponível: ' + (diag && diag.erro));
+        } catch (e) {
+          Logger.log('[gerarRelatorio] diagnóstico p/ PDF falhou: ' + (e.message || e));
+        }
+      }
+
       // Passa params junto (contém enrichedTrip, summary, nomeLinha, etc.)
       var apiResponse = ReportService.enviarParaAPI(payload, params);
       return { payload: payload, apiResponse: apiResponse };
@@ -1845,5 +2142,188 @@ function enviarParadasFora(params) {
     return ReportService.enviarParadasFora(params);
   } catch (e) {
     throw new Error("Erro ao enviar paradas fora: " + e.message);
+  }
+}
+
+/**
+ * Cria ocorrência(s) EXCESSO_PERMANENCIA (excesso de permanência em ponto) na
+ * API. Aceita { enrichedTrip, esquemaPontos, motorista, nomeLinha, horario,
+ * summary, seqAlvo } — seqAlvo identifica o ponto do card clicado.
+ *
+ * @param {Object} params
+ * @returns {Array} [{ ponto, status, id?, httpCode?, message? }]
+ */
+function enviarExcessoPermanencia(params) {
+  try {
+    return ReportService.enviarExcessoPermanencia(params);
+  } catch (e) {
+    throw new Error("Erro ao enviar excesso de permanência: " + e.message);
+  }
+}
+
+// ============================================================
+//  ANÁLISE INTELIGENTE DA VIAGEM (Diagnóstico Inteligente)
+// ============================================================
+
+/**
+ * Entrypoint do módulo "Análise Inteligente". Verifica o cache (aba
+ * ANALISE_IA por hash do conteúdo); se não existir, gera via IA e persiste.
+ * Só recalcula quando o relatório muda (hash diferente).
+ *
+ * @param {{enrichedTrip:Array, esquemaPontos:Array, summary:Object, segments:Array, nomeLinha:string, idEsquema:string}} payload
+ * @returns {{ok:boolean, fromCache?:boolean, hash?:string, diagnostico?:Object, erro?:string}}
+ */
+function gerarDiagnostico(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length) {
+      return { ok: false, erro: 'Nenhuma viagem carregada para analisar.' };
+    }
+
+    var hash = DiagnosticoStore.computeHash(payload);
+
+    var cached = DiagnosticoStore.get(hash);
+    if (cached) {
+      return { ok: true, fromCache: true, hash: hash, diagnostico: cached };
+    }
+
+    // Recomputa segmentos e resumo SEMPRE a partir do trecho recebido — assim o
+    // diagnóstico reflete exatamente o escopo (viagem inteira OU trecho filtrado),
+    // sem depender de dados de escopo diferente vindos do cliente.
+    var an = AnalysisService.analyzeTrip(payload.enrichedTrip);
+    payload.segments = an.segments;
+    payload.summary  = an.summary;
+
+    var diagnostico = DiagnosticoService.gerarDiagnostico(payload);
+
+    DiagnosticoStore.save(hash, {
+      idEsquema: payload.idEsquema || '',
+      nomeLinha: payload.nomeLinha || '',
+      modelo:    diagnostico.modelo || ''
+    }, diagnostico);
+
+    return { ok: true, fromCache: false, hash: hash, diagnostico: diagnostico };
+  } catch (e) {
+    Logger.log('[gerarDiagnostico] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+// ============================================================
+//  JUSTIFICATIVAS DE ALERTAS OPERACIONAIS
+// ============================================================
+
+/**
+ * Retorna as justificativas manuais salvas para a viagem (por hash do
+ * conteúdo). As justificativas automáticas (contexto urbano) NÃO ficam aqui —
+ * são recalculadas pelo AnalysisService.
+ *
+ * @param {{enrichedTrip:Array}} payload
+ * @returns {{ok:boolean, hash?:string, justificativas?:Object, erro?:string}}
+ */
+function getJustificativasAlerta(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length) {
+      return { ok: true, hash: '', justificativas: {} };
+    }
+    var hash = JustificativaStore.computeHash(payload);
+    return { ok: true, hash: hash, justificativas: JustificativaStore.getForTrip(hash) };
+  } catch (e) {
+    Logger.log('[getJustificativasAlerta] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Salva a justificativa manual de um alerta. O alerta passa a status
+ * "Justificado" e deixa de ser pendência / não aparece no relatório principal.
+ *
+ * @param {{enrichedTrip:Array, alertKey:string, categoria:string, motivo:string, observacao:string}} payload
+ * @returns {{ok:boolean, hash?:string, alertKey?:string, justificativa?:Object, erro?:string}}
+ */
+function salvarJustificativaAlerta(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length) {
+      return { ok: false, erro: 'Nenhuma viagem carregada.' };
+    }
+    if (!payload.alertKey) {
+      return { ok: false, erro: 'Alerta inválido (sem chave).' };
+    }
+    var hash = JustificativaStore.computeHash(payload);
+    var just = JustificativaStore.save(hash, payload.alertKey, {
+      categoria:  payload.categoria,
+      motivo:     payload.motivo,
+      observacao: payload.observacao
+    });
+    return { ok: true, hash: hash, alertKey: payload.alertKey, justificativa: just };
+  } catch (e) {
+    Logger.log('[salvarJustificativaAlerta] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Remove a justificativa manual de um alerta (reabre como pendência).
+ *
+ * @param {{enrichedTrip:Array, alertKey:string}} payload
+ * @returns {{ok:boolean, alertKey?:string, erro?:string}}
+ */
+function removerJustificativaAlerta(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length || !payload.alertKey) {
+      return { ok: false, erro: 'Dados insuficientes para reabrir o alerta.' };
+    }
+    var hash = JustificativaStore.computeHash(payload);
+    JustificativaStore.remove(hash, payload.alertKey);
+    return { ok: true, alertKey: payload.alertKey };
+  } catch (e) {
+    Logger.log('[removerJustificativaAlerta] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Reabre um alerta auto-justificado (contexto urbano). Persiste um override
+ * de status "reaberto" — assim o alerta volta a ser pendência mesmo que o
+ * AnalysisService o recalcule como justificável.
+ *
+ * @param {{enrichedTrip:Array, alertKey:string}} payload
+ * @returns {{ok:boolean, alertKey?:string, erro?:string}}
+ */
+function reabrirAlertaAuto(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length || !payload.alertKey) {
+      return { ok: false, erro: 'Dados insuficientes para reabrir o alerta.' };
+    }
+    var hash = JustificativaStore.computeHash(payload);
+    JustificativaStore.save(hash, payload.alertKey, {
+      status: 'reaberto', categoria: '', motivo: 'Reaberto manualmente', observacao: ''
+    });
+    return { ok: true, alertKey: payload.alertKey };
+  } catch (e) {
+    Logger.log('[reabrirAlertaAuto] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Entrypoint do editor de esquemas: explica via IA por que o horário
+ * comercial diverge da proposta calculada (fase de PLANEJAMENTO — esquema
+ * ainda não rodou). Os números (trechos, km, velocidades) vêm todos do
+ * cliente; a IA só produz a narrativa. Sem cache — chamado sob demanda.
+ *
+ * @param {{nomeLinha:string, indicadores:Object, trechos:Array}} payload
+ * @returns {{ok:boolean, narrativa?:Object, modelo?:string, erro?:string}}
+ */
+function explicarDivergenciaComercial(payload) {
+  try {
+    if (!payload || !payload.trechos || !payload.trechos.length) {
+      return { ok: false, erro: 'Nenhum trecho com divergência para analisar.' };
+    }
+    var res = DiagnosticoService.explicarDivergenciaComercial(payload);
+    if (!res.ok) return { ok: false, erro: res.erro };
+    return { ok: true, narrativa: res.narrativa, modelo: res.modelo };
+  } catch (e) {
+    Logger.log('[explicarDivergenciaComercial] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
   }
 }

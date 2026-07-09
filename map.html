@@ -315,6 +315,7 @@ var MapModule = (function () {
         var legs = data.routes[0].legs || [];
         legs.forEach(function (leg, legIdx) {
           var color = segColors[offset + legIdx] || COR_CINZA;
+          var A = pts[legIdx], B = pts[legIdx + 1];
 
           // Concatena as coordenadas de todos os steps do leg
           var latlngs = [];
@@ -332,10 +333,12 @@ var MapModule = (function () {
           });
 
           if (latlngs.length >= 2) {
-            _drawPolyline(latlngs, color, 4, 0.9);
+            // Distância real do trecho (rota OSRM), não a linha reta.
+            var distKm = leg.distance ? leg.distance / 1000 : _haversine(A.lat, A.lng, B.lat, B.lng);
+            _drawPolyline(latlngs, color, 4, 0.9, null, A, B, distKm);
           } else {
             // Fallback para este leg específico
-            _drawFallbackPair(pts[legIdx], pts[legIdx + 1], color);
+            _drawFallbackPair(A, B, color);
           }
         });
 
@@ -356,19 +359,72 @@ var MapModule = (function () {
 
   function _drawFallbackPair(A, B, color) {
     if (!A || !B || !A.lat || !B.lat) return;
+    var distKm = _haversine(Number(A.lat), Number(A.lng), Number(B.lat), Number(B.lng));
     _drawPolyline(
       [[Number(A.lat), Number(A.lng)], [Number(B.lat), Number(B.lng)]],
-      color, 2, 0.6, '8 6'
+      color, 2, 0.6, '8 6', A, B, distKm
     );
   }
 
-  function _drawPolyline(latlngs, color, weight, opacity, dashArray) {
+  function _drawPolyline(latlngs, color, weight, opacity, dashArray, A, B, distKm) {
     if (!latlngs || latlngs.length < 2 || !ready || !map) return;
     var opts = { color: color, weight: weight, opacity: opacity };
     if (dashArray) opts.dashArray = dashArray;
     var poly = L.polyline(latlngs, opts);
     poly.addTo(map);
     polylines.push(poly);
+
+    if (A && B) {
+      // Área de clique/hover maior e invisível por cima da linha visível
+      // (facilita passar o mouse em trechos finos), com tooltip + popup
+      // no estilo "Google Maps": tempo, km e velocidade média do trecho.
+      var hit = L.polyline(latlngs, { color: color, weight: 18, opacity: 0 });
+      hit.addTo(map);
+      polylines.push(hit);
+
+      var html = _legTooltipHtml(A, B, distKm);
+      hit.bindTooltip(html, { sticky: true, direction: 'top', className: 'leaflet-tooltip-leg', opacity: 0.97 });
+      hit.bindPopup(html, { className: 'leaflet-popup-light', maxWidth: 240 });
+
+      hit.on('mouseover', function () { poly.setStyle({ weight: weight + 3, opacity: 1 }); });
+      hit.on('mouseout',  function () { poly.setStyle({ weight: weight, opacity: opacity }); });
+    }
+  }
+
+  // ── tooltip/popup de trecho (tempo + km + velocidade média) ─────────────
+  function _legMetrics(A, B, distKm) {
+    var t1 = _parseDate(A && A.saida), t2 = _parseDate(B && B.entrada);
+    var durationMin = null, velKmh = null;
+    if (t1 && t2) {
+      var diffH = (t2 - t1) / 3600000;
+      if (diffH > 0) { durationMin = diffH * 60; velKmh = distKm / diffH; }
+    }
+    return { distKm: distKm, durationMin: durationMin, velKmh: velKmh };
+  }
+
+  function _fmtDuration(min) {
+    min = Math.round(min);
+    var h = Math.floor(min / 60), m = min % 60;
+    return h > 0 ? (h + 'h' + (m < 10 ? '0' : '') + m + 'min') : (m + ' min');
+  }
+
+  function _legTooltipHtml(A, B, distKm) {
+    var m       = _legMetrics(A, B, distKm);
+    var nomeA   = (A && (A.nome_ponto || A.nomePonto)) || '';
+    var nomeB   = (B && (B.nome_ponto || B.nomePonto)) || '';
+    var kmTxt   = (m.distKm != null) ? m.distKm.toFixed(1).replace('.', ',') + ' km' : '—';
+    var durTxt  = (m.durationMin != null) ? _fmtDuration(m.durationMin) : '—';
+    var velTxt  = (m.velKmh != null) ? Math.round(m.velKmh) + ' km/h' : '—';
+    return '<div style="font-family:Inter,Arial,sans-serif;font-size:12px;line-height:1.5;min-width:150px;color:#1a1d23;">' +
+      (nomeA || nomeB
+        ? '<div style="font-weight:700;margin-bottom:5px;padding-bottom:5px;border-bottom:1px solid #e2e5ea;">' +
+            _esc(nomeA) + ' → ' + _esc(nomeB) + '</div>'
+        : '') +
+      '<div style="display:flex;gap:12px;color:#3a3f52;font-weight:600;">' +
+        '<span>⏱ ' + durTxt + '</span>' +
+        '<span>📍 ' + kmTxt + '</span>' +
+        '<span>⚡ ' + velTxt + '</span>' +
+      '</div></div>';
   }
 
   // ── cálculo de cor por velocidade ────────────────────────

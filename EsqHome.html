@@ -1,5 +1,11 @@
 <!-- Home: seleção de esquema com cards agrupados por região -->
 <div id="homeScreen" class="home-screen">
+  <!-- Sidebar de navegação (scrollspy): lista os esquemas; o bloco visível na
+       tela fica em destaque. Só aparece no agrupamento "Linha". -->
+  <aside id="homeSideNav" class="home-sidenav" style="display:none;">
+    <div class="home-sidenav-title">Linhas</div>
+    <div id="homeSideNavList" class="home-sidenav-list"></div>
+  </aside>
   <div class="home-inner">
     <div class="home-head">
       <div>
@@ -50,8 +56,11 @@
       <button class="home-gbtn"        data-g="partida" onclick="setHomeGroup('partida')">Partida</button>
       <button class="home-gbtn"        data-g="fim"     onclick="setHomeGroup('fim')">Encerramento</button>
       <button class="home-gbtn"        data-g="linha"   onclick="setHomeGroup('linha')">Linha</button>
+      <button class="home-gbtn"        data-g="codigo"  onclick="setHomeGroup('codigo')">Código</button>
       <button class="home-gbtn"        data-g="sentido" onclick="setHomeGroup('sentido')">Sentido</button>
       <button class="home-gbtn"        data-g="local"   onclick="setHomeGroup('local')">Local</button>
+      <button class="home-gbtn"        data-g="pontos"  onclick="setHomeGroup('pontos')" style="display:none;">Sem pontos</button>
+      <button class="home-gbtn"        data-g="horcom"  onclick="setHomeGroup('horcom')" style="display:none;">Sem horário comercial</button>
     </div>
 
     <!-- Busca por local: só aparece no modo "Local". Autocomplete sobre os

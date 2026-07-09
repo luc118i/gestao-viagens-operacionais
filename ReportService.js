@@ -59,7 +59,7 @@ var ReportService = (() => {
     var excessos = _calcularExcessos(trechoTrip);
 
     // Eventos de alerta nos segmentos do trecho
-    var eventos = _extrairEventos(segments, trechoTrip);
+    var eventos = _extrairEventos(segments, trechoTrip, params.justificativas);
 
     var trechoInfo = {
       ponto_inicio: motorista.ponto_inicio || "",
@@ -139,7 +139,7 @@ var ReportService = (() => {
 
     var paradas = _calcularParadas(trechoTrip);
     var excessos = _calcularExcessos(trechoTrip);
-    var eventos = _extrairEventos(segments, trechoTrip);
+    var eventos = _extrairEventos(segments, trechoTrip, params.justificativas);
 
     return {
       tipo: "TRECHO",
@@ -151,6 +151,8 @@ var ReportService = (() => {
         ponto_fim: idPontoB,
         total_pontos: trechoTrip.length,
       },
+      // Motoristas responsáveis pelo trecho (calculados no cliente a partir dos vínculos)
+      motoristasTrecho: params.motoristasTrecho || [],
       tripForMap: trechoTrip,
       esquemaTrecho: esquemaTrecho,    // esquema filtrado ao trecho
       trechoStats: _computeTrechoStats(trechoTrip),
@@ -237,39 +239,62 @@ var ReportService = (() => {
       }
     }
 
-    // ── Passo 2: gera o PDF ─────────────────────────────────────────
+    // ── Passo 2: gera o arquivo (PDF ou DOCX) ───────────────────────
     var ttl = props.getProperty("REPORTS_PDF_TTL") || "3600";
-    var pdfResp = UrlFetchApp.fetch(
+    // Formato: 'pdf' (padrão) ou 'docx' — define o endpoint da API de relatórios.
+    var formato = String((params && params.formato) || "pdf").toLowerCase();
+    if (formato !== "docx") formato = "pdf";
+
+    var fileResp = UrlFetchApp.fetch(
       baseUrl +
         "/reports/occurrences/" +
         occurrenceId +
-        "/pdf?ttl=" +
+        "/" + formato + "?ttl=" +
         ttl,
       { method: "get", muteHttpExceptions: true },
     );
 
-    var pdfCode = pdfResp.getResponseCode();
-    if (pdfCode < 200 || pdfCode > 299) {
-      // Ocorrência criada mas PDF falhou — retorna ID sem URL
+    var fileCode = fileResp.getResponseCode();
+    if (fileCode < 200 || fileCode > 299) {
+      // Ocorrência criada mas geração do arquivo falhou — retorna ID sem URL.
+      // Inclui um trecho da resposta para diagnóstico (404 = endpoint ausente na
+      // API; 500 = erro de geração).
+      var apiMsg = "";
+      try {
+        var errBody = fileResp.getContentText();
+        var errJson = JSON.parse(errBody);
+        apiMsg = (errJson && errJson.error && errJson.error.message) || "";
+        if (!apiMsg && errBody) apiMsg = String(errBody).slice(0, 160);
+      } catch (e2) {}
+      var dica = fileCode === 404
+        ? " (endpoint /" + formato + " indisponível — a API de relatórios precisa ser atualizada)"
+        : "";
       return {
         status: createCode,
         body: {
           id: occurrenceId,
-          warning: "PDF generation failed (HTTP " + pdfCode + ")",
+          warning: formato.toUpperCase() + " falhou (HTTP " + fileCode + ")" +
+                   (apiMsg ? ": " + apiMsg : "") + dica,
         },
       };
     }
 
-    var pdfParsed = {};
+    var fileParsed = {};
     try {
-      pdfParsed = JSON.parse(pdfResp.getContentText());
+      fileParsed = JSON.parse(fileResp.getContentText());
     } catch (e) {}
+
+    // A API retorna a URL sob data.pdf ou data.docx conforme o formato.
+    var d = fileParsed.data || {};
+    var signed = (d.pdf && d.pdf.signedUrl) || (d.docx && d.docx.signedUrl) ||
+                 (d.file && d.file.signedUrl) || null;
 
     return {
       status: 200,
       body: {
         id: occurrenceId,
-        url: (pdfParsed.data && pdfParsed.data.pdf && pdfParsed.data.pdf.signedUrl) || null,
+        url: signed,
+        formato: formato,
       },
     };
   }
@@ -386,9 +411,14 @@ var ReportService = (() => {
 
   /**
    * Extrai eventos de alerta dos segmentos que envolvam pontos do trecho.
+   * Cada evento é anotado com `justificado` (auto-justificado por contexto
+   * urbano OU justificativa manual salva) para que o relatório filtre os
+   * falsos positivos e leve os justificados para a seção de auditoria.
+   * @param {Object} [justificativas]  mapa { alertKey: {status, categoria, motivo} }
    */
-  function _extrairEventos(segments, trechoTrip) {
+  function _extrairEventos(segments, trechoTrip, justificativas) {
     if (!segments || !segments.length) return [];
+    justificativas = justificativas || {};
 
     // Conjunto de nomes de pontos no trecho
     var pontosNoTrecho = {};
@@ -403,11 +433,25 @@ var ReportService = (() => {
       var noTrecho = pontosNoTrecho[seg.de] || pontosNoTrecho[seg.para];
       if (!noTrecho) return;
       seg.alertas.forEach(function (a) {
+        var manual = a.alertKey ? justificativas[a.alertKey] : null;
+        var reaberto = manual && manual.status === "reaberto";
+        var justificado = false, justCategoria = "", justMotivo = "";
+        if (manual && !reaberto) {
+          justificado = true; justCategoria = manual.categoria || ""; justMotivo = manual.motivo || "";
+        } else if (a.autoJustificado && !reaberto) {
+          justificado = true;
+          justCategoria = (a.justificativa && a.justificativa.categoria) || a.contextoLabel || "";
+          justMotivo = (a.justificativa && a.justificativa.motivo) || "";
+        }
         eventos.push({
           tipo: a.tipo,
           nivel: a.nivel,
+          severidade: a.severidade || a.nivel,
           descricao: a.descricao,
           trecho: seg.de + " → " + seg.para,
+          justificado: justificado,
+          justCategoria: justCategoria,
+          justMotivo: justMotivo,
         });
       });
     });
@@ -433,7 +477,7 @@ var ReportService = (() => {
 
     var paradas = _calcularParadas(enrichedTrip);
     var excessos = _calcularExcessos(enrichedTrip);
-    var eventos = _extrairEventos(segments, enrichedTrip);
+    var eventos = _extrairEventos(segments, enrichedTrip, params.justificativas);
 
     var comparacao =
       esquemaPontos.length > 0
@@ -554,11 +598,20 @@ var ReportService = (() => {
     // Relato em HTML estruturado
     var relatoHtml = mapaHtml + _buildRelatoHtml(payload, params);
 
+    // Diagnóstico Inteligente (Análise Inteligente da Viagem) — anexado ao PDF
+    // quando disponível em params (gerado/recuperado do cache no gerarRelatorio).
+    if (params.diagnostico) {
+      relatoHtml += _buildDiagnosticoHtml(params.diagnostico);
+    }
+
     // Título do relatório
     var titulo = _buildReportTitle(payload, params);
 
     return {
       typeCode: typeCode,
+      // Analista responsável pela apuração — ocorrências geradas por este
+      // sistema vão para "LUCAS" (configurável via Script Property).
+      analisadoPor: props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
       eventDate: tripDate || today,
       tripDate: tripDate || today,
       startTime: startTime || "00:00",
@@ -582,9 +635,14 @@ var ReportService = (() => {
       showSectionViagem: true,
       showSectionIdentificacao: false,
       drivers: (function() {
+        // Relatório por motorista: um único condutor no cabeçalho.
         var m = payload.motorista || {};
-        if (!m.nome && !m.matricula) return [];
-        return [{ position: 1, name: m.nome || '', registry: m.matricula || '', baseCode: m.base || '' }];
+        if (m.nome || m.matricula) {
+          return [{ position: 1, name: m.nome || '', registry: m.matricula || '', baseCode: m.base || '' }];
+        }
+        // Relatório por trecho: os responsáveis (com sub-trecho) são renderizados
+        // no bloco "Responsáveis pelo Trecho" dentro do relato — não duplicar aqui.
+        return [];
       })(),
       paradasProibidas: (function() {
         var tripForMap = payload.tripForMap || [];
@@ -657,6 +715,265 @@ var ReportService = (() => {
     });
 
     h += '</tbody></table></div>';
+    return h;
+  }
+
+  // ============================================================
+  //  DIAGNÓSTICO INTELIGENTE (PDF) — HTML com estilos inline
+  //  Renderiza o objeto gerado por DiagnosticoService para o relatório PDF.
+  // ============================================================
+
+  /**
+   * Monta o bloco "Diagnóstico Inteligente" para o PDF.
+   * @param {Object} d  — diagnóstico (DiagnosticoService.gerarDiagnostico)
+   * @returns {string} HTML com estilos inline
+   */
+  function _buildDiagnosticoHtml(d) {
+    if (!d) return '';
+    var n = d.narrativa || {};
+    var c = d.cards || {};
+    var ind = d.indicadores || {};
+    var meta = d.meta || {};
+
+    var esc = function (s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    var nl = function (s) { return esc(s).replace(/\n/g, '<br>'); };
+    var fmtMin = function (min) {
+      var t = Math.round(Number(min) || 0);
+      if (t < 60) return t + ' min';
+      return Math.floor(t / 60) + 'h' + (t % 60 > 0 ? ('0' + (t % 60)).slice(-2) : '');
+    };
+    var fmtDelta = function (min) {
+      if (min == null) return '—';
+      var a = Math.abs(Math.round(min));
+      if (a === 0) return 'no horário';
+      var s = min > 0 ? '+' : '−';
+      if (a < 60) return s + a + ' min';
+      return s + Math.floor(a / 60) + 'h' + (a % 60 > 0 ? ('0' + (a % 60)).slice(-2) : '');
+    };
+    var toneColor = function (t) { return t === 'perdeu' ? '#d94040' : (t === 'recuperou' ? '#22a96a' : '#5a6070'); };
+    var critColor = function (nivel) {
+      var k = String(nivel || '').toLowerCase();
+      return k === 'critica' ? '#d94040' : k === 'alta' ? '#e8a020' : k === 'media' ? '#3b82f6' : '#8a919e';
+    };
+    var critLabel = function (nivel) {
+      var k = String(nivel || '').toLowerCase();
+      return { critica: 'Crítica', alta: 'Alta', media: 'Média', baixa: 'Baixa' }[k] || 'Baixa';
+    };
+    var impLabel = function (imp) {
+      var k = String(imp || 'medio').toLowerCase();
+      return { alto: 'Impacto alto', medio: 'Impacto médio', baixo: 'Impacto baixo' }[k] || 'Impacto médio';
+    };
+
+    var TH = 'background:#f0f2f8;padding:6px 8px;font-size:9px;font-weight:700;text-transform:uppercase;' +
+             'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;';
+    var TD = 'padding:6px 8px;border:1px solid #dde1ee;vertical-align:middle;font-size:11px;color:#1a1d23;';
+
+    // Cabeçalho da seção (nova página no PDF)
+    var h = '<div style="page-break-before:always;border-top:2px solid #f47920;padding-top:16px;margin-top:20px;">';
+    h += '<h4 style="font-size:14px;margin:0 0 2px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
+         'Diagnóstico Inteligente ' +
+         '<span style="font-size:9px;font-weight:700;color:#f47920;border:1px solid #f4792055;border-radius:10px;padding:1px 7px;vertical-align:middle;">IA</span>' +
+         '</h4>';
+    h += '<div style="font-size:10px;color:#9aa0ad;margin-bottom:' + (meta.escopo ? '6px' : '14px') + ';">' +
+         esc(meta.nomeLinha || '—') + ' &nbsp;·&nbsp; Veículo ' + esc(meta.veiculo || '—') +
+         ' &nbsp;·&nbsp; ' + esc(meta.dataViagem || '—') + '</div>';
+    if (meta.escopo) {
+      h += '<div style="display:inline-block;font-size:9px;font-weight:700;color:#f47920;' +
+           'background:rgba(244,121,32,0.1);border:1px solid rgba(244,121,32,0.25);' +
+           'border-radius:12px;padding:2px 9px;margin-bottom:14px;">' + esc(meta.escopo) + '</div>';
+    }
+
+    // Título de sub-bloco reutilizável
+    var subTitle = function (t) {
+      return '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;' +
+             'color:#5a6070;margin:16px 0 8px;padding-bottom:5px;border-bottom:1px solid #e2e5ea;">' + esc(t) + '</div>';
+    };
+
+    // 1. Resumo Executivo
+    if (n.resumoExecutivo) {
+      h += subTitle('Resumo Executivo');
+      h += '<p style="font-size:12.5px;line-height:1.55;color:#1a1d23;margin:0;font-weight:500;">' +
+           nl(n.resumoExecutivo) + '</p>';
+    }
+
+    // 2. Indicadores (cards em tabela 5×2)
+    h += subTitle('Indicadores');
+    var cards = [
+      ['Onde mais se perdeu tempo', c.maiorResponsavelAtraso ? fmtDelta(c.maiorResponsavelAtraso.valorMin) : '—', c.maiorResponsavelAtraso ? c.maiorResponsavelAtraso.local : 'Sem atraso relevante', '#d94040'],
+      ['Maior parada (excesso)', c.maiorParada ? fmtDelta(c.maiorParada.valorMin) : '—', c.maiorParada ? c.maiorParada.local : 'Dentro do previsto', '#d94040'],
+      ['Maior recuperação', c.maiorRecuperacao ? ('−' + Math.round(c.maiorRecuperacao.valorMin) + ' min') : '—', c.maiorRecuperacao ? c.maiorRecuperacao.local : 'Sem recuperação', '#22a96a'],
+      ['Trecho mais lento', c.trechoMaisLento ? (c.trechoMaisLento.vel + ' km/h') : '—', c.trechoMaisLento ? c.trechoMaisLento.trecho : '—', '#3b82f6'],
+      ['Velocidade média', (c.velocidadeMedia || 0) + ' km/h', 'Média da viagem', '#3b82f6'],
+      ['Tempo perdido', fmtMin(c.tempoPerdidoMin || 0), 'Acumulado na rota', '#d94040'],
+      ['Tempo recuperado', fmtMin(c.tempoRecuperadoMin || 0), 'Acumulado na rota', '#22a96a'],
+      ['Eventos críticos', String(c.eventosCriticos || 0), 'Nível crítico', '#3b82f6'],
+      ['Paradas fora do esquema', String(c.paradasForaEsquema || 0), 'Não previstas', '#3b82f6'],
+      ['Pontos ignorados', String(c.pontosIgnorados || 0), 'Não visitados', '#3b82f6']
+    ];
+    // Tom de fundo claro derivado da cor de acento — sobrevive no Word (cell shading).
+    // Substitui o antigo border-left colorido + border-spacing, que o Word ignora.
+    var tintFor = function (col) {
+      return ({
+        '#d94040': { bg: '#fdf2f2', bd: '#f0c9c9' },   // vermelho
+        '#22a96a': { bg: '#eefaf4', bd: '#bfe8d4' },   // verde
+        '#3b82f6': { bg: '#eef4ff', bd: '#cbddfb' }    // azul
+      })[col] || { bg: '#f7f8fb', bd: '#e2e5ea' };
+    };
+    h += '<table style="width:100%;border-collapse:collapse;">';
+    for (var r = 0; r < cards.length; r += 5) {
+      h += '<tr>';
+      for (var i = r; i < r + 5 && i < cards.length; i++) {
+        var cd = cards[i];
+        var tn = tintFor(cd[3]);
+        h += '<td style="width:20%;background:' + tn.bg + ';border:1px solid ' + tn.bd + ';' +
+             'padding:7px 9px;vertical-align:top;">' +
+             '<div style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#8a8f99;line-height:1.2;">' + esc(cd[0]) + '</div>' +
+             '<div style="font-size:15px;font-weight:800;color:' + cd[3] + ';margin:2px 0 1px;">' + esc(cd[1]) + '</div>' +
+             '<div style="font-size:8.5px;color:#9aa0ad;line-height:1.2;">' + esc(cd[2]) + '</div>' +
+             '</td>';
+      }
+      // Completa a última linha para não deixar células faltando (bordas irregulares no Word).
+      for (var k = (cards.length - r); k < 5 && r + 5 > cards.length; k++)
+        h += '<td style="width:20%;border:1px solid #eceef3;"></td>';
+      h += '</tr>';
+    }
+    h += '</table>';
+
+    // 3. Diagnóstico Geral
+    if (n.diagnosticoGeral) {
+      h += subTitle('Diagnóstico Geral');
+      h += '<p style="font-size:11.5px;line-height:1.6;color:#5a6070;margin:0;">' + nl(n.diagnosticoGeral) + '</p>';
+    }
+
+    // 4. Linha do Tempo do Atraso
+    if (d.timeline && d.timeline.length) {
+      h += subTitle('Linha do Tempo do Atraso');
+      h += '<table style="width:100%;border-collapse:collapse;border:1px solid #cdd2e5;">' +
+           '<thead><tr>' +
+           '<th style="' + TH + 'text-align:left;">Local</th>' +
+           '<th style="' + TH + 'text-align:center;">Real</th>' +
+           '<th style="' + TH + 'text-align:center;">Programado</th>' +
+           '<th style="' + TH + 'text-align:center;">Atraso acum.</th>' +
+           '<th style="' + TH + 'text-align:center;">Variação</th>' +
+           '<th style="' + TH + 'text-align:left;">Tendência</th>' +
+           '</tr></thead><tbody>';
+      d.timeline.forEach(function (t) {
+        var col = toneColor(t.tendencia);
+        var tend = t.tendencia === 'perdeu' ? 'Perdeu tempo' : (t.tendencia === 'recuperou' ? 'Recuperou tempo' : 'Sem alteração');
+        var deltaTxt = (t.deltaMin > 0 ? '+' : (t.deltaMin < 0 ? '−' : '')) + Math.abs(Math.round(t.deltaMin)) + ' min';
+        h += '<tr>' +
+             '<td style="' + TD + '"><strong>' + esc(t.local) + '</strong></td>' +
+             '<td style="' + TD + 'text-align:center;font-family:monospace;">' + esc(t.horarioReal) + '</td>' +
+             '<td style="' + TD + 'text-align:center;font-family:monospace;color:#1565c0;">' + esc(t.horarioComercial) + '</td>' +
+             '<td style="' + TD + 'text-align:center;font-weight:700;">' + esc(fmtDelta(t.atrasoAcumMin)) + '</td>' +
+             '<td style="' + TD + 'text-align:center;color:' + col + ';font-weight:700;">' + deltaTxt + '</td>' +
+             '<td style="' + TD + 'color:' + col + ';">' + tend + '</td>' +
+             '</tr>';
+      });
+      h += '</tbody></table>';
+    }
+
+    // 5. Principais Causas
+    if (n.causasPrincipais && n.causasPrincipais.length) {
+      h += subTitle('Principais Causas');
+      n.causasPrincipais.forEach(function (ca) {
+        var col = critColor(String(ca.impacto).toLowerCase() === 'alto' ? 'critica' : (String(ca.impacto).toLowerCase() === 'baixo' ? 'baixa' : 'media'));
+        // Título à esquerda + selo à direita numa mini-tabela (o Word ignora flex).
+        h += '<div style="border:1px solid #e2e5ea;border-radius:6px;padding:9px 11px;margin-bottom:7px;">' +
+             '<table style="width:100%;border-collapse:collapse;"><tr>' +
+             '<td style="border:0;padding:0;vertical-align:middle;"><strong style="font-size:11.5px;color:#1a1d23;">' + esc(ca.titulo || '') + '</strong></td>' +
+             '<td style="border:0;padding:0;text-align:right;vertical-align:middle;white-space:nowrap;">' +
+             '<span style="font-size:9px;font-weight:700;color:' + col + ';border:1px solid ' + col + '44;border-radius:10px;padding:1px 7px;">' + esc(impLabel(ca.impacto)) + '</span>' +
+             '</td>' +
+             '</tr></table>' +
+             '<div style="font-size:11px;line-height:1.5;color:#5a6070;margin-top:4px;">' + esc(ca.descricao || '') + '</div>' +
+             '</div>';
+      });
+    }
+
+    // 6. Trechos Críticos
+    if (d.trechosCriticos && d.trechosCriticos.length) {
+      h += subTitle('Trechos Críticos');
+      h += '<table style="width:100%;border-collapse:collapse;border:1px solid #cdd2e5;">' +
+           '<thead><tr>' +
+           '<th style="' + TH + 'text-align:left;">Trecho</th>' +
+           '<th style="' + TH + 'text-align:center;">Vel. média</th>' +
+           '<th style="' + TH + 'text-align:center;">Vel. ideal</th>' +
+           '<th style="' + TH + 'text-align:center;">T. esperado</th>' +
+           '<th style="' + TH + 'text-align:center;">T. realizado</th>' +
+           '<th style="' + TH + 'text-align:center;">Impacto</th>' +
+           '<th style="' + TH + 'text-align:center;">Criticidade</th>' +
+           '</tr></thead><tbody>';
+      d.trechosCriticos.forEach(function (tr) {
+        var col = critColor(tr.criticidade);
+        var impCol = tr.tempoPerdidoMin > 0 ? '#d94040' : (tr.tempoPerdidoMin < 0 ? '#22a96a' : '#5a6070');
+        h += '<tr>' +
+             '<td style="' + TD + '">' + esc(tr.trecho) + '</td>' +
+             '<td style="' + TD + 'text-align:center;">' + tr.velMedia + ' km/h</td>' +
+             '<td style="' + TD + 'text-align:center;color:#9aa0ad;">' + tr.velIdeal + ' km/h</td>' +
+             '<td style="' + TD + 'text-align:center;">' + fmtMin(tr.tempoEsperadoMin) + '</td>' +
+             '<td style="' + TD + 'text-align:center;">' + fmtMin(tr.tempoRealizadoMin) + '</td>' +
+             '<td style="' + TD + 'text-align:center;color:' + impCol + ';font-weight:700;">' + esc(tr.impacto) + '</td>' +
+             '<td style="' + TD + 'text-align:center;"><span style="color:' + col + ';font-weight:700;">' + critLabel(tr.criticidade) + '</span></td>' +
+             '</tr>';
+      });
+      h += '</tbody></table>';
+    }
+
+    // 7. Paradas Críticas
+    if (d.paradasCriticas && d.paradasCriticas.length) {
+      h += subTitle('Paradas Críticas');
+      h += '<table style="width:100%;border-collapse:collapse;border:1px solid #cdd2e5;">' +
+           '<thead><tr>' +
+           '<th style="' + TH + 'text-align:left;">Local</th>' +
+           '<th style="' + TH + 'text-align:center;">Previsto</th>' +
+           '<th style="' + TH + 'text-align:center;">Realizado</th>' +
+           '<th style="' + TH + 'text-align:center;">Excesso</th>' +
+           '<th style="' + TH + 'text-align:center;">Criticidade</th>' +
+           '</tr></thead><tbody>';
+      d.paradasCriticas.forEach(function (p) {
+        var col = critColor(p.criticidade);
+        h += '<tr>' +
+             '<td style="' + TD + '">' + esc(p.local) + '</td>' +
+             '<td style="' + TD + 'text-align:center;">' + fmtMin(p.previstoMin) + '</td>' +
+             '<td style="' + TD + 'text-align:center;">' + fmtMin(p.realizadoMin) + '</td>' +
+             '<td style="' + TD + 'text-align:center;color:#d94040;font-weight:700;">' + esc(p.impacto) + '</td>' +
+             '<td style="' + TD + 'text-align:center;"><span style="color:' + col + ';font-weight:700;">' + critLabel(p.criticidade) + '</span></td>' +
+             '</tr>';
+      });
+      h += '</tbody></table>';
+    }
+
+    // 8. Recuperação Operacional
+    if (n.recuperacaoOperacional) {
+      h += subTitle('Recuperação Operacional');
+      h += '<p style="font-size:11.5px;line-height:1.6;color:#5a6070;margin:0;">' + nl(n.recuperacaoOperacional) + '</p>';
+    }
+
+    // 9. Inconsistências
+    if (d.inconsistencias && d.inconsistencias.length) {
+      h += '<div style="background:#fdf3f3;border:1px solid #d9404044;border-radius:8px;padding:11px 14px;margin-top:16px;">' +
+           '<div style="font-size:11px;font-weight:800;color:#d94040;margin-bottom:7px;">Inconsistências detectadas (' + d.inconsistencias.length + ')</div>';
+      d.inconsistencias.forEach(function (it) {
+        h += '<div style="margin-bottom:5px;font-size:11px;line-height:1.45;color:#5a6070;">' +
+             '<span style="font-weight:700;color:#d94040;">' + esc(it.titulo || 'Inconsistência') + ':</span> ' +
+             esc(it.descricao || '') + '</div>';
+      });
+      h += '</div>';
+    }
+
+    // 10. Parecer Técnico
+    if (n.parecerFinal) {
+      h += '<div style="background:#fff8f2;border:1px solid #f4792033;border-radius:10px;padding:14px 16px;margin-top:16px;">' +
+           '<div style="font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:#f47920;margin-bottom:8px;">Parecer Técnico</div>' +
+           '<div style="font-size:12.5px;line-height:1.65;color:#1a1d23;">' + nl(n.parecerFinal) + '</div>' +
+           '</div>';
+    }
+
+    h += '</div>';
     return h;
   }
 
@@ -981,6 +1298,41 @@ var ReportService = (() => {
       h += '<td style="padding:6px 10px;"><strong>Fim</strong><br/>' + stats.fim + "</td>";
     h += "</tr></table>";
 
+    // Tripulação — um bloco por motorista: "matrícula · nome · base" e, abaixo, o
+    // sub-trecho sob responsabilidade dele. Envolvido em marcador para o template
+    // ANALISE_OP extrair e renderizar como seção "TRIPULANTE" logo após DADOS DA
+    // VIAGEM (mesma posição/estilo do cabeçalho). Sem o marcador (API antiga),
+    // os blocos apenas aparecem aqui no relato como fallback.
+    var motoristasTrecho = payload.motoristasTrecho || [];
+    if (payload.tipo === 'TRECHO' && motoristasTrecho.length > 0) {
+      var crew = '';
+      motoristasTrecho.forEach(function(v) {
+        var mat  = v.matricula
+          ? '<span style="color:#c25a00;font-weight:800;">' + _esc(v.matricula) + '</span>' +
+            '<span style="color:#c9ccd4;">&nbsp;&#8226;&nbsp;</span>'
+          : '';
+        var nome = '<span style="font-weight:700;">' + _esc(v.nome || '—') + '</span>';
+        var base = v.base
+          ? '<span style="color:#8a8f99;font-weight:600;">&nbsp;&#8226;&nbsp;' + _esc(v.base) + '</span>'
+          : '';
+        var subTrecho = _esc(v.inicioNome || v.ponto_inicio || '—') +
+                        ' <span style="color:#f47920;font-weight:700;">&#8594;</span> ' +
+                        _esc(v.fimNome || v.ponto_fim || '—');
+        // Fundo laranja claro no lugar do acento border-left (o Word não renderiza
+        // borda lateral colorida, mas preserva o sombreamento via shim do docx.render).
+        // NÃO usar tom que comece com "#fff" — o shim o trata como branco e ignora.
+        crew += '<div style="border:1px solid #f2d3ba;border-left:3px solid #f47920;border-radius:6px;' +
+                        'padding:9px 12px;margin-bottom:8px;background:#ffe9d6;">' +
+               '<div style="font-size:12px;line-height:1.4;">' + mat + nome + base + '</div>' +
+               '<div style="font-size:11px;color:#5a6070;margin-top:4px;">' +
+                 '<span style="text-transform:uppercase;font-size:9px;font-weight:700;letter-spacing:.05em;' +
+                        'color:#8a8f99;">Trecho</span>&nbsp;&nbsp;' + subTrecho +
+               '</div>' +
+             '</div>';
+      });
+      h += '<!--TRIPULANTE:START-->' + crew + '<!--TRIPULANTE:END-->';
+    }
+
     // Tabela de registro do trecho — chegada / tempo no local / saída (MOTORISTA e TRECHO)
     if (payload.tipo !== 'COMPLETO' && tripForMap.length > 0) {
       var pontosRegistro = tripForMap.filter(function(pt) {
@@ -1173,14 +1525,19 @@ var ReportService = (() => {
       h += "</ul>";
     }
 
-    // Eventos de velocidade
-    if (eventos.length > 0) {
+    // Eventos de velocidade — só os NÃO justificados entram no relatório
+    // principal. Os justificados (contexto urbano/garagem ou justificativa
+    // manual) vão para a seção de auditoria mais abaixo.
+    var eventosPendentes = eventos.filter(function (ev) { return !ev.justificado; });
+    var eventosJustif    = eventos.filter(function (ev) { return ev.justificado; });
+
+    if (eventosPendentes.length > 0) {
       h +=
         '<h4 style="font-size:13px;margin:0 0 8px;color:#555;">Eventos de Velocidade (' +
-        eventos.length +
+        eventosPendentes.length +
         ")</h4>";
       h += '<ul style="font-size:11px;margin:0 0 16px;padding-left:20px;">';
-      eventos.forEach(function (ev) {
+      eventosPendentes.forEach(function (ev) {
         var cor = ev.nivel === "critico" ? "#d94040" : "#8a6500";
         h +=
           '<li style="margin-bottom:3px;color:' +
@@ -1224,15 +1581,34 @@ var ReportService = (() => {
       h += "</tbody></table>";
     }
 
-    // Sem ocorrências
+    // Sem ocorrências (considera apenas pendências reais — justificados não contam)
     if (
       excessos.length === 0 &&
       paradasFora.length === 0 &&
       naoVisit.length === 0 &&
-      eventos.length === 0
+      eventosPendentes.length === 0
     ) {
       h +=
         '<p style="color:#22a96a;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'13\' height=\'13\'><polyline points=\'20 6 9 17 4 12\'/></svg> Viagem sem ocorrências operacionais registradas.</p>';
+    }
+
+    // Seção de auditoria — alertas justificados (não são pendências)
+    if (eventosJustif.length > 0) {
+      h +=
+        '<h4 style="font-size:12px;margin:18px 0 8px;color:#22a96a;font-weight:700;">' +
+        'Alertas Justificados (auditoria) — ' + eventosJustif.length + '</h4>';
+      h += '<ul style="font-size:11px;margin:0 0 16px;padding-left:20px;color:#5a6070;">';
+      eventosJustif.forEach(function (ev) {
+        var cat = ev.justCategoria ? ' — <strong style="color:#333;">' + ev.justCategoria + '</strong>' : '';
+        h +=
+          '<li style="margin-bottom:3px;">' +
+          (ev.descricao || ev.tipo) +
+          ' · <em style="color:#888;">' + (ev.trecho || "") + '</em>' +
+          cat +
+          (ev.justMotivo ? ' <span style="color:#888;">(' + ev.justMotivo + ')</span>' : '') +
+          "</li>";
+      });
+      h += "</ul>";
     }
 
     // Esquema da viagem (referência da rota planejada)
@@ -1363,6 +1739,16 @@ var ReportService = (() => {
   }
 
   /**
+   * Escapa caracteres HTML para inserção segura em templates de relatório.
+   */
+  function _esc(str) {
+    return String(str == null ? "" : str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+  }
+
+  /**
    * Cria ocorrências DESCUMP_OP_PARADA_FORA para cada parada fora do esquema
    * detectada na viagem. Faz um único lookup de motorista e viagem (cacheado)
    * e POSTa uma ocorrência por parada irregular.
@@ -1464,6 +1850,7 @@ var ReportService = (() => {
 
       var occPayload = {
         typeCode:      "DESCUMP_OP_PARADA_FORA",
+        analisadoPor:  props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
         eventDate:     dateStr,
         tripDate:      dateStr,
         startTime:     startTime,
@@ -1515,12 +1902,142 @@ var ReportService = (() => {
     return results;
   }
 
+  // ============================================================
+  //  EXCESSO DE PERMANÊNCIA  (occurrences typeCode EXCESSO_PERMANENCIA)
+  // ============================================================
+
+  /** Upsert do motorista + lookup da viagem na API. Compartilhado. */
+  function _lookupDriverAndTrip(baseUrl, motorista, nomeLinha, horario) {
+    var out = { driverId: null, tripId: null, matchedLineName: nomeLinha, matchedTripTime: horario };
+    if (motorista && (motorista.matricula || motorista.nome)) {
+      try {
+        var mat = motorista.matricula || '', nome = motorista.nome || '';
+        var dr = UrlFetchApp.fetch(baseUrl + "/drivers/upsert", {
+          method: "post", contentType: "application/json",
+          payload: JSON.stringify({ code: mat || nome, name: nome || mat, base: motorista.base || null }),
+          muteHttpExceptions: true,
+        });
+        if (dr.getResponseCode() === 200) out.driverId = (JSON.parse(dr.getContentText()) || {}).id || null;
+      } catch (e) { /* segue sem driverId */ }
+    }
+    if (nomeLinha && horario) {
+      try {
+        var tr = UrlFetchApp.fetch(
+          baseUrl + "/trips/lookup?lineName=" + encodeURIComponent(nomeLinha) +
+                    "&departureTime=" + encodeURIComponent(horario),
+          { method: "get", muteHttpExceptions: true }
+        );
+        if (tr.getResponseCode() === 200) {
+          var td = JSON.parse(tr.getContentText()) || {};
+          out.tripId = td.id || null;
+          if (td.lineName) out.matchedLineName = td.lineName + (td.direction ? ' — ' + td.direction : '');
+          if (td.departureTime) out.matchedTripTime = td.departureTime;
+        }
+      } catch (e) { /* segue sem tripId */ }
+    }
+    return out;
+  }
+
+  /** POST /occurrences → { status, id?, httpCode?, message? } */
+  function _postOccurrence(baseUrl, occPayload) {
+    try {
+      var resp = UrlFetchApp.fetch(baseUrl + "/occurrences", {
+        method: "post", contentType: "application/json",
+        payload: JSON.stringify(occPayload), muteHttpExceptions: true,
+      });
+      var code = resp.getResponseCode(), body;
+      try { body = JSON.parse(resp.getContentText()); } catch (e) { body = {}; }
+      if (code >= 200 && code < 300) return { status: "ok", id: body.id || null };
+      return { status: "error", httpCode: code, message: body.message || resp.getContentText() };
+    } catch (e) {
+      return { status: "error", message: String(e) };
+    }
+  }
+
+  /**
+   * Cria ocorrência(s) EXCESSO_PERMANENCIA para paradas com permanência acima
+   * do previsto. Espelha enviarParadasFora, mas seleciona por seqAlvo (botão por
+   * card) e usa o typeCode de excesso de permanência. Respeita apoio/ignorar.
+   *
+   * @param {Object} params  { enrichedTrip, esquemaPontos, motorista, nomeLinha, horario, summary, seqAlvo }
+   * @returns {Array} [{ ponto, status, id?, httpCode?, message? }]
+   */
+  function enviarExcessoPermanencia(params) {
+    var props   = PropertiesService.getScriptProperties();
+    var baseUrl = (props.getProperty("REPORT_API_URL") || "").replace(/\/$/, "");
+    if (!baseUrl) throw new Error("REPORT_API_URL não configurada.");
+
+    var enrichedTrip  = params.enrichedTrip  || [];
+    var esquemaPontos = params.esquemaPontos || [];
+    var motorista     = params.motorista     || {};
+    var summary       = params.summary       || {};
+    var seqAlvo       = params.seqAlvo != null ? Number(params.seqAlvo) : null;
+
+    // Seleciona os pontos com permanência excedida (um, quando via botão por card)
+    var alvos = [];
+    enrichedTrip.forEach(function (pt) {
+      if (seqAlvo != null && Number(pt.seq) !== seqAlvo) return;
+      if (pt.apoioManual || pt.ignorarManual) return;      // ajuste manual: isento
+      if (!pt.parada_s || pt.parada_s <= 0) return;
+      alvos.push({ ponto: pt.ponto, codigo: pt.codigo || null, entrada: pt.entrada, saida: pt.saida });
+    });
+    if (alvos.length === 0) return [];
+
+    var ctx           = _lookupDriverAndTrip(baseUrl, motorista, params.nomeLinha || "", params.horario || "");
+    var dateStr       = _parseDateBrToIso(summary.dataViagem || "") || _todayIso();
+    var vehicleNumber = String(summary.veiculo || "—").trim();
+    var esquemaHtml   = _buildEsquemaHtml(esquemaPontos, ctx.matchedLineName, ctx.matchedTripTime);
+    var hasMot        = !!(motorista.nome || motorista.matricula);
+    var analisadoPor  = props.getProperty("REPORT_ANALISADO_POR") || "LUCAS";
+
+    var results = [];
+    alvos.forEach(function (pf) {
+      var startTime = _extractTime(pf.entrada) || "00:00";
+      var endTime   = _extractTime(pf.saida)   || startTime;
+
+      var occPayload = {
+        typeCode:      "EXCESSO_PERMANENCIA",
+        analisadoPor:  analisadoPor,
+        eventDate:     dateStr,
+        tripDate:      dateStr,
+        startTime:     startTime,
+        endTime:       endTime,
+        vehicleNumber: vehicleNumber,
+        lineLabel:     ctx.matchedLineName || null,
+        tripId:        ctx.tripId          || undefined,
+        tripTime:      ctx.matchedTripTime || null,
+        place:         pf.ponto  || "—",
+        placeCode:     pf.codigo || undefined,
+        relatoHtml:    esquemaHtml,
+        showSectionTripulacao:     hasMot,
+        showSectionViagem:         true,
+        showSectionIdentificacao:  true,
+        showSectionDados:          true,
+        showSectionPassageiros:    false,
+        devolutivaBeforeEvidences: false,
+        drivers: hasMot ? [{
+          position: 1,
+          driverId:  ctx.driverId        || undefined,
+          registry:  motorista.matricula || undefined,
+          name:      motorista.nome      || undefined,
+          baseCode:  motorista.base      || undefined,
+        }] : [],
+      };
+
+      var r = _postOccurrence(baseUrl, occPayload);
+      results.push({ ponto: pf.ponto, status: r.status, id: r.id, httpCode: r.httpCode, message: r.message });
+    });
+
+    return results;
+  }
+
   return {
     gerarRelatorioMotorista: gerarRelatorioMotorista,
     gerarRelatorioTrecho: gerarRelatorioTrecho,
     gerarRelatorioCompleto: gerarRelatorioCompleto,
     enviarParaAPI: enviarParaAPI,
     enviarParadasFora: enviarParadasFora,
+    enviarExcessoPermanencia: enviarExcessoPermanencia,
     buildEsquemaHtml: _buildEsquemaHtml,
   };
 })();

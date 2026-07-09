@@ -24,6 +24,10 @@
     let _modoAtivo = 'COMPLETO';
     let _motoristaAtivo = null; // vinculo ativo quando modo=MOTORISTA
 
+    // Justificativas de alertas (manuais + override "reaberto"), por alertKey.
+    let _justState = { hash: '', justificativas: {} };
+    let _justModalKey = null; // alertKey do alerta em edição no modal Justificar
+
     function _isMapUsable() {
       return (
         typeof MapModule !== "undefined" &&
@@ -675,7 +679,7 @@
         });
 
         _analysis.alerts = alertsFiltrados;
-        AnalysisModule.renderAlertas(_analysis.alerts);
+        _renderAlertas();
       }
 
       var naoVisitados = _comparacao.filter(function (c) {
@@ -816,6 +820,7 @@
       }
 
       _enrichedTrip = enrichedTrip;
+      _justState = { hash: '', justificativas: {} }; // nova viagem → zera justificativas
       UIModule.showLoading("Calculando velocidades e alertas...");
 
       google.script.run
@@ -889,8 +894,9 @@
       // Tabela de velocidade (legado — mantida)
       AnalysisModule.renderVelocidadeTable(segments);
 
-      // Alertas
-      AnalysisModule.renderAlertas(alerts);
+      // Alertas (render imediato; justificativas salvas chegam em seguida)
+      _renderAlertas();
+      _loadJustificativas();
 
       // Exibe e habilita botões no header (Relatório e Motorista)
       var btnVincular = document.getElementById("btnVincularMotorista");
@@ -901,6 +907,11 @@
       // Exibe barra de modo de visualização
       var secModo = document.getElementById('sectionModoVisualizacao');
       if (secModo) secModo.style.display = '';
+
+      // Revela o alternador de visão e prepara o Diagnóstico Inteligente
+      var secSwitcher = document.getElementById('sectionViewSwitcher');
+      if (secSwitcher) secSwitcher.style.display = '';
+      if (window.DiagnosticoModule) DiagnosticoModule.onNewTrip();
 
       _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
 
@@ -1767,6 +1778,380 @@
       })).then(function (arr) { return arr.filter(Boolean); });
     }
 
+    // ============================================================
+    //  RESPONSÁVEIS PELO TRECHO (inseridos no modal Gerar Relatório)
+    // ============================================================
+
+    // Lista de motoristas cadastrados (aba MOTORISTAS), carregada sob demanda.
+    var _motoristasCadastrados = null;
+
+    /** Carrega a lista de motoristas cadastrados (uma vez) e chama cb(). */
+    function _carregarMotoristasCadastrados(cb) {
+      if (_motoristasCadastrados) { if (cb) cb(); return; }
+      google.script.run
+        .withSuccessHandler(function (lista) {
+          _motoristasCadastrados = (lista || []).slice().sort(function (a, b) {
+            return String(a.nome || '').localeCompare(String(b.nome || ''));
+          });
+          _ensureMatriculasDatalist();
+          if (cb) cb();
+        })
+        .withFailureHandler(function () {
+          _motoristasCadastrados = [];
+          if (cb) cb();
+        })
+        .getMotoristas();
+    }
+
+    /** Garante um <datalist> global com as matrículas cadastradas (autocomplete). */
+    function _ensureMatriculasDatalist() {
+      var dl = document.getElementById('relMatriculasDatalist');
+      if (!dl) {
+        dl = document.createElement('datalist');
+        dl.id = 'relMatriculasDatalist';
+        document.body.appendChild(dl);
+      }
+      dl.innerHTML = '';
+      (_motoristasCadastrados || []).forEach(function (m) {
+        if (!m.matricula) return;
+        var opt = document.createElement('option');
+        opt.value = String(m.matricula);
+        opt.textContent = m.nome || '';
+        dl.appendChild(opt);
+      });
+      return dl;
+    }
+
+    /** Índice do motorista cadastrado por matrícula (exata). -1 se não achar. */
+    function _idxMotoristaPorMatricula(mat) {
+      var key = String(mat || '').trim();
+      if (!key || !_motoristasCadastrados) return -1;
+      return _motoristasCadastrados.findIndex(function (m) {
+        return String(m.matricula || '').trim() === key;
+      });
+    }
+
+    /** Clona as opções de ponto do select relPontoAModal para um novo select. */
+    function _clonarOpcoesPonto(sel) {
+      var base = document.getElementById('relPontoAModal');
+      if (base) {
+        sel.innerHTML = base.innerHTML;
+      } else {
+        sel.innerHTML = '<option value="">— Selecione —</option>';
+      }
+    }
+
+    /** Adiciona uma linha de responsável (motorista + ponto início + ponto fim). */
+    function _addMotoristaTrechoRow(prefill) {
+      var lista = document.getElementById('relMotoristasTrechoList');
+      if (!lista) return;
+      prefill = prefill || {};
+
+      _ensureMatriculasDatalist();
+
+      var row = document.createElement('div');
+      row.className = 'rel-mot-trecho-row';
+      row.style.cssText = 'display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);border-radius:8px;padding:8px;';
+
+      // ── Linha 1: matrícula + motorista ───────────────────────────
+      var linha1 = document.createElement('div');
+      linha1.style.cssText = 'display:flex;gap:6px;align-items:center;';
+
+      // Campo de matrícula (digita → seleciona no select)
+      var inpMat = document.createElement('input');
+      inpMat.type = 'text';
+      inpMat.className = 'form-input rel-mot-mat';
+      inpMat.placeholder = 'Matrícula';
+      inpMat.setAttribute('list', 'relMatriculasDatalist');
+      inpMat.style.cssText = 'flex:0 0 96px;min-width:0;';
+
+      // Select do motorista cadastrado
+      var selMot = document.createElement('select');
+      selMot.className = 'form-input rel-mot-sel';
+      selMot.style.cssText = 'flex:1;min-width:0;';
+      selMot.innerHTML = '<option value="">— Motorista —</option>';
+      (_motoristasCadastrados || []).forEach(function (m, i) {
+        var opt = document.createElement('option');
+        opt.value = i;
+        opt.textContent = m.nome + (m.matricula ? ' (' + m.matricula + ')' : '');
+        selMot.appendChild(opt);
+      });
+
+      // Digitar matrícula → seleciona motorista correspondente
+      inpMat.addEventListener('input', function () {
+        var idx = _idxMotoristaPorMatricula(inpMat.value);
+        selMot.value = idx >= 0 ? String(idx) : '';
+      });
+      // Selecionar no select → reflete a matrícula no campo
+      selMot.addEventListener('change', function () {
+        var i = parseInt(selMot.value, 10);
+        inpMat.value = (!isNaN(i) && _motoristasCadastrados[i]) ? (_motoristasCadastrados[i].matricula || '') : '';
+      });
+
+      linha1.appendChild(inpMat);
+      linha1.appendChild(selMot);
+
+      // Pré-seleção (usado ao cadastrar um novo motorista e já vinculá-lo)
+      var _pidx = (prefill.motoristaIdx != null)
+        ? prefill.motoristaIdx
+        : (prefill.matricula ? _idxMotoristaPorMatricula(prefill.matricula) : -1);
+      if (_pidx >= 0 && _motoristasCadastrados && _motoristasCadastrados[_pidx]) {
+        selMot.value = String(_pidx);
+        inpMat.value = _motoristasCadastrados[_pidx].matricula || '';
+      }
+
+      // ── Linha 2: ponto início → ponto fim + remover ──────────────
+      var linha2 = document.createElement('div');
+      linha2.style.cssText = 'display:flex;gap:6px;align-items:center;';
+
+      var selIni = document.createElement('select');
+      selIni.className = 'form-input rel-mot-ini';
+      selIni.style.cssText = 'flex:1;min-width:0;';
+      _clonarOpcoesPonto(selIni);
+
+      var seta = document.createElement('span');
+      seta.textContent = '→';
+      seta.style.cssText = 'color:var(--laranja);flex:0 0 auto;font-weight:700;';
+
+      var selFim = document.createElement('select');
+      selFim.className = 'form-input rel-mot-fim';
+      selFim.style.cssText = 'flex:1;min-width:0;';
+      _clonarOpcoesPonto(selFim);
+
+      // Prefill (padrão: trecho A→B do relatório)
+      var pA = document.getElementById('relPontoAModal');
+      var pB = document.getElementById('relPontoBModal');
+      selIni.value = prefill.ini != null ? prefill.ini : (pA ? pA.value : '');
+      selFim.value = prefill.fim != null ? prefill.fim : (pB ? pB.value : '');
+
+      // Botão remover
+      var btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.className = 'btn btn-ghost';
+      btnDel.title = 'Remover';
+      btnDel.style.cssText = 'padding:6px 8px;cursor:pointer;flex:0 0 auto;color:var(--text3);';
+      btnDel.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      btnDel.addEventListener('click', function () { row.remove(); });
+
+      linha2.appendChild(selIni);
+      linha2.appendChild(seta);
+      linha2.appendChild(selFim);
+      linha2.appendChild(btnDel);
+
+      row.appendChild(linha1);
+      row.appendChild(linha2);
+      lista.appendChild(row);
+    }
+
+    /**
+     * Abre um mini-formulário inline para cadastrar um motorista NOVO no sistema
+     * e já vinculá-lo ao trecho. Ao confirmar, persiste via salvarMotorista e
+     * insere uma linha de responsável já preenchida.
+     */
+    function _addCadastroMotoristaTrechoRow() {
+      var lista = document.getElementById('relMotoristasTrechoList');
+      if (!lista) return;
+      _ensureMatriculasDatalist();
+
+      var row = document.createElement('div');
+      row.className = 'rel-mot-cadastro-row';
+      row.style.cssText = 'display:flex;flex-direction:column;gap:6px;border:1.5px dashed var(--laranja);border-radius:8px;padding:8px;background:var(--laranja4);';
+
+      var titulo = document.createElement('div');
+      titulo.style.cssText = 'font-size:11px;font-weight:700;color:var(--laranja);display:flex;align-items:center;gap:5px;';
+      titulo.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="12" height="12"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="22" y1="11" x2="16" y2="11"/></svg> Novo motorista';
+
+      // ── Linha 1: matrícula + nome ────────────────────────────────
+      var l1 = document.createElement('div');
+      l1.style.cssText = 'display:flex;gap:6px;align-items:center;';
+
+      var inpMat = document.createElement('input');
+      inpMat.type = 'text';
+      inpMat.className = 'form-input';
+      inpMat.placeholder = 'Matrícula';
+      inpMat.setAttribute('list', 'relMatriculasDatalist');
+      inpMat.style.cssText = 'flex:0 0 96px;min-width:0;';
+
+      var inpNome = document.createElement('input');
+      inpNome.type = 'text';
+      inpNome.className = 'form-input';
+      inpNome.placeholder = 'Nome do motorista';
+      inpNome.style.cssText = 'flex:1;min-width:0;';
+
+      var inpBase = document.createElement('input');
+      inpBase.type = 'text';
+      inpBase.className = 'form-input';
+      inpBase.placeholder = 'Base';
+      inpBase.title = 'Base do motorista (opcional)';
+      inpBase.style.cssText = 'flex:0 0 92px;min-width:0;';
+
+      var nota = document.createElement('div');
+      nota.style.cssText = 'font-size:10px;color:var(--text3);min-height:12px;';
+
+      // Digitar matrícula existente → preenche nome/base e sinaliza que só vincula
+      inpMat.addEventListener('input', function () {
+        var idx = _idxMotoristaPorMatricula(inpMat.value);
+        if (idx >= 0) {
+          inpNome.value = (_motoristasCadastrados[idx] && _motoristasCadastrados[idx].nome) || '';
+          inpBase.value = (_motoristasCadastrados[idx] && _motoristasCadastrados[idx].base) || '';
+          nota.textContent = 'Matrícula já cadastrada — será apenas vinculada.';
+          nota.style.color = 'var(--verde)';
+        } else {
+          nota.textContent = inpMat.value.trim() ? 'Matrícula nova — será cadastrada no sistema.' : '';
+          nota.style.color = 'var(--text3)';
+        }
+      });
+
+      l1.appendChild(inpMat);
+      l1.appendChild(inpNome);
+      l1.appendChild(inpBase);
+
+      // ── Linha 2: início → fim + confirmar + cancelar ─────────────
+      var l2 = document.createElement('div');
+      l2.style.cssText = 'display:flex;gap:6px;align-items:center;';
+
+      var selIni = document.createElement('select');
+      selIni.className = 'form-input';
+      selIni.style.cssText = 'flex:1;min-width:0;';
+      _clonarOpcoesPonto(selIni);
+
+      var seta = document.createElement('span');
+      seta.textContent = '→';
+      seta.style.cssText = 'color:var(--laranja);flex:0 0 auto;font-weight:700;';
+
+      var selFim = document.createElement('select');
+      selFim.className = 'form-input';
+      selFim.style.cssText = 'flex:1;min-width:0;';
+      _clonarOpcoesPonto(selFim);
+
+      // Prefill com o trecho A→B do relatório
+      var pA = document.getElementById('relPontoAModal');
+      var pB = document.getElementById('relPontoBModal');
+      if (pA) selIni.value = pA.value;
+      if (pB) selFim.value = pB.value;
+
+      var btnOk = document.createElement('button');
+      btnOk.type = 'button';
+      btnOk.className = 'btn btn-primary';
+      btnOk.style.cssText = 'flex:0 0 auto;padding:6px 12px;font-size:12px;cursor:pointer;white-space:nowrap;';
+      btnOk.textContent = 'Cadastrar e vincular';
+      btnOk.addEventListener('click', function () {
+        _confirmarCadastroMotoristaTrecho(row, inpMat, inpNome, inpBase, selIni, selFim, btnOk);
+      });
+
+      var btnDel = document.createElement('button');
+      btnDel.type = 'button';
+      btnDel.className = 'btn btn-ghost';
+      btnDel.title = 'Cancelar';
+      btnDel.style.cssText = 'padding:6px 8px;cursor:pointer;flex:0 0 auto;color:var(--text3);';
+      btnDel.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      btnDel.addEventListener('click', function () { row.remove(); });
+
+      l2.appendChild(selIni);
+      l2.appendChild(seta);
+      l2.appendChild(selFim);
+      l2.appendChild(btnOk);
+      l2.appendChild(btnDel);
+
+      row.appendChild(titulo);
+      row.appendChild(l1);
+      row.appendChild(nota);
+      row.appendChild(l2);
+      lista.appendChild(row);
+      setTimeout(function () { inpMat.focus(); }, 30);
+    }
+
+    /**
+     * Confirma o cadastro do novo motorista: valida, persiste (se novo) e
+     * substitui o formulário por uma linha de responsável já vinculada.
+     */
+    function _confirmarCadastroMotoristaTrecho(row, inpMat, inpNome, inpBase, selIni, selFim, btn) {
+      var mat  = inpMat.value.trim();
+      var nome = inpNome.value.trim();
+      var base = inpBase ? inpBase.value.trim() : '';
+      var ini  = selIni.value;
+      var fim  = selFim.value;
+
+      if (!nome)          { UIModule.showToast('Informe o nome do motorista.', 'error'); return; }
+      if (!ini || !fim)   { UIModule.showToast('Selecione o ponto inicial e final do trecho.', 'error'); return; }
+
+      _motoristasCadastrados = _motoristasCadastrados || [];
+
+      var finalize = function (idx, msg, tipo) {
+        row.remove();
+        _addMotoristaTrechoRow({ motoristaIdx: idx, ini: ini, fim: fim });
+        if (msg) UIModule.showToast(msg, tipo || 'success', 3500);
+      };
+
+      // Matrícula já cadastrada → apenas vincula (sem re-cadastrar)
+      var idxExist = mat ? _idxMotoristaPorMatricula(mat) : -1;
+      if (idxExist >= 0) {
+        finalize(idxExist, '"' + nome + '" vinculado ao trecho.');
+        return;
+      }
+
+      // Novo → persiste no sistema (aba MOTORISTAS + API) e vincula
+      if (btn) { btn.disabled = true; btn.textContent = 'Cadastrando…'; }
+
+      google.script.run
+        .withSuccessHandler(function (salvo) {
+          _motoristasCadastrados.push({
+            matricula: (salvo && salvo.matricula) || mat || '',
+            nome:      (salvo && salvo.nome)      || nome,
+            base:      (salvo && salvo.base)      || base || ''
+          });
+          _ensureMatriculasDatalist();
+          finalize(_motoristasCadastrados.length - 1, '"' + nome + '" cadastrado e vinculado ao trecho.');
+        })
+        .withFailureHandler(function (err) {
+          // Falha ao persistir não impede o uso no relatório atual
+          console.warn('[App] Falha ao cadastrar motorista:', err);
+          _motoristasCadastrados.push({ matricula: mat || '', nome: nome, base: base || '' });
+          _ensureMatriculasDatalist();
+          finalize(_motoristasCadastrados.length - 1, '"' + nome + '" vinculado (falha ao cadastrar no sistema).', 'warning');
+        })
+        .salvarMotorista({ matricula: mat, nome: nome, base: base, ibutton: '' });
+    }
+
+    /** Limpa todas as linhas de responsáveis. */
+    function _resetMotoristasTrecho() {
+      var lista = document.getElementById('relMotoristasTrechoList');
+      if (lista) lista.innerHTML = '';
+    }
+
+    /**
+     * Coleta os responsáveis inseridos no modal, no formato esperado pelo
+     * servidor: { nome, matricula, base, ponto_inicio, ponto_fim, inicioNome, fimNome }.
+     * Ignora linhas sem motorista selecionado.
+     */
+    function _coletarMotoristasTrecho() {
+      var lista = document.getElementById('relMotoristasTrechoList');
+      if (!lista) return [];
+      var out = [];
+      lista.querySelectorAll('.rel-mot-trecho-row').forEach(function (row) {
+        var selMot = row.querySelector('.rel-mot-sel');
+        var selIni = row.querySelector('.rel-mot-ini');
+        var selFim = row.querySelector('.rel-mot-fim');
+        var idx = selMot ? parseInt(selMot.value, 10) : NaN;
+        if (isNaN(idx) || !_motoristasCadastrados || !_motoristasCadastrados[idx]) return;
+        var m = _motoristasCadastrados[idx];
+        var ini = selIni ? selIni.value : '';
+        var fim = selFim ? selFim.value : '';
+        out.push({
+          nome:         m.nome || '',
+          matricula:    m.matricula || '',
+          base:         m.base || '',
+          ponto_inicio: ini,
+          ponto_fim:    fim,
+          inicioNome:   selIni && selIni.selectedOptions[0] ? selIni.selectedOptions[0].textContent : ini,
+          fimNome:      selFim && selFim.selectedOptions[0] ? selFim.selectedOptions[0].textContent : fim,
+          seqMin:       _seqPorPonto(ini),
+          seqMax:       _seqPorPonto(fim),
+        });
+      });
+      return out;
+    }
+
     function _initModalRelatorio() {
       var overlay = document.getElementById("modalRelatorio");
       var btnOpen = document.getElementById("btnRelatorio");
@@ -1778,11 +2163,29 @@
 
       var open = function () {
         _resetEvidenciasRel();
+        _resetMotoristasTrecho();
+        _carregarMotoristasCadastrados();
         overlay.classList.add("open");
       };
       var close = function () {
         overlay.classList.remove("open");
       };
+
+      // Botão "Adicionar motorista" no bloco de responsáveis do trecho
+      var btnAddMot = document.getElementById("btnAddMotoristaTrecho");
+      if (btnAddMot) {
+        btnAddMot.addEventListener("click", function () {
+          _carregarMotoristasCadastrados(function () { _addMotoristaTrechoRow(); });
+        });
+      }
+
+      // Botão "Cadastrar novo motorista" — registra no sistema e vincula ao trecho
+      var btnCadMot = document.getElementById("btnCadastrarMotoristaTrecho");
+      if (btnCadMot) {
+        btnCadMot.addEventListener("click", function () {
+          _carregarMotoristasCadastrados(function () { _addCadastroMotoristaTrechoRow(); });
+        });
+      }
 
       // Seleção de imagens/evidências
       var evInput = document.getElementById("relEvidenciasInput");
@@ -1874,7 +2277,16 @@
       }
     }
 
-    function _onConfirmRelatorio() {
+    function _onConfirmRelatorio(skipGuard) {
+      // Aviso: se há alertas pendentes sem justificativa, confirma antes de gerar.
+      if (skipGuard !== true) {
+        var _pend = _countAlertasPendentes();
+        if (_pend > 0) {
+          _abrirModalPendencias(_pend, function () { _onConfirmRelatorio(true); });
+          return;
+        }
+      }
+
       var tipoEl = document.querySelector('input[name="tipoRelatorioModal"]:checked');
       var tipo = tipoEl ? tipoEl.value : "COMPLETO";
       var gerarParadas = !!(document.getElementById('chkParadasIrregulares') &&
@@ -1885,9 +2297,13 @@
       var esqObj = _esquemas.find(function (e) { return e.id_esquema === idEsquema; });
       var nomeLinha = esqObj ? esqObj.nome_linha : "";
 
+      var fmtEl = document.querySelector('input[name="formatoRelatorioModal"]:checked');
+      var formato = fmtEl ? fmtEl.value : 'pdf';
+
       var params = {
         tipo: tipo,
         enviarAPI: true,
+        formato: formato,
         idEsquema: idEsquema,
         nomeLinha: nomeLinha,
         horario: esqObj ? (esqObj.horario || '') : '',
@@ -1895,6 +2311,7 @@
         esquemaPontos: _esquemaPontos,
         segments: _analysis ? _analysis.segments : [],
         summary:  _analysis ? _analysis.summary  : {},
+        justificativas: _justState.justificativas || {},
       };
 
       if (tipo === "MOTORISTA") {
@@ -1912,6 +2329,11 @@
           UIModule.showToast("Selecione os pontos A e B do trecho.", "error");
           return;
         }
+        // Responsáveis inseridos manualmente no modal; se nenhum, tenta derivar dos vínculos
+        var manuais = _coletarMotoristasTrecho();
+        params.motoristasTrecho = manuais.length
+          ? manuais
+          : _motoristasDoTrecho(_seqPorPonto(pontoA), _seqPorPonto(pontoB));
         params.idPontoA = pontoA;
         params.idPontoB = pontoB;
       }
@@ -1943,14 +2365,23 @@
             _setBusy(false);
             document.getElementById("modalRelatorio").classList.remove("open");
             console.log("[App] Payload do relatório:", result.payload);
-            UIModule.showToast("Relatório gerado com sucesso!", "success", 5000);
             if (result.apiResponse) {
               console.log("[App] Resposta da API:", result.apiResponse);
-              if (result.apiResponse.body && result.apiResponse.body.url) {
-                var fname = _buildPdfFilename(tipo, params.motorista);
-                _downloadPdf(result.apiResponse.body.url, fname);
-                UIModule.showToast("PDF pronto para download.", "success", 4000);
+              var _body = result.apiResponse.body || {};
+              if (_body.url) {
+                UIModule.showToast("Relatório gerado com sucesso!", "success", 4000);
+                var fname = _buildPdfFilename(tipo, params.motorista, params.formato);
+                _downloadPdf(_body.url, fname);
+                UIModule.showToast((params.formato === 'docx' ? 'Documento Word' : 'PDF') + " pronto para download.", "success", 4000);
+              } else {
+                var _fmt = (params.formato === 'docx') ? 'DOCX' : 'PDF';
+                UIModule.showToast(
+                  'Ocorrência criada, mas o arquivo ' + _fmt + ' não foi gerado' +
+                  (_body.warning ? ' — ' + _body.warning : '') + '.',
+                  'error', 9000);
               }
+            } else {
+              UIModule.showToast("Relatório gerado com sucesso!", "success", 4000);
             }
             if (gerarParadas) {
               _launchParadasFora(params);
@@ -2081,7 +2512,7 @@
           }
 
           AnalysisModule.renderVelocidadeTable(segments);
-          AnalysisModule.renderAlertas(alerts);
+          _renderAlertas(alerts);
 
           _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
 
@@ -2164,6 +2595,11 @@
       var trcF = document.getElementById('relTrechoFieldsInline');
       if (motF) motF.style.display = 'none';
       if (trcF) trcF.style.display = 'none';
+
+      // Reseta o Diagnóstico Inteligente e volta à visão de relatório
+      var secSwitcher = document.getElementById('sectionViewSwitcher');
+      if (secSwitcher) secSwitcher.style.display = 'none';
+      if (window.DiagnosticoModule) DiagnosticoModule.reset();
 
       // Reseta barra de modo de visualização
       var secModo = document.getElementById('sectionModoVisualizacao');
@@ -2333,6 +2769,43 @@
     }
 
     /**
+     * Motoristas vinculados cuja faixa de responsabilidade se sobrepõe ao
+     * trecho [seqA, seqB]. Retorna em ordem de viagem (por seqMin), com nomes
+     * de pontos resolvidos para exibição no relatório.
+     *
+     * A sobreposição exige interior compartilhado (min(vMax,tMax) > max(vMin,tMin)):
+     * um vínculo que apenas encosta no extremo do trecho (ponto de rendição) não
+     * é considerado responsável pelo trecho.
+     */
+    function _motoristasDoTrecho(seqA, seqB) {
+      if (seqA == null || seqB == null) return [];
+      var tMin = Math.min(seqA, seqB), tMax = Math.max(seqA, seqB);
+      return _vinculos
+        .map(function (v) {
+          var r = _rangeDoVinculo(v);
+          return r ? { v: v, min: r.min, max: r.max } : null;
+        })
+        .filter(function (o) {
+          return o && Math.min(o.max, tMax) > Math.max(o.min, tMin);
+        })
+        .sort(function (a, b) { return a.min - b.min; })
+        .map(function (o) {
+          var v = o.v;
+          return {
+            nome:         v.nome || '',
+            matricula:    v.matricula && v.matricula !== '—' ? v.matricula : '',
+            base:         v.base || '',
+            ponto_inicio: v.ponto_inicio || '',
+            ponto_fim:    v.ponto_fim || '',
+            inicioNome:   _nomePontoPorId(v.ponto_inicio),
+            fimNome:      _nomePontoPorId(v.ponto_fim),
+            seqMin:       o.min,
+            seqMax:       o.max,
+          };
+        });
+    }
+
+    /**
      * Vínculo que possui a seq no INTERIOR do seu trecho (extremos liberados p/ rendição).
      * @param {number} seq
      * @param {number} [excludeIdx]  índice de vínculo a ignorar (edição)
@@ -2443,16 +2916,17 @@
     }
 
     /**
-     * Aplica o filtro do modo ativo (COMPLETO/MOTORISTA/TRECHO) à visualização
-     * na tela: mapa, tabela de pontos e alertas.
+     * Calcula a viagem e o esquema filtrados ao modo ativo
+     * (COMPLETO/MOTORISTA/TRECHO). Computação pura — reutilizada pela
+     * visualização (_aplicarFiltroModo) e pelo Diagnóstico Inteligente.
+     * @returns {{tripView:Array, esquemaView:Array, pontoInicioKey:string, pontoFimKey:string, filtrado:boolean}}
      */
-    function _aplicarFiltroModo() {
-      if (!_enrichedTrip.length || !_analysis) return;
-
+    function _computeModoView() {
       var tripView = _enrichedTrip;
       var esquemaView = _esquemaPontos;
       var seqA = null, seqB = null;
       var pontoInicioKey = null, pontoFimKey = null;
+      var filtrado = false;
 
       if (_modoAtivo === 'MOTORISTA' && _motoristaAtivo) {
         pontoInicioKey = _motoristaAtivo.ponto_inicio;
@@ -2481,6 +2955,7 @@
         var filtered = _enrichedTrip.filter(function(p) { return p.seq >= minS && p.seq <= maxS; });
         if (filtered.length >= 2) {
           tripView = filtered;
+          filtrado = true;
 
           // Codigos visitados no trecho (via seq range)
           var codigosNoTrecho = new Set(
@@ -2516,6 +2991,23 @@
         }
       }
 
+      return {
+        tripView: tripView, esquemaView: esquemaView,
+        pontoInicioKey: pontoInicioKey, pontoFimKey: pontoFimKey, filtrado: filtrado
+      };
+    }
+
+    /**
+     * Aplica o filtro do modo ativo (COMPLETO/MOTORISTA/TRECHO) à visualização
+     * na tela: mapa, tabela de pontos e alertas.
+     */
+    function _aplicarFiltroModo() {
+      if (!_enrichedTrip.length || !_analysis) return;
+
+      var _mv = _computeModoView();
+      var tripView = _mv.tripView;
+      var esquemaView = _mv.esquemaView;
+
       _agendarMapa(tripView, null, _locaisCache);
 
       // Comparação filtrada ao modo
@@ -2536,7 +3028,15 @@
         });
       }
 
-      AnalysisModule.renderPontosTable(tripView, comparacaoView);
+      // No modo "Por Motorista" a tabela já está filtrada a um único motorista;
+      // restringe o agrupamento a ele para que o ponto de rendição (extremo
+      // compartilhado) não receba o cabeçalho do motorista anterior.
+      var grupoFiltroIdx = (_modoAtivo === 'MOTORISTA' && _motoristaAtivo)
+        ? _vinculos.indexOf(_motoristaAtivo)
+        : null;
+      if (grupoFiltroIdx === -1) grupoFiltroIdx = null;
+
+      AnalysisModule.renderPontosTable(tripView, comparacaoView, grupoFiltroIdx);
       if (comparacaoView) AnalysisModule.atualizarContadoresComparacao(comparacaoView);
 
       // Alertas filtrados ao modo
@@ -2564,8 +3064,12 @@
             }
           });
         }
-        AnalysisModule.renderAlertas(alertsBase);
+        _renderAlertas(alertsBase);
       }
+
+      // O escopo (viagem/motorista/trecho) mudou → invalida o Diagnóstico para
+      // que ele reflita o mesmo recorte.
+      if (window.DiagnosticoModule) DiagnosticoModule.onScopeChanged();
     }
 
     // ============================================================
@@ -2783,10 +3287,19 @@
      * Gera relatório diretamente a partir das seleções inline da Coluna 3.
      * Não abre o modal; usa enviarAPI=false.
      */
-    function _onGerarRelatorioInline() {
+    function _onGerarRelatorioInline(skipGuard) {
       if (!_enrichedTrip || !_enrichedTrip.length) {
         UIModule.showToast('Processe uma viagem primeiro.', 'error');
         return;
+      }
+
+      // Aviso: se há alertas pendentes sem justificativa, confirma antes de gerar.
+      if (skipGuard !== true) {
+        var _pend = _countAlertasPendentes();
+        if (_pend > 0) {
+          _abrirModalPendencias(_pend, function () { _onGerarRelatorioInline(true); });
+          return;
+        }
       }
 
       var tipoEl = document.querySelector('input[name="tipoRelatorio"]:checked');
@@ -2810,6 +3323,7 @@
         esquemaPontos: _esquemaPontos,
         segments: _analysis ? _analysis.segments : [],
         summary:  _analysis ? _analysis.summary  : {},
+        justificativas: _justState.justificativas || {},
       };
 
       if (tipo === 'MOTORISTA') {
@@ -2829,6 +3343,8 @@
         }
         params.idPontoA = pontoA;
         params.idPontoB = pontoB;
+        // Motoristas responsáveis pelo trecho selecionado (todos que se sobrepõem)
+        params.motoristasTrecho = _motoristasDoTrecho(_seqPorPonto(pontoA), _seqPorPonto(pontoB));
       }
 
       var btn = document.getElementById('btnGerarRelatorioInline');
@@ -2847,14 +3363,23 @@
           UIModule.hideLoading();
           _setBusy(false);
           console.log('[App] Payload do relatório:', result.payload);
-          UIModule.showToast('Relatório gerado com sucesso!', 'success', 5000);
           if (result.apiResponse) {
             console.log('[App] Resposta da API:', result.apiResponse);
-            if (result.apiResponse.body && result.apiResponse.body.url) {
-              var fname2 = _buildPdfFilename(tipo, params.motorista);
-              _downloadPdf(result.apiResponse.body.url, fname2);
-              UIModule.showToast('PDF pronto para download.', 'success', 4000);
+            var _body2 = result.apiResponse.body || {};
+            if (_body2.url) {
+              UIModule.showToast('Relatório gerado com sucesso!', 'success', 4000);
+              var fname2 = _buildPdfFilename(tipo, params.motorista, params.formato);
+              _downloadPdf(_body2.url, fname2);
+              UIModule.showToast((params.formato === 'docx' ? 'Documento Word' : 'PDF') + ' pronto para download.', 'success', 4000);
+            } else {
+              var _fmt2 = (params.formato === 'docx') ? 'DOCX' : 'PDF';
+              UIModule.showToast(
+                'Ocorrência criada, mas o arquivo ' + _fmt2 + ' não foi gerado' +
+                (_body2.warning ? ' — ' + _body2.warning : '') + '.',
+                'error', 9000);
             }
+          } else {
+            UIModule.showToast('Relatório gerado com sucesso!', 'success', 4000);
           }
           if (gerarParadas) {
             _launchParadasFora(params);
@@ -2899,7 +3424,8 @@
         .gerarRelatorio(params);
     }
 
-    function _buildPdfFilename(tipo, motorista) {
+    function _buildPdfFilename(tipo, motorista, formato) {
+      var ext = (String(formato || 'pdf').toLowerCase() === 'docx') ? '.docx' : '.pdf';
       var veiculo = (_analysis && _analysis.summary && _analysis.summary.veiculo)
         ? String(_analysis.summary.veiculo).trim() : '';
       var data = (_analysis && _analysis.summary && _analysis.summary.dataViagem)
@@ -2908,9 +3434,9 @@
       if (tipo === 'MOTORISTA' && motorista) {
         var mat = motorista.matricula ? String(motorista.matricula).trim() : '';
         var nome = motorista.nome ? slug(motorista.nome) : '';
-        return [mat, nome, veiculo, data].filter(Boolean).join(' - ') + '.pdf';
+        return [mat, nome, veiculo, data].filter(Boolean).join(' - ') + ext;
       }
-      return [veiculo, 'ANALISE DE VIAGEM', data].filter(Boolean).join(' - ') + '.pdf';
+      return [veiculo, 'ANALISE DE VIAGEM', data].filter(Boolean).join(' - ') + ext;
     }
 
     /**
@@ -3000,6 +3526,236 @@
       }
     }
 
+    // ============================================================
+    //  ALERTAS OPERACIONAIS — meta, render e justificativas
+    // ============================================================
+
+    /** Garante que alertas gerados no cliente (parada proibida / não visitado)
+     *  tenham alertKey/severidade/diagnóstico no mesmo formato do servidor. */
+    function _fillAlertMeta(a) {
+      if (!a.alertKey) {
+        a.alertKey = a.tipo + '|' + (a.trecho || '') + (a.seq != null ? '|' + a.seq : '');
+      }
+      if (!a.severidade) {
+        a.severidade = (a.nivel === 'critico' || a.tipo === 'PARADA_PROIBIDA') ? 'critico'
+          : (a.tipo === 'PONTO_NAO_VISITADO' || a.tipo === 'LOCAL_NAO_IDENTIFICADO') ? 'revisar'
+          : 'atencao';
+      }
+      if (!a.diagnostico) {
+        if (a.tipo === 'PARADA_PROIBIDA') {
+          a.diagnostico = 'Parada registrada em local não autorizado. Inconsistência crítica que deve ser tratada como ocorrência.';
+        } else if (a.tipo === 'PONTO_NAO_VISITADO') {
+          a.diagnostico = 'Ponto previsto no esquema da linha não foi visitado nesta viagem. Verifique se houve desvio de rota ou falha de registro.';
+        } else {
+          a.diagnostico = a.descricao || '';
+        }
+      }
+      return a;
+    }
+
+    /** Renderiza os alertas com o estado de justificativas atual.
+     *  Aceita um array explícito (ex.: recorte por modo) ou usa _analysis.alerts. */
+    function _renderAlertas(alertsArr) {
+      var arr = alertsArr || (_analysis && _analysis.alerts);
+      if (!arr) return;
+      arr.forEach(_fillAlertMeta);
+      AnalysisModule.renderAlertas(arr, _justState);
+    }
+
+    /** Conta alertas operacionais pendentes (não justificados, auto ou manual). */
+    function _countAlertasPendentes() {
+      if (!_analysis || !_analysis.alerts) return 0;
+      var manualMap = _justState.justificativas || {};
+      var validos = {
+        VELOCIDADE_EXCESSIVA: 1, VELOCIDADE_ALTA: 1, VELOCIDADE_BAIXA: 1,
+        PARADA_PROIBIDA: 1, PARADA_LONGA: 1, LOCAL_NAO_IDENTIFICADO: 1, PONTO_NAO_VISITADO: 1
+      };
+      var n = 0;
+      _analysis.alerts.forEach(function (a) {
+        if (!validos[a.tipo]) return;
+        _fillAlertMeta(a);
+        var manual = manualMap[a.alertKey];
+        var reaberto = manual && manual.status === 'reaberto';
+        var isJust = (manual && !reaberto) || (a.autoJustificado && !reaberto);
+        if (!isJust) n++;
+      });
+      return n;
+    }
+
+    var _pendingReportFn = null; // callback a executar se o usuário optar por gerar mesmo assim
+
+    /** Abre o aviso de pendências; guarda a ação de geração para o "Gerar mesmo assim". */
+    function _abrirModalPendencias(n, proceedFn) {
+      _pendingReportFn = proceedFn;
+      var plural = n > 1;
+      var msg = document.getElementById('pendenciasMsg');
+      if (msg) {
+        msg.innerHTML =
+          'Existe' + (plural ? 'm' : '') + ' <strong style="color:var(--text);">' + n +
+          ' alerta' + (plural ? 's' : '') + ' operacion' + (plural ? 'ais' : 'al') +
+          ' sem justificativa</strong>.<br><br>' +
+          'Alertas não justificados entram como pendência no relatório. Recomenda-se revisar e justificar antes de gerar.';
+      }
+      var ov = document.getElementById('modalConfirmarPendencias');
+      if (ov) ov.classList.add('open');
+    }
+
+    function fecharModalPendencias() {
+      var ov = document.getElementById('modalConfirmarPendencias');
+      if (ov) ov.classList.remove('open');
+      _pendingReportFn = null;
+    }
+
+    function confirmarGerarComPendencias() {
+      var fn = _pendingReportFn;
+      _pendingReportFn = null;
+      var ov = document.getElementById('modalConfirmarPendencias');
+      if (ov) ov.classList.remove('open');
+      if (typeof fn === 'function') fn();
+    }
+
+    /** Busca no servidor as justificativas manuais salvas para a viagem atual. */
+    function _loadJustificativas() {
+      if (!_enrichedTrip.length) return;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) {
+            _justState = { hash: res.hash || '', justificativas: res.justificativas || {} };
+            _renderAlertas();
+          }
+        })
+        .withFailureHandler(function () { /* silencioso — cards permanecem pendentes */ })
+        .getJustificativasAlerta({ enrichedTrip: _enrichedTrip });
+    }
+
+    /** Liga/desliga o estado de carregamento (spinner) de um botão .op-btn-sm. */
+    function _btnLoading(btn, loading, label) {
+      if (!btn) return;
+      if (loading) {
+        btn.dataset.originalHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="op-btn-spin"></span>' + (label ? ' ' + label : '');
+      } else {
+        btn.disabled = false;
+        if (btn.dataset.originalHtml != null) {
+          btn.innerHTML = btn.dataset.originalHtml;
+          delete btn.dataset.originalHtml;
+        }
+      }
+    }
+
+    /** Categoria e placeholder padrão do modal Justificar conforme o tipo do alerta. */
+    function _justDefaults(tipo) {
+      if (String(tipo).indexOf('VELOCIDADE') === 0) {
+        return { categoria: 'Via urbana', placeholder: 'Ex: trecho em área urbana com semáforos' };
+      }
+      if (tipo === 'PARADA_PROIBIDA') {
+        return { categoria: 'Condição operacional prevista', placeholder: 'Ex: parada autorizada para abastecimento / troca de motorista' };
+      }
+      if (tipo === 'PARADA_LONGA') {
+        return { categoria: 'Condição operacional prevista', placeholder: 'Ex: refeição, apoio ou espera prevista na operação' };
+      }
+      if (tipo === 'PONTO_NAO_VISITADO') {
+        return { categoria: 'Condição operacional prevista', placeholder: 'Ex: ponto suprimido por ordem da operação' };
+      }
+      if (tipo === 'LOCAL_NAO_IDENTIFICADO') {
+        return { categoria: 'Outro', placeholder: 'Ex: local recém-inaugurado, ainda não cadastrado' };
+      }
+      return { categoria: 'Outro', placeholder: 'Descreva o motivo da justificativa' };
+    }
+
+    /** Abre o modal Justificar para o alerta do card do botão clicado. */
+    function abrirModalJustificar(btn) {
+      var card = btn && btn.closest ? btn.closest('.op-alert-card') : null;
+      if (!card) return;
+      _justModalKey = card.dataset.alertKey || '';
+      var ref = document.getElementById('justificarRef');
+      if (ref) {
+        ref.innerHTML = '<strong>' + _escHtml(card.dataset.alertTitle || 'Alerta') + '</strong>'
+          + (card.dataset.alertTrecho ? '<br>' + _escHtml(card.dataset.alertTrecho) : '');
+      }
+      var cat = document.getElementById('justificarCategoria');
+      var mot = document.getElementById('justificarMotivo');
+      var obs = document.getElementById('justificarObs');
+      // Defaults contextuais conforme o TIPO do alerta (não sempre velocidade).
+      var def = _justDefaults(card.dataset.alertTipo || '');
+      if (cat) cat.value = def.categoria;
+      if (mot) { mot.value = ''; mot.placeholder = def.placeholder; }
+      if (obs) obs.value = '';
+      var overlay = document.getElementById('modalJustificarAlerta');
+      if (overlay) overlay.classList.add('open');
+      if (mot) setTimeout(function () { mot.focus(); }, 60);
+    }
+
+    function _fecharModalJustificar() {
+      var overlay = document.getElementById('modalJustificarAlerta');
+      if (overlay) overlay.classList.remove('open');
+      _justModalKey = null;
+    }
+
+    /** Salva a justificativa manual do alerta em edição. */
+    function salvarJustificativa() {
+      if (!_justModalKey) { _fecharModalJustificar(); return; }
+      var btn = document.getElementById('btnConfirmJustificar');
+      var categoria = (document.getElementById('justificarCategoria') || {}).value || 'Outro';
+      var motivo = ((document.getElementById('justificarMotivo') || {}).value || '').trim();
+      var obs = ((document.getElementById('justificarObs') || {}).value || '').trim();
+      var key = _justModalKey;
+
+      if (btn) { btn.dataset.originalHtml = btn.innerHTML; btn.disabled = true; btn.innerHTML = 'Salvando…'; }
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (btn) { btn.disabled = false; if (btn.dataset.originalHtml != null) { btn.innerHTML = btn.dataset.originalHtml; delete btn.dataset.originalHtml; } }
+          if (!res || !res.ok) {
+            UIModule.showToast((res && res.erro) || 'Erro ao salvar justificativa.', 'error');
+            return;
+          }
+          if (res.hash) _justState.hash = res.hash;
+          _justState.justificativas[key] = res.justificativa;
+          _fecharModalJustificar();
+          _renderAlertas();
+          UIModule.showToast('Alerta justificado.', 'success', 2500);
+        })
+        .withFailureHandler(function (e) {
+          if (btn) { btn.disabled = false; if (btn.dataset.originalHtml != null) { btn.innerHTML = btn.dataset.originalHtml; delete btn.dataset.originalHtml; } }
+          UIModule.showToast('Falha ao salvar: ' + (e && e.message ? e.message : String(e)), 'error');
+        })
+        .salvarJustificativaAlerta({
+          enrichedTrip: _enrichedTrip, alertKey: key,
+          categoria: categoria, motivo: motivo, observacao: obs
+        });
+    }
+
+    /** Reabre um alerta justificado (manual → remove; automático → override). */
+    function reabrirAlerta(btn) {
+      var card = btn && btn.closest ? btn.closest('.op-alert-card') : null;
+      if (!card) return;
+      var key = card.dataset.alertKey || '';
+      var auto = btn.dataset.auto === '1';
+      _btnLoading(btn, true, '');
+
+      function done(res) {
+        _btnLoading(btn, false);
+        if (!res || !res.ok) {
+          UIModule.showToast((res && res.erro) || 'Erro ao reabrir o alerta.', 'error');
+          return;
+        }
+        if (auto) _justState.justificativas[key] = { status: 'reaberto' };
+        else delete _justState.justificativas[key];
+        _renderAlertas();
+        UIModule.showToast('Alerta reaberto.', 'info', 2500);
+      }
+      function fail(e) {
+        _btnLoading(btn, false);
+        UIModule.showToast('Falha ao reabrir: ' + (e && e.message ? e.message : String(e)), 'error');
+      }
+
+      var runner = google.script.run.withSuccessHandler(done).withFailureHandler(fail);
+      if (auto) runner.reabrirAlertaAuto({ enrichedTrip: _enrichedTrip, alertKey: key });
+      else runner.removerJustificativaAlerta({ enrichedTrip: _enrichedTrip, alertKey: key });
+    }
+
     /**
      * Cria ocorrência de parada irregular para um único evento Não Aut. (tipo 42).
      * Chamado pelo botão inline nos cards de alerta PARADA_PROIBIDA.
@@ -3063,6 +3819,94 @@
       });
     }
 
+    /**
+     * Cria ocorrência EXCESSO_PERMANENCIA para a parada prolongada do card.
+     * Botão inline nos cards do grupo "Paradas Prolongadas".
+     */
+    function criarExcessoPermanenciaInline(btn, seq) {
+      if (_vinculos.length === 0) {
+        var btnVincular = document.getElementById('btnVincularMotorista');
+        if (btnVincular) btnVincular.click();
+        UIModule.showToast('Vincule um motorista e clique em "+ Criar ocorrência" novamente.', 'info', 5000);
+        return;
+      }
+
+      var seqNum = Number(seq);
+      var pontoAlvo = _enrichedTrip.find(function (pt) { return Number(pt.seq) === seqNum; });
+      if (!pontoAlvo) {
+        UIModule.showToast('Ponto não encontrado.', 'error', 3000);
+        return;
+      }
+
+      var idEsquema = (document.getElementById('selectEsquema') || {}).value || '';
+      var esqObj = _esquemas.find(function (e) { return e.id_esquema === idEsquema; });
+
+      _btnLoading(btn, true, 'Criando…');
+      google.script.run
+        .withSuccessHandler(function (results) {
+          var r = (results && results[0]) || null;
+          if (r && r.status === 'ok') {
+            if (btn) {
+              btn.disabled = true;
+              btn.classList.add('op-btn-done');
+              btn.innerHTML = '✓ Ocorrência criada';
+              delete btn.dataset.originalHtml;
+            }
+            UIModule.showToast('Ocorrência de excesso de permanência criada.', 'success', 3500);
+          } else {
+            _btnLoading(btn, false);
+            UIModule.showToast('Falha ao criar ocorrência' + (r && r.message ? ': ' + String(r.message).slice(0, 120) : '') + '.', 'error', 6000);
+          }
+        })
+        .withFailureHandler(function (e) {
+          _btnLoading(btn, false);
+          UIModule.showToast('Erro: ' + (e && e.message ? e.message : String(e)), 'error', 6000);
+        })
+        .enviarExcessoPermanencia({
+          enrichedTrip:  _enrichedTrip,
+          esquemaPontos: _esquemaPontos,
+          motorista:     _vinculos[0],
+          nomeLinha:     esqObj ? esqObj.nome_linha : '',
+          horario:       esqObj ? (esqObj.horario || '') : '',
+          summary:       _analysis ? (_analysis.summary || {}) : {},
+          seqAlvo:       seqNum,
+        });
+    }
+
+    /**
+     * Monta o payload para o Diagnóstico Inteligente a partir do estado atual.
+     * Retorna null se não houver viagem processada.
+     */
+    function getDiagnosticoPayload() {
+      if (!_analysis || !_enrichedTrip || !_enrichedTrip.length) return null;
+      var selEsquema = document.getElementById('selectEsquema');
+      var idEsquema = selEsquema ? selEsquema.value : '';
+      var esqObj = _esquemas.find(function (e) { return String(e.id_esquema) === String(idEsquema); });
+
+      // Respeita o modo de visualização ativo: viagem inteira, por motorista ou
+      // por trecho. O servidor recomputa segmentos/resumo a partir deste recorte.
+      var mv = _computeModoView();
+      var escopo = '';
+      if (mv.filtrado && mv.tripView.length) {
+        var ini = mv.tripView[0].ponto;
+        var fim = mv.tripView[mv.tripView.length - 1].ponto;
+        if (_modoAtivo === 'MOTORISTA' && _motoristaAtivo && _motoristaAtivo.nome) {
+          escopo = 'Motorista: ' + _motoristaAtivo.nome;
+        } else if (_modoAtivo === 'TRECHO') {
+          escopo = 'Trecho: ' + ini + ' → ' + fim;
+        }
+      }
+
+      return {
+        enrichedTrip:  mv.tripView,
+        esquemaPontos: mv.esquemaView || [],
+        nomeLinha:     esqObj ? esqObj.nome_linha : '',
+        idEsquema:     idEsquema || '',
+        escopo:        escopo,
+        modo:          _modoAtivo
+      };
+    }
+
     return {
       init,
       getTrip,
@@ -3070,6 +3914,7 @@
       getLocais,
       getComparacao,
       getVinculos,
+      getDiagnosticoPayload,
       _removerVinculo,
       _confirmarCard,
       _toggleEditCard,
@@ -3081,14 +3926,139 @@
       _confirmarManual,
       _onGerarRelatorioInline,
       criarParadaIrregularInline: criarParadaIrregularInline,
+      criarExcessoPermanenciaInline: criarExcessoPermanenciaInline,
+      abrirModalJustificar: abrirModalJustificar,
+      salvarJustificativa: salvarJustificativa,
+      fecharModalJustificar: _fecharModalJustificar,
+      reabrirAlerta: reabrirAlerta,
+      fecharModalPendencias: fecharModalPendencias,
+      confirmarGerarComPendencias: confirmarGerarComPendencias,
       _novaAnalise: _onLimpar,
       _setModo,
       abrirMapa,
     };
   })();
 
+  // ============================================================
+  //  SectionGuide — guia de seções/subseções na lateral esquerda
+  //  Lista dinamicamente as seções visíveis + suas subseções
+  //  (qualquer elemento [data-guide-anchor] com data-guide-label),
+  //  com scroll-spy e navegação por clique.
+  // ============================================================
+  var SectionGuide = (function () {
+    var SECTIONS = [
+      { id: 'sectionResumo',      label: 'Resumo' },
+      { id: 'sectionMapa',        label: 'Mapa Operacional' },
+      { id: 'sectionEventos',     label: 'Eventos da Rota' },
+      { id: 'sectionAlertas',     label: 'Alertas Operacionais' },
+      { id: 'sectionDiagnostico', label: 'Diagnóstico' }
+    ];
+    var HEADER_OFFSET = 72;   // altura do header sticky + folga
+    var _targets = [];        // [{key, el}] em ordem do documento (para o spy)
+    var _raf = null, _debounce = null;
+
+    function _esc(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+    function _visible(el) {
+      return !!(el && el.offsetParent !== null && el.getClientRects().length > 0);
+    }
+
+    function refresh() {
+      var listEl = document.getElementById('guideList');
+      var wrap = document.querySelector('.app-wrapper');
+      if (!listEl || !wrap) return;
+
+      var html = '', targets = [];
+      SECTIONS.forEach(function (sec) {
+        var el = document.getElementById(sec.id);
+        if (!_visible(el)) return;
+        targets.push({ key: sec.id, el: el });
+        html += '<li>'
+          + '<div class="guide-item" data-target="' + sec.id + '">'
+          + '<span class="guide-dot"></span><span>' + _esc(sec.label) + '</span></div>';
+
+        var anchors = el.querySelectorAll('[data-guide-anchor]');
+        var subHtml = '';
+        Array.prototype.forEach.call(anchors, function (an, i) {
+          if (!_visible(an)) return;
+          if (!an.id) an.id = sec.id + '_sub_' + i;
+          var lbl = an.getAttribute('data-guide-label') || 'Seção';
+          targets.push({ key: an.id, el: an });
+          subHtml += '<li><div class="guide-sub" data-target="' + an.id + '">'
+            + '<span class="guide-tick"></span><span>' + _esc(lbl) + '</span></div></li>';
+        });
+        if (subHtml) html += '<ul class="guide-sublist">' + subHtml + '</ul>';
+        html += '</li>';
+      });
+
+      if (!targets.length) {
+        wrap.classList.remove('has-guide');
+        listEl.innerHTML = '';
+        _targets = [];
+        return;
+      }
+
+      wrap.classList.add('has-guide');
+      listEl.innerHTML = html;
+      _targets = targets;
+
+      Array.prototype.forEach.call(listEl.querySelectorAll('[data-target]'), function (node) {
+        node.addEventListener('click', function () {
+          var t = document.getElementById(node.getAttribute('data-target'));
+          if (!t) return;
+          var y = t.getBoundingClientRect().top + window.pageYOffset - HEADER_OFFSET;
+          window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+        });
+      });
+
+      _spy();
+    }
+
+    function _spy() {
+      if (!_targets.length) return;
+      var listEl = document.getElementById('guideList');
+      if (!listEl) return;
+      var probe = window.pageYOffset + HEADER_OFFSET + 8;
+      var activeKey = _targets[0].key;
+      for (var i = 0; i < _targets.length; i++) {
+        var top = _targets[i].el.getBoundingClientRect().top + window.pageYOffset;
+        if (top - 1 <= probe) activeKey = _targets[i].key; else break;
+      }
+      Array.prototype.forEach.call(listEl.querySelectorAll('[data-target]'), function (n) {
+        n.classList.toggle('active', n.getAttribute('data-target') === activeKey);
+      });
+    }
+
+    function _onScroll() {
+      if (_raf) return;
+      _raf = requestAnimationFrame(function () { _raf = null; _spy(); });
+    }
+    function _schedRefresh() {
+      clearTimeout(_debounce);
+      _debounce = setTimeout(refresh, 160);
+    }
+
+    function init() {
+      var wrap = document.querySelector('.app-wrapper');
+      if (!wrap) return;
+      window.addEventListener('scroll', _onScroll, { passive: true });
+      window.addEventListener('resize', _schedRefresh);
+      // Observa apenas o show/hide das seções (troca de view/modo) — barato.
+      var mo = new MutationObserver(_schedRefresh);
+      SECTIONS.forEach(function (s) {
+        var el = document.getElementById(s.id);
+        if (el) mo.observe(el, { attributes: true, attributeFilter: ['style', 'class'] });
+      });
+      refresh();
+    }
+
+    return { init: init, refresh: refresh };
+  })();
+
   // ---- Inicialização quando o DOM estiver pronto ----
   document.addEventListener("DOMContentLoaded", function () {
     AppModule.init();
+    SectionGuide.init();
   });
 </script>

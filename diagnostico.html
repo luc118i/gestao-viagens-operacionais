@@ -1,0 +1,474 @@
+<script>
+  // ============================================================
+  //  DiagnosticoModule  —  Análise Inteligente da Viagem (front)
+  //  Aba "Diagnóstico Inteligente": consome gerarDiagnostico(payload),
+  //  renderiza cards, timeline, tabelas, inconsistências e parecer.
+  //  Cache client-side por hash da viagem atual (evita rechamar ao alternar).
+  // ============================================================
+  var DiagnosticoModule = (function () {
+
+    var OPERACIONAL_IDS = [
+      'sectionResumo', 'sectionModoVisualizacao',
+      'sectionMapa', 'sectionEventos', 'sectionAlertas'
+    ];
+
+    var _view    = 'REPORT';   // 'REPORT' | 'DIAG'
+    var _diag    = null;       // diagnóstico carregado da viagem atual
+    var _loading = false;
+    var _tripKey = null;       // identifica a viagem atual (invalida o cache)
+
+    // ------------------------------------------------------------
+    //  Ciclo de vida
+    // ------------------------------------------------------------
+
+    /** Chamado quando uma nova viagem é processada. Limpa o cache local. */
+    function onNewTrip() {
+      _diag = null;
+      _loading = false;
+      _tripKey = String(Date.now());
+      _setView('REPORT');
+      var content = document.getElementById('diagContent');
+      if (content) content.innerHTML = '';
+    }
+
+    /** Reset completo (ao limpar/nova análise). */
+    function reset() {
+      _diag = null;
+      _loading = false;
+      _tripKey = null;
+      _setView('REPORT');
+      var content = document.getElementById('diagContent');
+      if (content) content.innerHTML = '';
+    }
+
+    /**
+     * O escopo mudou (modo Completo/Motorista/Trecho ou seleção de trecho).
+     * Invalida a análise carregada; recarrega na hora se estiver visível.
+     */
+    function onScopeChanged() {
+      if (!_tripKey) return;            // sem viagem processada — nada a fazer
+      _diag = null;
+      _tripKey = String(Date.now());    // cancela qualquer chamada em voo
+      if (_view === 'DIAG' && !_loading) _load();
+    }
+
+    // ------------------------------------------------------------
+    //  Alternância de visão
+    // ------------------------------------------------------------
+
+    function showView(view) {
+      _setView(view);
+      if (view === 'DIAG' && !_diag && !_loading) _load();
+    }
+
+    function _setView(view) {
+      _view = view;
+      var wrapper = document.querySelector('.app-wrapper');
+      if (wrapper) wrapper.classList.toggle('view-diag', view === 'DIAG');
+
+      var btnR = document.getElementById('viewBtn_REPORT');
+      var btnD = document.getElementById('viewBtn_DIAG');
+      if (btnR) { btnR.classList.toggle('active', view === 'REPORT'); btnR.setAttribute('aria-selected', view === 'REPORT'); }
+      if (btnD) { btnD.classList.toggle('active', view === 'DIAG');   btnD.setAttribute('aria-selected', view === 'DIAG'); }
+
+      var secDiag = document.getElementById('sectionDiagnostico');
+      if (secDiag) secDiag.style.display = (view === 'DIAG') ? 'block' : 'none';
+    }
+
+    // ------------------------------------------------------------
+    //  Carregamento (chama o servidor)
+    // ------------------------------------------------------------
+
+    function _load() {
+      var payload = (window.AppModule && AppModule.getDiagnosticoPayload)
+        ? AppModule.getDiagnosticoPayload() : null;
+      if (!payload) {
+        // Sem viagem processada na sessão (ex.: página recarregada — a análise
+        // não é persistida). Estado vazio orientativo, não erro.
+        _renderEmpty();
+        return;
+      }
+
+      _loading = true;
+      _renderSkeleton();
+
+      var thisKey = _tripKey;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (thisKey !== _tripKey) return; // viagem trocou durante a chamada
+          _loading = false;
+          if (!res || !res.ok) {
+            _renderError((res && res.erro) || 'Não foi possível gerar o diagnóstico.');
+            return;
+          }
+          _diag = res.diagnostico;
+          _render(_diag, res.fromCache);
+        })
+        .withFailureHandler(function (err) {
+          if (thisKey !== _tripKey) return;
+          _loading = false;
+          _renderError((err && err.message) ? err.message : String(err));
+        })
+        .gerarDiagnostico(payload);
+    }
+
+    function retry() {
+      if (_loading) return;
+      _diag = null;
+      _load();
+    }
+
+    // ------------------------------------------------------------
+    //  Estados de carregamento / erro
+    // ------------------------------------------------------------
+
+    function _renderSkeleton() {
+      var cards = '';
+      for (var i = 0; i < 8; i++) cards += '<div class="diag-skel diag-skel-card"></div>';
+      _setContent(
+        '<div class="diag-loading">' +
+          '<div class="diag-spinner"></div>' +
+          '<div class="diag-loading-text">Interpretando os dados da viagem com IA…</div>' +
+          '<div class="diag-loading-sub">Isso pode levar alguns segundos.</div>' +
+        '</div>' +
+        '<div class="diag-cards" style="margin-top:20px;opacity:.5;">' + cards + '</div>'
+      );
+    }
+
+    function _renderError(msg) {
+      _setContent(
+        '<div class="diag-error">' +
+          '<div class="diag-error-icon">' + _icon('alert') + '</div>' +
+          '<div class="diag-error-title">Não foi possível gerar o diagnóstico</div>' +
+          '<div class="diag-error-msg">' + _esc(msg) + '</div>' +
+          '<button class="diag-retry-btn" onclick="DiagnosticoModule.retry()">' +
+            _icon('retry') + ' Tentar novamente' +
+          '</button>' +
+        '</div>'
+      );
+    }
+
+    /** Estado vazio: nenhuma viagem processada nesta sessão. Neutro, orientativo. */
+    function _renderEmpty() {
+      _setContent(
+        '<div class="diag-empty">' +
+          '<div class="diag-empty-icon">' + _icon('doc') + '</div>' +
+          '<div class="diag-empty-title">Nenhuma viagem para analisar</div>' +
+          '<div class="diag-empty-msg">Importe e processe um relatório de viagem no ' +
+            '<strong>Relatório Operacional</strong> para gerar o Diagnóstico Inteligente. ' +
+            'A análise não fica salva após recarregar a página.</div>' +
+          '<button class="diag-empty-btn" onclick="DiagnosticoModule.showView(\'REPORT\')">' +
+            _icon('back') + ' Voltar ao Relatório' +
+          '</button>' +
+        '</div>'
+      );
+    }
+
+    // ------------------------------------------------------------
+    //  Render principal
+    // ------------------------------------------------------------
+
+    function _render(d, fromCache) {
+      var n = d.narrativa || {};
+      var html = '';
+
+      html += _header(d, fromCache);
+
+      // 1. Resumo Executivo
+      if (n.resumoExecutivo) {
+        html += _block('Resumo Executivo',
+          '<p class="diag-lead">' + _esc(n.resumoExecutivo) + '</p>');
+      }
+
+      // 2. Indicadores (cards)
+      html += _block('Indicadores', _cardsHtml(d.cards, d.indicadores));
+
+      // 3. Diagnóstico Geral
+      if (n.diagnosticoGeral) {
+        html += _block('Diagnóstico Geral',
+          '<p class="diag-text">' + _multiline(n.diagnosticoGeral) + '</p>');
+      }
+
+      // 4. Linha do Tempo do Atraso
+      if (d.timeline && d.timeline.length) {
+        html += _block('Linha do Tempo do Atraso', _timelineHtml(d.timeline));
+      }
+
+      // 5. Principais Causas
+      if (n.causasPrincipais && n.causasPrincipais.length) {
+        html += _block('Principais Causas', _causasHtml(n.causasPrincipais));
+      }
+
+      // 6. Trechos Críticos
+      if (d.trechosCriticos && d.trechosCriticos.length) {
+        html += _block('Trechos Críticos', _trechosHtml(d.trechosCriticos));
+      }
+
+      // 7. Paradas Críticas
+      if (d.paradasCriticas && d.paradasCriticas.length) {
+        html += _block('Paradas Críticas', _paradasHtml(d.paradasCriticas));
+      }
+
+      // 8. Recuperação Operacional
+      if (n.recuperacaoOperacional) {
+        html += _block('Recuperação Operacional',
+          '<p class="diag-text">' + _multiline(n.recuperacaoOperacional) + '</p>');
+      }
+
+      // 9. Inconsistências
+      if (d.inconsistencias && d.inconsistencias.length) {
+        html += _inconsistenciasHtml(d.inconsistencias);
+      }
+
+      // 10. Parecer Final
+      if (n.parecerFinal) {
+        html += _parecerHtml(n.parecerFinal);
+      }
+
+      _setContent(html);
+    }
+
+    // ------------------------------------------------------------
+    //  Componentes de render
+    // ------------------------------------------------------------
+
+    function _header(d, fromCache) {
+      var m = d.meta || {};
+      var quando = _fmtData(d.geradoEm);
+      var origem = fromCache ? 'Análise armazenada' : 'Gerada agora';
+      return '' +
+        '<div class="diag-topbar">' +
+          '<div>' +
+            '<div class="diag-topbar-title">Diagnóstico Inteligente</div>' +
+            '<div class="diag-topbar-sub">' + _esc(m.nomeLinha || '—') +
+              ' · Veículo ' + _esc(m.veiculo || '—') +
+              ' · ' + _esc(m.dataViagem || '—') + '</div>' +
+            (m.escopo
+              ? '<div class="diag-topbar-escopo">' + _icon('filter') + ' ' + _esc(m.escopo) + '</div>'
+              : '') +
+          '</div>' +
+          '<div class="diag-topbar-meta">' +
+            '<span class="diag-chip">' + _icon('cpu') + ' IA</span>' +
+            '<span class="diag-topbar-when" title="' + _esc(quando) + '">' + _esc(origem) + '</span>' +
+          '</div>' +
+        '</div>';
+    }
+
+    function _block(title, inner) {
+      return '<section class="diag-section" data-guide-anchor data-guide-label="' + _esc(title) + '">' +
+        '<h3 class="diag-section-title">' + _esc(title) + '</h3>' +
+        inner +
+      '</section>';
+    }
+
+    function _cardsHtml(c, ind) {
+      c = c || {}; ind = ind || {};
+      var cards = [
+        _card('Onde mais se perdeu tempo',
+          c.maiorResponsavelAtraso ? _fmtDelta(c.maiorResponsavelAtraso.valorMin) : '—',
+          c.maiorResponsavelAtraso ? c.maiorResponsavelAtraso.local : 'Sem atraso relevante', 'neg'),
+        _card('Maior parada (excesso)',
+          c.maiorParada ? _fmtDelta(c.maiorParada.valorMin) : '—',
+          c.maiorParada ? c.maiorParada.local : 'Dentro do previsto', 'neg'),
+        _card('Maior recuperação',
+          c.maiorRecuperacao ? ('−' + Math.round(c.maiorRecuperacao.valorMin) + ' min') : '—',
+          c.maiorRecuperacao ? c.maiorRecuperacao.local : 'Sem recuperação', 'pos'),
+        _card('Trecho mais lento',
+          c.trechoMaisLento ? (c.trechoMaisLento.vel + ' km/h') : '—',
+          c.trechoMaisLento ? c.trechoMaisLento.trecho : '—', 'neutro'),
+        _card('Velocidade média', (c.velocidadeMedia || 0) + ' km/h', 'Média da viagem', 'neutro'),
+        _card('Tempo perdido', _fmtMin(c.tempoPerdidoMin || 0), 'Acumulado na rota', 'neg'),
+        _card('Tempo recuperado', _fmtMin(c.tempoRecuperadoMin || 0), 'Acumulado na rota', 'pos'),
+        _card('Eventos críticos', String(c.eventosCriticos || 0), 'Alertas de nível crítico', 'neutro'),
+        _card('Paradas fora do esquema', String(c.paradasForaEsquema || 0), 'Não previstas no planejado', 'neutro'),
+        _card('Pontos ignorados', String(c.pontosIgnorados || 0), 'Previstos e não visitados', 'neutro')
+      ];
+      return '<div class="diag-cards">' + cards.join('') + '</div>';
+    }
+
+    function _card(label, value, sub, tone) {
+      return '<div class="diag-card diag-card--' + (tone || 'neutro') + '">' +
+        '<div class="diag-card-label">' + _esc(label) + '</div>' +
+        '<div class="diag-card-value">' + _esc(value) + '</div>' +
+        '<div class="diag-card-sub" title="' + _esc(sub) + '">' + _esc(sub) + '</div>' +
+      '</div>';
+    }
+
+    function _timelineHtml(tl) {
+      var rows = tl.map(function (t) {
+        var toneCls = t.tendencia === 'perdeu' ? 'neg' : (t.tendencia === 'recuperou' ? 'pos' : 'neutro');
+        var tendLabel = t.tendencia === 'perdeu' ? 'Perdeu tempo'
+                      : (t.tendencia === 'recuperou' ? 'Recuperou tempo' : 'Sem alteração');
+        var deltaTxt = (t.deltaMin > 0 ? '+' : (t.deltaMin < 0 ? '−' : '')) +
+                       Math.abs(Math.round(t.deltaMin)) + ' min';
+        return '<li class="diag-tl-item diag-tl-item--' + toneCls + '">' +
+          '<span class="diag-tl-dot"></span>' +
+          '<div class="diag-tl-body">' +
+            '<div class="diag-tl-row1">' +
+              '<span class="diag-tl-local">' + _esc(t.local) + '</span>' +
+              '<span class="diag-tl-atraso">' + _esc(_fmtDelta(t.atrasoAcumMin)) + '</span>' +
+            '</div>' +
+            '<div class="diag-tl-row2">' +
+              '<span class="diag-tl-horas">real ' + _esc(t.horarioReal) + ' · prog. ' + _esc(t.horarioComercial) + '</span>' +
+              '<span class="diag-tl-tend diag-tl-tend--' + toneCls + '">' + tendLabel + ' (' + deltaTxt + ')</span>' +
+            '</div>' +
+          '</div>' +
+        '</li>';
+      }).join('');
+      return '<ul class="diag-timeline">' + rows + '</ul>';
+    }
+
+    function _causasHtml(causas) {
+      var items = causas.map(function (c) {
+        var imp = String(c.impacto || 'medio').toLowerCase();
+        return '<div class="diag-causa">' +
+          '<div class="diag-causa-head">' +
+            '<span class="diag-causa-titulo">' + _esc(c.titulo || '') + '</span>' +
+            '<span class="diag-badge diag-badge--imp-' + imp + '">' + _esc(_impLabel(imp)) + '</span>' +
+          '</div>' +
+          '<div class="diag-causa-desc">' + _esc(c.descricao || '') + '</div>' +
+        '</div>';
+      }).join('');
+      return '<div class="diag-causas">' + items + '</div>';
+    }
+
+    function _trechosHtml(rows) {
+      var body = rows.map(function (r) {
+        return '<tr>' +
+          '<td>' + _esc(r.trecho) + '</td>' +
+          '<td class="num">' + r.velMedia + ' km/h</td>' +
+          '<td class="num">' + r.velIdeal + ' km/h</td>' +
+          '<td class="num">' + _fmtMin(r.tempoEsperadoMin) + '</td>' +
+          '<td class="num">' + _fmtMin(r.tempoRealizadoMin) + '</td>' +
+          '<td class="num ' + (r.tempoPerdidoMin > 0 ? 'neg' : (r.tempoPerdidoMin < 0 ? 'pos' : '')) + '">' + _esc(r.impacto) + '</td>' +
+          '<td>' + _badge(r.criticidade) + '</td>' +
+        '</tr>';
+      }).join('');
+      return '<div class="diag-table-wrap"><table class="diag-table">' +
+        '<thead><tr>' +
+          '<th>Trecho</th><th class="num">Vel. média</th><th class="num">Vel. ideal</th>' +
+          '<th class="num">Tempo esperado</th><th class="num">Tempo realizado</th>' +
+          '<th class="num">Impacto</th><th>Criticidade</th>' +
+        '</tr></thead><tbody>' + body + '</tbody></table></div>';
+    }
+
+    function _paradasHtml(rows) {
+      var body = rows.map(function (r) {
+        return '<tr>' +
+          '<td>' + _esc(r.local) + '</td>' +
+          '<td class="num">' + _fmtMin(r.previstoMin) + '</td>' +
+          '<td class="num">' + _fmtMin(r.realizadoMin) + '</td>' +
+          '<td class="num neg">' + _esc(r.impacto) + '</td>' +
+          '<td>' + _badge(r.criticidade) + '</td>' +
+        '</tr>';
+      }).join('');
+      return '<div class="diag-table-wrap"><table class="diag-table">' +
+        '<thead><tr>' +
+          '<th>Local</th><th class="num">Previsto</th><th class="num">Realizado</th>' +
+          '<th class="num">Excesso</th><th>Criticidade</th>' +
+        '</tr></thead><tbody>' + body + '</tbody></table></div>';
+    }
+
+    function _inconsistenciasHtml(list) {
+      var items = list.map(function (i) {
+        return '<li class="diag-inc-item">' +
+          '<span class="diag-inc-tag">' + _esc(i.titulo || 'Inconsistência') + '</span>' +
+          '<span class="diag-inc-desc">' + _esc(i.descricao || '') + '</span>' +
+        '</li>';
+      }).join('');
+      return '<section class="diag-section">' +
+        '<div class="diag-inc-card">' +
+          '<div class="diag-inc-head">' + _icon('alert') +
+            '<span>Inconsistências detectadas (' + list.length + ')</span></div>' +
+          '<ul class="diag-inc-list">' + items + '</ul>' +
+        '</div>' +
+      '</section>';
+    }
+
+    function _parecerHtml(texto) {
+      return '<section class="diag-section">' +
+        '<div class="diag-parecer">' +
+          '<div class="diag-parecer-head">' + _icon('stamp') + ' Parecer Técnico</div>' +
+          '<div class="diag-parecer-body">' + _multiline(texto) + '</div>' +
+        '</div>' +
+      '</section>';
+    }
+
+    // ------------------------------------------------------------
+    //  Helpers
+    // ------------------------------------------------------------
+
+    function _setContent(html) {
+      var el = document.getElementById('diagContent');
+      if (el) el.innerHTML = html;
+      // Atualiza o guia lateral — as subseções do diagnóstico mudaram.
+      if (typeof SectionGuide !== 'undefined') SectionGuide.refresh();
+    }
+
+    function _badge(nivel) {
+      var n = String(nivel || 'baixa').toLowerCase();
+      var label = { critica: 'Crítica', alta: 'Alta', media: 'Média', baixa: 'Baixa' }[n] || 'Baixa';
+      return '<span class="diag-badge diag-badge--' + n + '">' + label + '</span>';
+    }
+
+    function _impLabel(imp) {
+      return { alto: 'Impacto alto', medio: 'Impacto médio', baixo: 'Impacto baixo' }[imp] || 'Impacto médio';
+    }
+
+    function _fmtDelta(min) {
+      if (min == null) return '—';
+      var abs = Math.abs(Math.round(min));
+      if (abs === 0) return 'no horário';
+      var sign = min > 0 ? '+' : '−';
+      if (abs < 60) return sign + abs + ' min';
+      var hh = Math.floor(abs / 60), mm = abs % 60;
+      return sign + hh + 'h' + (mm > 0 ? ('0' + mm).slice(-2) : '');
+    }
+
+    function _fmtMin(min) {
+      var total = Math.round(Number(min) || 0);
+      if (total < 60) return total + ' min';
+      var hh = Math.floor(total / 60), mm = total % 60;
+      return hh + 'h' + (mm > 0 ? ('0' + mm).slice(-2) : '');
+    }
+
+    function _fmtData(iso) {
+      if (!iso) return '';
+      try {
+        var d = new Date(iso);
+        return d.toLocaleString('pt-BR');
+      } catch (e) { return String(iso); }
+    }
+
+    function _esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function _multiline(s) {
+      return _esc(s).replace(/\n/g, '<br>');
+    }
+
+    function _icon(name) {
+      var svg = {
+        alert: '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
+        retry: '<polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>',
+        cpu:   '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><line x1="9" y1="1" x2="9" y2="4"/><line x1="15" y1="1" x2="15" y2="4"/><line x1="9" y1="20" x2="9" y2="23"/><line x1="15" y1="20" x2="15" y2="23"/><line x1="20" y1="9" x2="23" y2="9"/><line x1="20" y1="14" x2="23" y2="14"/><line x1="1" y1="9" x2="4" y2="9"/><line x1="1" y1="14" x2="4" y2="14"/>',
+        stamp: '<path d="M5 22h14"/><path d="M16 8.5V6a4 4 0 0 0-8 0v2.5"/><path d="M12 8.5V13"/><path d="M4 18h16v-1a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4z"/>',
+        doc:   '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/>',
+        back:  '<line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/>',
+        filter:'<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>'
+      }[name] || '';
+      return '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14" style="vertical-align:-2px;">' + svg + '</svg>';
+    }
+
+    return {
+      onNewTrip: onNewTrip,
+      reset: reset,
+      onScopeChanged: onScopeChanged,
+      showView: showView,
+      retry: retry
+    };
+  })();
+</script>
