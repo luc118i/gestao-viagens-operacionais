@@ -1910,7 +1910,9 @@ var ReportService = (() => {
       if (tr.getResponseCode() === 200) {
         var td = JSON.parse(tr.getContentText()) || {};
         out.tripId = td.id || null;
-        if (td.lineName) out.lineLabel = td.lineName + (td.direction ? ' — ' + td.direction : '');
+        // lineLabel = NOME PURO da linha (sem o sentido). O sentido é derivado
+        // da viagem via tripId no editor/relatório — não deve poluir o nome.
+        if (td.lineName) out.lineLabel = td.lineName;
         if (td.departureTime) out.tripTime = td.departureTime;
       }
     } catch (e) { /* segue com o fallback (nomeLinha) */ }
