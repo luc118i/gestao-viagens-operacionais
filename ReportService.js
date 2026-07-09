@@ -196,8 +196,21 @@ var ReportService = (() => {
       );
     }
 
+    // Resolve a linha oficial na API por código+horário+sentido (corrige nome
+    // da linha). Fallback: mantém params.nomeLinha se a API não encontrar.
+    params = params || {};
+    var _trip = _resolveTrip(baseUrl, {
+      codLinha:  params.codLinha  || '',
+      nomeLinha: params.nomeLinha || '',
+      horario:   params.horario   || '',
+      sentido:   params.sentido   || '',
+    });
+    params._resolvedLineLabel = _trip.lineLabel;
+    params._resolvedTripId    = _trip.tripId;
+    params._resolvedTripTime  = _trip.tripTime;
+
     // ── Passo 1: monta o payload de ocorrência ──────────────────────
-    var occPayload = _buildOccurrencePayload(payload, params || {});
+    var occPayload = _buildOccurrencePayload(payload, params);
 
     var createResp = UrlFetchApp.fetch(baseUrl + "/occurrences", {
       method: "post",
@@ -619,8 +632,9 @@ var ReportService = (() => {
       vehicleNumber: String(
         summary.veiculo || firstPt.veiculo || "" || "—",
       ).trim(),
-      lineLabel: params.nomeLinha || "",
-      tripTime: params.horario || startTime || null,
+      lineLabel: params._resolvedLineLabel || params.nomeLinha || "",
+      tripId: params._resolvedTripId || undefined,
+      tripTime: params._resolvedTripTime || params.horario || startTime || null,
       reportTitle: titulo,
       relatoHtml: relatoHtml,
       // place = trecho analisado (exibido em DADOS DA VIAGEM para ANALISE_OP)
@@ -1793,47 +1807,17 @@ var ReportService = (() => {
 
     if (paradasFora.length === 0) return [];
 
-    // ── Upsert do motorista e lookup da viagem ───────────────────
-    var driverId = null;
-    var tripId   = null;
-    var matchedLineName = nomeLinha;
-    var matchedTripTime = horario;
-
-    if (motorista.matricula || motorista.nome) {
-      try {
-        var mat  = motorista.matricula || '';
-        var nome = motorista.nome      || '';
-        var base = motorista.base      || null;
-        var dr = UrlFetchApp.fetch(baseUrl + "/drivers/upsert", {
-          method:      "post",
-          contentType: "application/json",
-          payload:     JSON.stringify({ code: mat || nome, name: nome || mat, base: base }),
-          muteHttpExceptions: true,
-        });
-        if (dr.getResponseCode() === 200) {
-          driverId = (JSON.parse(dr.getContentText()) || {}).id || null;
-        }
-      } catch (e) { /* segue sem driverId */ }
-    }
-
-    if (nomeLinha && horario) {
-      try {
-        var tr = UrlFetchApp.fetch(
-          baseUrl + "/trips/lookup?lineName=" + encodeURIComponent(nomeLinha) +
-                    "&departureTime=" + encodeURIComponent(horario),
-          { method: "get", muteHttpExceptions: true }
-        );
-        if (tr.getResponseCode() === 200) {
-          var tripData = JSON.parse(tr.getContentText()) || {};
-          tripId = tripData.id || null;
-          // Use the DB's official line name and direction
-          if (tripData.lineName) {
-            matchedLineName = tripData.lineName + (tripData.direction ? ' — ' + tripData.direction : '');
-          }
-          if (tripData.departureTime) matchedTripTime = tripData.departureTime;
-        }
-      } catch (e) { /* segue sem tripId */ }
-    }
+    // ── Upsert do motorista + resolução da viagem (código+horário+sentido) ──
+    var ctx = _lookupDriverAndTrip(baseUrl, motorista, {
+      codLinha:  params.codLinha || '',
+      nomeLinha: nomeLinha,
+      horario:   horario,
+      sentido:   params.sentido  || '',
+    });
+    var driverId        = ctx.driverId;
+    var tripId          = ctx.tripId;
+    var matchedLineName = ctx.matchedLineName;
+    var matchedTripTime = ctx.matchedTripTime;
 
     // ── Dados comuns a todas as ocorrências ──────────────────────
     var dateStr       = _parseDateBrToIso(summary.dataViagem || "") || _todayIso();
@@ -1906,9 +1890,40 @@ var ReportService = (() => {
   //  EXCESSO DE PERMANÊNCIA  (occurrences typeCode EXCESSO_PERMANENCIA)
   // ============================================================
 
-  /** Upsert do motorista + lookup da viagem na API. Compartilhado. */
-  function _lookupDriverAndTrip(baseUrl, motorista, nomeLinha, horario) {
-    var out = { driverId: null, tripId: null, matchedLineName: nomeLinha, matchedTripTime: horario };
+  /**
+   * Resolve a viagem na API por CÓDIGO + horário (+ sentido), com fallback por
+   * nome. Retorna a linha OFICIAL da base — corrige "nome da linha errado".
+   * opts: { codLinha, nomeLinha, horario, sentido }
+   * @returns {{tripId:(string|null), lineLabel:string, tripTime:string}}
+   */
+  function _resolveTrip(baseUrl, opts) {
+    opts = opts || {};
+    var horario = opts.horario || '';
+    var out = { tripId: null, lineLabel: opts.nomeLinha || '', tripTime: horario };
+    if (!horario || !(opts.codLinha || opts.nomeLinha)) return out;
+    try {
+      var q = baseUrl + "/trips/lookup?departureTime=" + encodeURIComponent(horario);
+      if (opts.codLinha)  q += "&lineCode="  + encodeURIComponent(opts.codLinha);
+      if (opts.nomeLinha) q += "&lineName="  + encodeURIComponent(opts.nomeLinha);
+      if (opts.sentido)   q += "&direction=" + encodeURIComponent(opts.sentido);
+      var tr = UrlFetchApp.fetch(q, { method: "get", muteHttpExceptions: true });
+      if (tr.getResponseCode() === 200) {
+        var td = JSON.parse(tr.getContentText()) || {};
+        out.tripId = td.id || null;
+        if (td.lineName) out.lineLabel = td.lineName + (td.direction ? ' — ' + td.direction : '');
+        if (td.departureTime) out.tripTime = td.departureTime;
+      }
+    } catch (e) { /* segue com o fallback (nomeLinha) */ }
+    return out;
+  }
+
+  /**
+   * Upsert do motorista + resolução da viagem (via _resolveTrip). Compartilhado.
+   * opts: { codLinha, nomeLinha, horario, sentido }
+   */
+  function _lookupDriverAndTrip(baseUrl, motorista, opts) {
+    opts = opts || {};
+    var out = { driverId: null, tripId: null, matchedLineName: opts.nomeLinha || '', matchedTripTime: opts.horario || '' };
     if (motorista && (motorista.matricula || motorista.nome)) {
       try {
         var mat = motorista.matricula || '', nome = motorista.nome || '';
@@ -1920,21 +1935,10 @@ var ReportService = (() => {
         if (dr.getResponseCode() === 200) out.driverId = (JSON.parse(dr.getContentText()) || {}).id || null;
       } catch (e) { /* segue sem driverId */ }
     }
-    if (nomeLinha && horario) {
-      try {
-        var tr = UrlFetchApp.fetch(
-          baseUrl + "/trips/lookup?lineName=" + encodeURIComponent(nomeLinha) +
-                    "&departureTime=" + encodeURIComponent(horario),
-          { method: "get", muteHttpExceptions: true }
-        );
-        if (tr.getResponseCode() === 200) {
-          var td = JSON.parse(tr.getContentText()) || {};
-          out.tripId = td.id || null;
-          if (td.lineName) out.matchedLineName = td.lineName + (td.direction ? ' — ' + td.direction : '');
-          if (td.departureTime) out.matchedTripTime = td.departureTime;
-        }
-      } catch (e) { /* segue sem tripId */ }
-    }
+    var trip = _resolveTrip(baseUrl, opts);
+    out.tripId          = trip.tripId;
+    out.matchedLineName = trip.lineLabel;
+    out.matchedTripTime = trip.tripTime;
     return out;
   }
 
@@ -1983,7 +1987,12 @@ var ReportService = (() => {
     });
     if (alvos.length === 0) return [];
 
-    var ctx           = _lookupDriverAndTrip(baseUrl, motorista, params.nomeLinha || "", params.horario || "");
+    var ctx           = _lookupDriverAndTrip(baseUrl, motorista, {
+      codLinha:  params.codLinha  || '',
+      nomeLinha: params.nomeLinha || '',
+      horario:   params.horario   || '',
+      sentido:   params.sentido   || '',
+    });
     var dateStr       = _parseDateBrToIso(summary.dataViagem || "") || _todayIso();
     var vehicleNumber = String(summary.veiculo || "—").trim();
     var esquemaHtml   = _buildEsquemaHtml(esquemaPontos, ctx.matchedLineName, ctx.matchedTripTime);

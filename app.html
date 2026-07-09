@@ -2312,6 +2312,8 @@
         segments: _analysis ? _analysis.segments : [],
         summary:  _analysis ? _analysis.summary  : {},
         justificativas: _justState.justificativas || {},
+        codLinha: esqObj ? (esqObj.cod_linha || '') : '',
+        sentido:  esqObj ? (esqObj.sentido   || '') : '',
       };
 
       if (tipo === "MOTORISTA") {
@@ -3324,6 +3326,8 @@
         segments: _analysis ? _analysis.segments : [],
         summary:  _analysis ? _analysis.summary  : {},
         justificativas: _justState.justificativas || {},
+        codLinha: esqObj ? (esqObj.cod_linha || '') : '',
+        sentido:  esqObj ? (esqObj.sentido   || '') : '',
       };
 
       if (tipo === 'MOTORISTA') {
@@ -3814,6 +3818,8 @@
         motorista:     _vinculos[0],
         nomeLinha:     esqObj ? esqObj.nome_linha : '',
         horario:       esqObj ? (esqObj.horario || '') : '',
+        codLinha:      esqObj ? (esqObj.cod_linha || '') : '',
+        sentido:       esqObj ? (esqObj.sentido   || '') : '',
         summary:       _analysis ? (_analysis.summary || {}) : {},
         _onDone:       _resetTag,
       });
@@ -3868,6 +3874,8 @@
           motorista:     _vinculos[0],
           nomeLinha:     esqObj ? esqObj.nome_linha : '',
           horario:       esqObj ? (esqObj.horario || '') : '',
+          codLinha:      esqObj ? (esqObj.cod_linha || '') : '',
+          sentido:       esqObj ? (esqObj.sentido   || '') : '',
           summary:       _analysis ? (_analysis.summary || {}) : {},
           seqAlvo:       seqNum,
         });
