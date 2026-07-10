@@ -1572,6 +1572,16 @@ function doGet(e) {
         return ContentService.createTextOutput(JSON.stringify(result))
           .setMimeType(ContentService.MimeType.JSON);
       }
+      // App de consulta (card Catedral) — ver RoteiroApi.gs
+      if (params.action === 'getLinhas') {
+        return ContentService.createTextOutput(JSON.stringify(RoteiroApi.getLinhas()))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
+      if (params.action === 'getRoteiro') {
+        var idRoteiro = (params.id || params.idEsquema || '').toString().trim();
+        return ContentService.createTextOutput(JSON.stringify(RoteiroApi.getRoteiro(idRoteiro)))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       return ContentService.createTextOutput(JSON.stringify({ error: 'unknown_action' }))
         .setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
