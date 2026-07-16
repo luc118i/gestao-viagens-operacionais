@@ -640,25 +640,20 @@ var AnalysisService = (() => {
    *    a janela total de entrada/saída
    */
   function _compactTrip(points) {
-    const filtered = points.filter(pt => {
-      if (!pt) return false;
-      if (!pt.parada_s || pt.parada_s <= 0) return true;
-      return pt.parada_s >= LIMITE_PARADA_MINIMA_S;
-    });
+    const valid = (points || []).filter(pt => !!pt);
+    if (valid.length === 0) return [];
 
-    if (filtered.length <= 1) return filtered;
-
-    const compacted = [];
-
-    filtered.forEach(pt => {
-      const prev = compacted[compacted.length - 1];
-      if (!prev) {
-        compacted.push({ ...pt });
-        return;
-      }
-
-      if (_isSameOperationalPoint(prev, pt)) {
-        prev.parada_s = (prev.parada_s || 0) + (pt.parada_s || 0);
+    // 1) Compacta permanências consecutivas no MESMO local operacional.
+    //    A compactação vem ANTES do filtro de paradas curtas — caso contrário
+    //    re-entradas curtas do mesmo ponto (manobras / novas passagens pela
+    //    cerca) seriam descartadas e truncariam a saída real do ponto.
+    //    Ex.: rodoviária visitada às 16:23→16:30, 16:31, 16:32 e 17:41 → a saída
+    //    correta do ponto é 17:41 (a última), não 16:30 (a primeira).
+    const merged = [];
+    valid.forEach(pt => {
+      const prev = merged[merged.length - 1];
+      if (prev && _isSameOperationalPoint(prev, pt)) {
+        prev._compactado = true;
         prev.intervalo_s = Math.max(prev.intervalo_s || 0, pt.intervalo_s || 0);
 
         if (!prev.entrada || (pt.entrada && pt.entrada < prev.entrada)) {
@@ -667,21 +662,35 @@ var AnalysisService = (() => {
         if (!prev.saida || (pt.saida && pt.saida > prev.saida)) {
           prev.saida = pt.saida;
         }
-
         if ((!prev.funcionario || prev.funcionario === 'Não Informado') && pt.funcionario) {
           prev.funcionario = pt.funcionario;
         }
         if ((!prev.veiculo || prev.veiculo === '—') && pt.veiculo) {
           prev.veiculo = pt.veiculo;
         }
-
         return;
       }
-
-      compacted.push({ ...pt });
+      merged.push({ ...pt });
     });
 
-    return compacted;
+    // 2) Para pontos compactados, a permanência (parada_s) passa a ser a JANELA
+    //    real no local (primeira entrada → última saída). Pontos de visita única
+    //    ficam inalterados (parada_s = saída − entrada já por definição).
+    merged.forEach(pt => {
+      if (pt._compactado && pt.entrada && pt.saida) {
+        const janela = TimeUtils.diffSeconds(pt.entrada, pt.saida);
+        if (janela !== null && janela >= 0) pt.parada_s = janela;
+      }
+      delete pt._compactado;
+    });
+
+    // 3) Remove paradas muito curtas (micro-manobras / cercas curtas).
+    const cleaned = merged.filter(pt => {
+      if (!pt.parada_s || pt.parada_s <= 0) return true;
+      return pt.parada_s >= LIMITE_PARADA_MINIMA_S;
+    });
+
+    return cleaned.length ? cleaned : merged;
   }
 
   function _isSameOperationalPoint(a, b) {

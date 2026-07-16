@@ -5,6 +5,7 @@
 //  Consumido via doGet:
 //    ?action=getLinhas               → lista de esquemas com pontos
 //    ?action=getRoteiro&id=<idEsq>   → pontos enriquecidos de um esquema
+//    ?action=getMeta                 → só a data de última atualização (polling leve)
 //
 //  ADITIVO: reutiliza EsquemasService e SheetsService. NÃO altera o
 //  action=getSchema (que devolve HTML) nem a UI existente.
@@ -18,7 +19,7 @@ var RoteiroApi = (function () {
 
   /**
    * Lista os esquemas que possuem pontos cadastrados (para a busca/refino).
-   * @returns {{ esquemas: Array<{id:number, nomeLinha:string, horario:string, sentido:string}> }}
+   * @returns {{ esquemas: Array<{id:number, nomeLinha:string, codLinha:?string, horario:string, sentido:string}>, lastUpdated: string }}
    */
   function getLinhas() {
     var esquemas = EsquemasService.getEsquemas();
@@ -31,11 +32,22 @@ var RoteiroApi = (function () {
       out.push({
         id: Number(id),
         nomeLinha: e.nome_linha || '',
+        codLinha: e.cod_linha ? String(e.cod_linha).trim() : null,
         horario: e.horario || '',
         sentido: _sentido(e.sentido, e.nome_linha),
       });
     });
-    return { esquemas: out };
+    return { esquemas: out, lastUpdated: _lastUpdated() };
+  }
+
+  /**
+   * Data/hora (ISO 8601) da última escrita real feita pelo Gestão de Esquemas
+   * (ou por edição manual — ver onEdit em Code.gs), usada como "atualizado em"
+   * no rodapé do card. Vem de EsquemasService.getLastUpdated() (PropertiesService)
+   * — não usa DriveApp, então não depende da autorização sensível do Drive.
+   */
+  function _lastUpdated() {
+    return EsquemasService.getLastUpdated();
   }
 
   /**
@@ -72,9 +84,7 @@ var RoteiroApi = (function () {
         tipoTrecho: p.tipo_trecho || null,
         rodoviaria: Object.prototype.hasOwnProperty.call(rodMap, cod) ? rodMap[cod] : null,
         tempoPermanencia: (permMap[cod] != null) ? permMap[cod] : null,
-        // TODO: ler as 4 colunas booleanas de tipo de operação quando existirem
-        // na aba ESQUEMA_PONTOS (Embarque/Desemb., Alimentação, Troca, Abastecimento).
-        tiposParada: null,
+        tiposParada: _tiposParada(p),
       };
     });
 
@@ -83,6 +93,7 @@ var RoteiroApi = (function () {
       esquema: {
         id: Number(id),
         nomeLinha: esq.nome_linha || '',
+        codLinha: esq.cod_linha ? String(esq.cod_linha).trim() : null,
         horario: esq.horario || '',
         sentido: _sentido(esq.sentido, esq.nome_linha),
       },
@@ -98,6 +109,21 @@ var RoteiroApi = (function () {
     if (/IDA/.test(s)) return 'Ida';
     var m = String(nome || '').toUpperCase().match(/\b(IDA|VOLTA)\b/);
     return (m && m[1] === 'VOLTA') ? 'Volta' : 'Ida';
+  }
+
+  /**
+   * Tags de operação do ponto: Embarque/Desemb. é implícito (qualquer ponto
+   * com horário comercial); Troca/Abastecimento/Alimentação vêm das colunas
+   * booleanas marcadas manualmente no Gestão de Esquemas. null = sem tag
+   * nenhuma (o front cai na heurística por nome).
+   */
+  function _tiposParada(p) {
+    var tags = [];
+    if (p.horario_comercial) tags.push('Embarque/Desemb.');
+    if (p.troca_motorista) tags.push('Troca de Motorista');
+    if (p.abastecimento) tags.push('Abastecimento');
+    if (p.alimentacao) tags.push('Alimentação');
+    return tags.length ? tags : null;
   }
 
   function _parseTipo(tipo) {
@@ -136,5 +162,14 @@ var RoteiroApi = (function () {
     return map;
   }
 
-  return { getLinhas: getLinhas, getRoteiro: getRoteiro };
+  /**
+   * Só a data de última atualização — usado pelo front pra checar
+   * periodicamente se há dado novo, sem re-ler ESQUEMAS/ESQUEMA_PONTOS inteiros.
+   * @returns {{ lastUpdated: string }}
+   */
+  function getMeta() {
+    return { lastUpdated: _lastUpdated() };
+  }
+
+  return { getLinhas: getLinhas, getRoteiro: getRoteiro, getMeta: getMeta };
 })();

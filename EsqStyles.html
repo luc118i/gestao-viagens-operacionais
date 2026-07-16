@@ -734,6 +734,9 @@ mark { background: #ffe082; border-radius: 2px; color: inherit; padding: 0 1px; 
 
 /* Row states */
 .hor-table tbody tr { transition: background-color var(--t-fast) var(--ease); }
+.hor-table tbody tr:nth-child(even):not(.row-predep):not(.row-first):not(.row-last) td {
+  background: #e9ecf3;
+}
 .hor-table tbody tr:not(.row-predep):not(.row-first):not(.row-last):hover td {
   background: #fafbfd;
 }
@@ -979,6 +982,14 @@ tr.antt-row-info  > td { background: rgba(21,101,192,0.04) !important; }
 tr.antt-row-error > td:first-child { border-left: 3px solid #f5b7b1 !important; box-shadow: none !important; }
 tr.antt-row-warn  > td:first-child { border-left: 3px solid #ffcc02 !important; box-shadow: none !important; }
 tr.antt-row-info  > td:first-child { border-left: 3px solid #90caf9 !important; box-shadow: none !important; }
+
+/* Troca de Motorista (660km) — mesma linguagem visual, tom roxo pra distinguir do apoio (495km) */
+.antt-badge.antt-troca-error { background: #f3e8ff; color: #7e22ce; border: 1px solid #d8b4fe; }
+.antt-badge.antt-troca-warn  { background: #faf5ff; color: #9333ea; border: 1px solid #e9d5ff; }
+tr.antt-troca-row-error > td { background: rgba(126,34,206,0.04) !important; }
+tr.antt-troca-row-warn  > td { background: rgba(147,51,234,0.03) !important; }
+tr.antt-troca-row-error > td:first-child { border-left: 3px solid #d8b4fe !important; box-shadow: none !important; }
+tr.antt-troca-row-warn  > td:first-child { border-left: 3px solid #e9d5ff !important; box-shadow: none !important; }
 
 /* ── Delta ──────────────────────────────────────────────── */
 .delta-ok   { color: var(--green); font-size: 10px; font-weight: 700; white-space: nowrap; }

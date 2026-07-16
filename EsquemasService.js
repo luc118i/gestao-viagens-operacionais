@@ -129,8 +129,14 @@ var EsquemasService = (() => {
     return by;
   }
 
+  var LAST_UPDATED_PROP = 'LAST_UPDATED';
+
   /**
    * Limpa o cache de esquemas para forçar releitura na próxima chamada.
+   * Chamado tanto por escritas reais quanto por telas que só querem dado
+   * fresco (abrir formulário, abrir o manager, botão de refresh) — por isso
+   * NÃO grava a "última atualização" aqui. Quem grava é markUpdated(),
+   * chamado só nos pontos que de fato alteram a planilha.
    */
   function invalidateCache() {
     try {
@@ -138,6 +144,28 @@ var EsquemasService = (() => {
       cache.remove(CACHE_KEY_ESQUEMAS);
     } catch (e) {
       // Silencioso
+    }
+  }
+
+  /**
+   * Grava o instante atual como "última atualização" (lido pelo app de
+   * consulta). Chamar só em cima de uma escrita real na planilha — nunca em
+   * telas que apenas leem/atualizam a visualização.
+   */
+  function markUpdated() {
+    try {
+      PropertiesService.getScriptProperties().setProperty(LAST_UPDATED_PROP, new Date().toISOString());
+    } catch (e) {
+      // Silencioso
+    }
+  }
+
+  /** Data/hora (ISO 8601) da última escrita real na planilha, ou null se nunca gravada. */
+  function getLastUpdated() {
+    try {
+      return PropertiesService.getScriptProperties().getProperty(LAST_UPDATED_PROP);
+    } catch (e) {
+      return null;
     }
   }
 
@@ -236,7 +264,10 @@ var EsquemasService = (() => {
       tipo:              ['tipo', 'type', 'tipo_parada', 'tipo_ponto'],
       horario_comercial: ['horario_comercial', 'comercial', 'hor_comercial'],
       tempo_local:       ['tempo_local', 'parada', 'tempo_parada', 'stop_time'],
-      tipo_trecho:       ['tipo_trecho', 'via', 'tipo_via', 'trecho']
+      tipo_trecho:       ['tipo_trecho', 'via', 'tipo_via', 'trecho'],
+      troca_motorista:   ['troca_motorista', 'troca', 'motorista', 'troca_de_motorista'],
+      abastecimento:     ['abastecimento', 'combustivel', 'abastece'],
+      alimentacao:       ['alimentacao', 'refeicao', 'comida']
     });
 
     var pontos = [];
@@ -258,11 +289,20 @@ var EsquemasService = (() => {
         tipo:              tipo,
         horario_comercial: colMap.horario_comercial !== undefined ? _formatHorario(row[colMap.horario_comercial]) : '',
         tempo_local:       colMap.tempo_local  !== undefined ? (_getCell(row, colMap.tempo_local)  || '') : '',
-        tipo_trecho:       colMap.tipo_trecho  !== undefined ? (_getCell(row, colMap.tipo_trecho)  || '') : ''
+        tipo_trecho:       colMap.tipo_trecho  !== undefined ? (_getCell(row, colMap.tipo_trecho)  || '') : '',
+        troca_motorista:   colMap.troca_motorista !== undefined ? _isMarcado(row[colMap.troca_motorista]) : false,
+        abastecimento:     colMap.abastecimento   !== undefined ? _isMarcado(row[colMap.abastecimento])   : false,
+        alimentacao:       colMap.alimentacao     !== undefined ? _isMarcado(row[colMap.alimentacao])     : false
       });
     }
 
     return pontos;
+  }
+
+  /** Interpreta a marcação de uma coluna booleana da planilha ("x", "sim", "true", "1"...). */
+  function _isMarcado(v) {
+    var s = String(v == null ? '' : v).trim().toUpperCase();
+    return s === 'X' || s === 'SIM' || s === 'TRUE' || s === '1' || s === 'S' || s === 'Y';
   }
 
   // ============================================================
@@ -344,7 +384,9 @@ var EsquemasService = (() => {
     getPontosDoEsquema:     getPontosDoEsquema,
     getPontosTodosEsquemas: getPontosTodosEsquemas,
     getTerminaisPorEsquema: getTerminaisPorEsquema,
-    invalidateCache:        invalidateCache
+    invalidateCache:        invalidateCache,
+    markUpdated:            markUpdated,
+    getLastUpdated:         getLastUpdated
   };
 
 })();

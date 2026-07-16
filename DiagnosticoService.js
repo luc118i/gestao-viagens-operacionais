@@ -15,8 +15,11 @@
 var DiagnosticoService = (() => {
 
   // Faixa de velocidade ideal (km/h) — alinhada ao AnalysisService.
-  const VEL_IDEAL = 85;         // referência de cruzeiro para "tempo esperado"
-  const VEL_LENTA_MAX = 70;     // abaixo disso o trecho é considerado lento
+  const VEL_IDEAL = 85;         // referência de cruzeiro (trechos entre cidades) para "tempo esperado"
+  const VEL_LENTA_MAX = 70;     // abaixo disso o trecho é considerado lento (referência intermunicipal)
+  const VEL_IDEAL_URBANO = 40;  // referência de cruzeiro para trechos dentro da mesma cidade
+  const DIST_URBANO_TRECHO_KM = 12; // mesmo limiar usado pelo AnalysisService para detectar trecho urbano
+  const LENTO_RATIO = VEL_LENTA_MAX / VEL_IDEAL; // mantém a mesma proporção "lento" na faixa urbana
   const TOLERANCIA_MIN = 5;     // ignora ruído menor que isso ao classificar
 
   // ============================================================
@@ -143,17 +146,22 @@ var DiagnosticoService = (() => {
     segments.forEach(function (s) {
       if (s.distKm == null || s.tempoMin == null || s.tempoMin <= 0 || s.distKm <= 0) return;
       const vel = s.velocidadeKmh != null ? s.velocidadeKmh : Math.round((s.distKm / (s.tempoMin / 60)) * 10) / 10;
-      const tempoEsperado = (s.distKm / VEL_IDEAL) * 60;
+      // Trecho curto (dentro da mesma cidade) tem velocidade ideal bem menor que
+      // um trecho de rodovia entre cidades — usa o mesmo limiar de distância do
+      // AnalysisService para decidir qual referência aplicar.
+      const isUrbano = s.distKm <= DIST_URBANO_TRECHO_KM;
+      const velIdealTrecho = isUrbano ? VEL_IDEAL_URBANO : VEL_IDEAL;
+      const tempoEsperado = (s.distKm / velIdealTrecho) * 60;
       const tempoPerdido = s.tempoMin - tempoEsperado; // >0 perdeu, <0 adiantou
       rows.push({
         trecho: s.de + ' → ' + s.para,
         velMedia: vel,
-        velIdeal: VEL_IDEAL,
+        velIdeal: velIdealTrecho,
         tempoEsperadoMin: Math.round(tempoEsperado),
         tempoRealizadoMin: Math.round(s.tempoMin),
         tempoPerdidoMin: Math.round(tempoPerdido),
         impacto: _fmtDelta(tempoPerdido),
-        criticidade: _criticidade(Math.max(0, tempoPerdido), vel < VEL_LENTA_MAX)
+        criticidade: _criticidade(Math.max(0, tempoPerdido), vel < velIdealTrecho * LENTO_RATIO)
       });
     });
     // Mais impactantes primeiro (mais tempo perdido)
@@ -276,8 +284,15 @@ var DiagnosticoService = (() => {
       if (!trechoLento || tr.velMedia < trechoLento.velMedia) trechoLento = tr;
     });
 
+    // Contador de pontos efetivamente atrasados (real após o programado, além
+    // da tolerância de ruído) — usado no card "Onde mais se perdeu tempo".
+    const pontosComAtraso = timeline.filter(function (t) {
+      return t.atrasoAcumMin > TOLERANCIA_MIN;
+    }).length;
+
     return {
       maiorResponsavelAtraso: maiorAtraso,
+      pontosComAtraso: pontosComAtraso,
       maiorParada: maiorParada,
       maiorRecuperacao: maiorRecup,
       trechoMaisLento: trechoLento ? { trecho: trechoLento.trecho, vel: trechoLento.velMedia } : null,

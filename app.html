@@ -891,8 +891,9 @@
         if (elPlan) elPlan.textContent = _enrichedTrip.length;
       }
 
-      // Tabela de velocidade (legado — mantida)
+      // Tabela de velocidade (legado — mantida) + gráfico por trecho
       AnalysisModule.renderVelocidadeTable(segments);
+      AnalysisModule.renderVelocidadeChart(segments);
 
       // Alertas (render imediato; justificativas salvas chegam em seguida)
       _renderAlertas();
@@ -2514,6 +2515,7 @@
           }
 
           AnalysisModule.renderVelocidadeTable(segments);
+          AnalysisModule.renderVelocidadeChart(segments);
           _renderAlertas(alerts);
 
           _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
@@ -3958,6 +3960,7 @@
       { id: 'sectionResumo',      label: 'Resumo' },
       { id: 'sectionMapa',        label: 'Mapa Operacional' },
       { id: 'sectionEventos',     label: 'Eventos da Rota' },
+      { id: 'sectionVelChart',    label: 'Velocidade por Trecho' },
       { id: 'sectionAlertas',     label: 'Alertas Operacionais' },
       { id: 'sectionDiagnostico', label: 'Diagnóstico' }
     ];

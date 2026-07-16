@@ -8,6 +8,7 @@
 
     var TEMPO_ESPERADO_PADRAO = 30 * 60; // fallback 00:30 (fora da aba TEMPO_PERMANENCIA)
     var TOLERANCIA_S = 5 * 60; // margem de segurança antes de marcar excesso
+    var APOIO_LIMITE_S = 30 * 60; // teto de permanência mesmo em ponto de apoio (30min)
 
     // Ajuste manual de status por ponto (seq → 'apoio' | 'ignorar').
     // 'apoio'  = parada legítima (some das ocorrências/excessos do relatório).
@@ -191,7 +192,7 @@
 
         var paradaS  = ponto.parada_s || 0;
         var esperado = _getTempoEsperado(ponto);
-        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+        var excessoS = _calcExcessoS(paradaS, esperado);
         var _ov = _ovState(ponto.seq);
 
         // Classe da linha baseada em severidade contextual (suprimida quando ajustado)
@@ -211,8 +212,9 @@
         var tipoTag   = _buildTipoTag(_ov ? Object.assign({}, ponto, { proibido42: false }) : ponto);
 
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-        var excessoHtml = (!_ov && excessoS > 0)
-          ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+        var _excEx = _excessoExibido(_ov, excessoS, paradaS);
+        var excessoHtml = (_excEx > 0)
+          ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
           : '<span style="color:var(--text3);">—</span>';
 
         tr.innerHTML =
@@ -240,7 +242,7 @@
 
         var paradaS  = pr ? (pr.parada_s || 0) : 0;
         var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
-        var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+        var excessoS = _calcExcessoS(paradaS, esperado);
 
         if (_ov) {
           if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
@@ -258,8 +260,9 @@
             : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
 
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-        var excessoHtml = (!_ov && excessoS > 0)
-          ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+        var _excEx = _excessoExibido(_ov, excessoS, paradaS);
+        var excessoHtml = (_excEx > 0)
+          ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
           : '<span style="color:var(--text3);">—</span>';
 
         var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
@@ -345,7 +348,7 @@
 
       var paradaS  = pr ? (pr.parada_s || 0) : 0;
       var esperado = pr ? _getTempoEsperado(pr) : TEMPO_ESPERADO_PADRAO;
-      var excessoS = Math.max(0, paradaS - esperado - TOLERANCIA_S);
+      var excessoS = _calcExcessoS(paradaS, esperado);
 
       if (_ov) {
         if (_ov === 'ignorar') tr.classList.add('row-nao-visitado');
@@ -363,8 +366,9 @@
           : '<span class="tag tag-nao-visitado"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg> Não visitado</span>';
 
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-      var excessoHtml = (!_ov && excessoS > 0)
-        ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+      var _excEx = _excessoExibido(_ov, excessoS, paradaS);
+      var excessoHtml = (_excEx > 0)
+        ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
         : '<span style="color:var(--text3);">—</span>';
 
       var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
@@ -413,8 +417,9 @@
       }
 
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
-      var excessoHtml = (!_ov && excessoS > 0)
-        ? '<span style="color:' + (excessoS > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(excessoS) + '</span>'
+      var _excEx = _excessoExibido(_ov, excessoS, paradaS);
+      var excessoHtml = (_excEx > 0)
+        ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
         : '<span style="color:var(--text3);">—</span>';
 
       tr.innerHTML =
@@ -490,6 +495,132 @@
       });
 
       _setText('countTrechos', segments.length);
+    }
+
+    // ============================================================
+    //  renderVelocidadeChart — gráfico de barras da velocidade por trecho
+    // ============================================================
+
+    function _velColor(v) {
+      if (v < 70)  return 'var(--amarelo)';   // abaixo do ideal
+      if (v <= 90) return 'var(--verde)';      // faixa aceitável (ideal 80–90)
+      if (v <= 100) return 'var(--laranja)';   // excesso
+      return 'var(--vermelho)';                // crítico
+    }
+
+    function _velLegItem(colorVar, texto, isBand) {
+      return '<span class="vcl-item">'
+        + (isBand ? '<span class="vcl-band"></span>' : '<span class="vcl-dot" style="background:' + colorVar + ';"></span>')
+        + _escHtml(texto) + '</span>';
+    }
+
+    function _escAttr(str) {
+      return _escHtml(str).replace(/"/g, '&quot;');
+    }
+
+    function renderVelocidadeChart(segments) {
+      var wrap = document.getElementById('velChartWrap');
+      var section = document.getElementById('sectionVelChart');
+      if (!wrap) return;
+
+      var chartable = (segments || []).filter(function(s) { return s.velocidadeKmh != null; });
+      _setText('countVelChart', chartable.length);
+
+      if (section) section.style.display = chartable.length > 0 ? 'block' : 'none';
+      if (chartable.length === 0) {
+        wrap.innerHTML = '';
+        if (typeof SectionGuide !== 'undefined') SectionGuide.refresh();
+        return;
+      }
+
+      var legend = document.getElementById('velChartLegend');
+      if (legend) {
+        legend.innerHTML =
+          _velLegItem('var(--amarelo)', 'Abaixo do ideal (< 70)')
+          + _velLegItem('var(--verde)', 'Aceitável (70–90)')
+          + _velLegItem('var(--laranja)', 'Excesso (90–100)')
+          + _velLegItem('var(--vermelho)', 'Crítico (> 100)')
+          + _velLegItem('', 'Faixa ideal (80–90)', true);
+      }
+
+      var IDEAL_MIN = 80, IDEAL_MAX = 90;
+      var maxVel = chartable.reduce(function(m, s) { return Math.max(m, s.velocidadeKmh); }, 0);
+      var maxY = Math.max(100, Math.ceil(maxVel / 20) * 20);
+
+      var barW = 28, gap = 12, leftPad = 40, rightPad = 14, topPad = 16, bottomPad = 74;
+      var plotH = 200;
+      var H = topPad + plotH + bottomPad;
+      var innerW = chartable.length * barW + (chartable.length - 1) * gap;
+      var W = leftPad + innerW + rightPad;
+
+      function y(v) { return topPad + plotH * (1 - v / maxY); }
+
+      var svg = '<svg class="vel-chart-svg" viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" xmlns="http://www.w3.org/2000/svg">';
+
+      // Faixa ideal destacada
+      svg += '<rect x="' + leftPad + '" y="' + y(IDEAL_MAX) + '" width="' + innerW
+        + '" height="' + (y(IDEAL_MIN) - y(IDEAL_MAX)) + '" fill="rgba(34,169,106,0.10)"/>';
+
+      // Linhas de grade + rótulos do eixo Y
+      for (var g = 0; g <= maxY; g += 20) {
+        var gy = y(g);
+        svg += '<line x1="' + leftPad + '" y1="' + gy + '" x2="' + (leftPad + innerW) + '" y2="' + gy
+          + '" stroke="var(--border)" stroke-width="1"/>';
+        svg += '<text x="' + (leftPad - 8) + '" y="' + (gy + 4) + '" text-anchor="end" font-size="10" fill="var(--text3)">' + g + '</text>';
+      }
+
+      // Barras
+      chartable.forEach(function(s, i) {
+        var v = s.velocidadeKmh;
+        var bx = leftPad + i * (barW + gap);
+        var by = y(v);
+        var bh = Math.max(0, (topPad + plotH) - by);
+        var lx = bx + barW / 2, ly = topPad + plotH + 13;
+        var label = _truncate(s.para || '', 13);
+
+        svg += '<g class="vel-bar"'
+          + ' data-de="' + _escAttr(s.de || '') + '"'
+          + ' data-para="' + _escAttr(s.para || '') + '"'
+          + ' data-vel="' + v.toFixed(1) + '"'
+          + ' data-dist="' + (s.distKm != null ? s.distKm.toFixed(1) : '—') + '"'
+          + ' data-tempo="' + (s.tempoMin != null ? Math.round(s.tempoMin) : '—') + '">';
+        svg += '<rect x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + bh + '" rx="3" fill="' + _velColor(v) + '"/>';
+        svg += '<text x="' + lx + '" y="' + (by - 5) + '" text-anchor="middle" font-size="9.5" fill="var(--text2)">' + Math.round(v) + '</text>';
+        svg += '<text x="' + lx + '" y="' + ly + '" text-anchor="end" font-size="9.5" fill="var(--text3)" transform="rotate(-40 ' + lx + ' ' + ly + ')">' + _escHtml(label) + '</text>';
+        svg += '</g>';
+      });
+
+      svg += '</svg>';
+      wrap.innerHTML = svg;
+
+      _bindVelChartTooltip(wrap);
+      if (typeof SectionGuide !== 'undefined') SectionGuide.refresh();
+    }
+
+    function _bindVelChartTooltip(wrap) {
+      var tip = wrap.querySelector('.vel-chart-tip');
+      if (!tip) {
+        tip = document.createElement('div');
+        tip.className = 'vel-chart-tip';
+        tip.style.display = 'none';
+        wrap.appendChild(tip);
+      }
+      wrap.onmousemove = function(e) {
+        var g = e.target && e.target.closest ? e.target.closest('.vel-bar') : null;
+        if (!g) { tip.style.display = 'none'; return; }
+        tip.innerHTML =
+          '<div class="vct-t">' + _escHtml(g.getAttribute('data-de')) + ' → ' + _escHtml(g.getAttribute('data-para')) + '</div>'
+          + '<div class="vct-v">🚍 ' + g.getAttribute('data-vel') + ' km/h</div>'
+          + '<div class="vct-m">📏 ' + g.getAttribute('data-dist') + ' km · ⏱ ' + g.getAttribute('data-tempo') + ' min</div>';
+        tip.style.display = 'block';
+        var r = wrap.getBoundingClientRect();
+        var x = e.clientX - r.left + wrap.scrollLeft;
+        var yy = e.clientY - r.top;
+        var left = Math.min(x + 12, wrap.scrollLeft + wrap.clientWidth - tip.offsetWidth - 8);
+        tip.style.left = Math.max(wrap.scrollLeft + 4, left) + 'px';
+        tip.style.top = Math.max(6, yy - tip.offsetHeight - 10) + 'px';
+      };
+      wrap.onmouseleave = function() { tip.style.display = 'none'; };
     }
 
     // ============================================================
@@ -846,11 +977,19 @@
       var tbodyVel = document.getElementById('tbodyVelocidade');
       if (tbodyVel) tbodyVel.innerHTML = '';
 
+      // Limpa o gráfico de velocidade por trecho (senão a barra da análise
+      // anterior fica visível até a próxima viagem ser processada)
+      var velChartWrap = document.getElementById('velChartWrap');
+      if (velChartWrap) velChartWrap.innerHTML = '';
+      var velChartLegend = document.getElementById('velChartLegend');
+      if (velChartLegend) velChartLegend.innerHTML = '';
+      _setText('countVelChart', '0');
+
       var alertasGrid = document.getElementById('alertasGrid');
       if (alertasGrid) alertasGrid.innerHTML = '';
 
       // Oculta seções
-      ['sectionResumo', 'sectionMapa', 'sectionEventos', 'sectionAlertas'].forEach(function(id) {
+      ['sectionResumo', 'sectionMapa', 'sectionEventos', 'sectionAlertas', 'sectionVelChart'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.style.display = 'none';
       });
@@ -960,6 +1099,30 @@
       if (ponto.proibido42) return 0; // qualquer parada em local proibido = excesso total
       if (ponto.tempoEsperadoMin != null) return ponto.tempoEsperadoMin * 60;
       return TEMPO_ESPERADO_PADRAO;
+    }
+
+    /**
+     * Excesso de parada exibido (segundos). A TOLERÂNCIA só decide SE marca
+     * excesso (evita ruído em atrasos pequenos); o valor mostrado é o excesso
+     * REAL sobre o esperado (parada − esperado), sem descontar a tolerância.
+     * Ex.: esperado 15min, parada 23min → excesso 8min (não 3min).
+     */
+    function _calcExcessoS(paradaS, esperado) {
+      var overage = Math.max(0, (paradaS || 0) - (esperado || 0));
+      return overage > TOLERANCIA_S ? overage : 0;
+    }
+
+    /**
+     * Excesso a EXIBIR considerando o ajuste manual do ponto:
+     * - 'ignorar' → sem excesso (removido do relatório);
+     * - 'apoio'   → parada legítima, MAS com teto de 30min; acima disso o
+     *               excesso (parada − 30min) ainda é registrado;
+     * - normal    → excesso calculado por _calcExcessoS.
+     */
+    function _excessoExibido(ov, excessoS, paradaS) {
+      if (ov === 'ignorar') return 0;
+      if (ov === 'apoio') return Math.max(0, (paradaS || 0) - APOIO_LIMITE_S);
+      return excessoS;
     }
 
      function _buildTipoTag(ponto) {
@@ -1107,6 +1270,7 @@
       renderPontosTable,
       renderComparacao,
       renderVelocidadeTable,
+      renderVelocidadeChart,
       renderAlertas,
       renderSummary,
       atualizarContadoresComparacao,

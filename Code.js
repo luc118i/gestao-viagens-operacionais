@@ -21,6 +21,27 @@ function _autorizarURLFetch() {
   }
 }
 
+// Abas cuja edição manual conta como "planilha atualizada" pro app de consulta
+// (as mesmas que alimentam o card de roteiro: esquemas, pontos, locais e tempos).
+var ABAS_RASTREADAS_LAST_UPDATED = ['ESQUEMAS', 'ESQUEMA_PONTOS', 'LOCAIS', 'TEMPO_PERMANENCIA'];
+
+/**
+ * Trigger simples do Sheets — dispara em QUALQUER edição manual feita direto
+ * na planilha (fora do Gestão de Esquemas, que já marca a atualização via
+ * EsquemasService.markUpdated() em cada escrita real). Só existe pra cobrir
+ * esse caminho manual; não precisa de nenhuma autorização extra.
+ */
+function onEdit(e) {
+  try {
+    var nomeAba = e && e.range ? e.range.getSheet().getName() : '';
+    if (ABAS_RASTREADAS_LAST_UPDATED.indexOf(nomeAba) === -1) return;
+    EsquemasService.invalidateCache();
+    EsquemasService.markUpdated();
+  } catch (err) {
+    // Simple trigger: nunca deixa a exceção escapar e travar a edição do usuário.
+  }
+}
+
 /**
  * Cria o menu "Gestão de Esquemas" na barra do Google Sheets.
  * Chamado automaticamente ao abrir a planilha.
@@ -114,7 +135,11 @@ function getPontosEsquemaParaFormulario(idEsquema) {
   try {
     var pontos = EsquemasService.getPontosDoEsquema(idEsquema);
     var result = pontos.map(function(p) {
-      return { idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '', horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '' };
+      return {
+        idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '',
+        horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '',
+        troca: !!p.troca_motorista, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao
+      };
     });
     // Para trechos sem tipo definido, busca o tipo_via salvo em DISTANCIAS
     var distVia = _lerTipoViaDistancias_();
@@ -213,13 +238,19 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
     if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
 
-    // Garante cabeçalhos das colunas F, G e H
-    var h6 = String(sheet.getLastColumn() >= 6 ? sheet.getRange(1, 6).getValue() : '').trim();
-    var h7 = String(sheet.getLastColumn() >= 7 ? sheet.getRange(1, 7).getValue() : '').trim();
-    var h8 = String(sheet.getLastColumn() >= 8 ? sheet.getRange(1, 8).getValue() : '').trim();
+    // Garante cabeçalhos das colunas F a K
+    var h6  = String(sheet.getLastColumn() >= 6  ? sheet.getRange(1, 6).getValue()  : '').trim();
+    var h7  = String(sheet.getLastColumn() >= 7  ? sheet.getRange(1, 7).getValue()  : '').trim();
+    var h8  = String(sheet.getLastColumn() >= 8  ? sheet.getRange(1, 8).getValue()  : '').trim();
+    var h9  = String(sheet.getLastColumn() >= 9  ? sheet.getRange(1, 9).getValue()  : '').trim();
+    var h10 = String(sheet.getLastColumn() >= 10 ? sheet.getRange(1, 10).getValue() : '').trim();
+    var h11 = String(sheet.getLastColumn() >= 11 ? sheet.getRange(1, 11).getValue() : '').trim();
     if (h6 !== 'horario_comercial') sheet.getRange(1, 6).setValue('horario_comercial');
     if (h7 !== 'tempo_local')       sheet.getRange(1, 7).setValue('tempo_local');
     if (h8 !== 'tipo_trecho')       sheet.getRange(1, 8).setValue('tipo_trecho');
+    if (h9 !== 'troca_motorista')   sheet.getRange(1, 9).setValue('troca_motorista');
+    if (h10 !== 'abastecimento')    sheet.getRange(1, 10).setValue('abastecimento');
+    if (h11 !== 'alimentacao')      sheet.getRange(1, 11).setValue('alimentacao');
 
     var idStr = String(idEsquema).trim();
     var lastRow = sheet.getLastRow();
@@ -236,10 +267,15 @@ function salvarSequenciaPontos(idEsquema, pontos) {
 
     // Reinsere com ORDEM sequencial
     pontos.forEach(function(p, idx) {
-      sheet.appendRow([idEsquema, idx + 1, p.idPonto, p.nomePonto, p.tipo || '', p.horarioComercial || '', p.tempoLocal !== '' ? p.tempoLocal : '', p.tipoTrecho || '']);
+      sheet.appendRow([
+        idEsquema, idx + 1, p.idPonto, p.nomePonto, p.tipo || '', p.horarioComercial || '',
+        p.tempoLocal !== '' ? p.tempoLocal : '', p.tipoTrecho || '',
+        p.troca ? 'x' : '', p.abastecimento ? 'x' : '', p.alimentacao ? 'x' : ''
+      ]);
     });
 
     EsquemasService.invalidateCache();
+    EsquemasService.markUpdated();
 
     // Deriva os trechos (legs) da sequência e salva tipo_via em DISTANCIAS.
     // Trechos personalizados ("Pers:72") são específicos do esquema: não vão para o
@@ -803,6 +839,7 @@ function substituirPontoEmMassa(codX, codY, nomeY, aplicar) {
     if (aplicar && applied.length) {
       _bulkEscreverPontos_(sheet, d.byEsq, d.order);
       EsquemasService.invalidateCache();
+      EsquemasService.markUpdated();
       _colorirEsquemaPontos_(sheet);
     }
     return { applied: applied, skipped: skipped };
@@ -863,6 +900,7 @@ function inserirEntrePontosEmMassa(codA, codB, novos, aplicar) {
     if (aplicar && applied.length) {
       _bulkEscreverPontos_(sheet, d.byEsq, d.order);
       EsquemasService.invalidateCache();
+      EsquemasService.markUpdated();
       _colorirEsquemaPontos_(sheet);
     }
     return { applied: applied, skipped: skipped };
@@ -1071,6 +1109,7 @@ function salvarPontoEsquema(dados) {
     ]);
 
     EsquemasService.invalidateCache();
+    EsquemasService.markUpdated();
     return true;
   } catch (e) {
     throw new Error('Erro ao salvar ponto: ' + e.message);
@@ -1582,6 +1621,10 @@ function doGet(e) {
         return ContentService.createTextOutput(JSON.stringify(RoteiroApi.getRoteiro(idRoteiro)))
           .setMimeType(ContentService.MimeType.JSON);
       }
+      if (params.action === 'getMeta') {
+        return ContentService.createTextOutput(JSON.stringify(RoteiroApi.getMeta()))
+          .setMimeType(ContentService.MimeType.JSON);
+      }
       return ContentService.createTextOutput(JSON.stringify({ error: 'unknown_action' }))
         .setMimeType(ContentService.MimeType.JSON);
     } catch (err) {
@@ -1671,6 +1714,7 @@ function excluirEsquema(idEsquema) {
     }
 
     EsquemasService.invalidateCache();
+    EsquemasService.markUpdated();
     return { excluido: excluido, pontosExcluidos: pontosExcluidos };
   } catch (e) {
     throw new Error('Erro ao excluir esquema: ' + e.message);
@@ -1761,6 +1805,7 @@ function criarEsquema(dados) {
       sheet.getRange(sheet.getLastRow(), _esquemasCodCol_(sheet)).setValue(dados.codLinha || '');
     }
     EsquemasService.invalidateCache();
+    EsquemasService.markUpdated();
     return { id: newId };
   } catch (e) {
     throw new Error('Erro ao criar esquema: ' + e.message);
@@ -1834,6 +1879,7 @@ function marcarEsquemaAjustado(idEsquema, ajustado) {
       if (String(ids[i][0]).trim() === idStr) {
         sheet.getRange(i + 2, col).setValue(ajustado ? 'ajustado' : '');
         EsquemasService.invalidateCache();
+        EsquemasService.markUpdated();
         return !!ajustado;
       }
     }
@@ -1872,6 +1918,7 @@ function atualizarEsquema(idEsquema, dados) {
           sheet.getRange(i + 2, _esquemasCodCol_(sheet)).setValue(dados.codLinha || '');
         }
         EsquemasService.invalidateCache();
+        EsquemasService.markUpdated();
         return true;
       }
     }

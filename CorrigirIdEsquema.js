@@ -166,6 +166,7 @@ function _corrigirIdEsquemaCore(aplicar) {
     shEsq.getRange(2, colIdIdx + 1, novaColunaId.length, 1).setValues(novaColunaId);
     if (typeof EsquemasService !== 'undefined' && EsquemasService.invalidateCache) {
       EsquemasService.invalidateCache();
+      EsquemasService.markUpdated();
     }
     Logger.log('Gravação concluída.');
   } else if (aplicar) {

@@ -384,16 +384,28 @@ var ReportService = (() => {
     var lastIdx = trechoTrip.length - 1;
     trechoTrip.forEach(function (pt, idx) {
       if (idx === 0 || idx === lastIdx) return;
-      if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: ponto de apoio / ignorado
+      if (pt.ignorarManual) return; // ignorado: fora do relatório
       if (!pt.parada_s || pt.parada_s <= 0) return;
+      var isApoio = !!pt.apoioManual;
       var tipoKey = String(pt.tipo || '').trim();
       var paradaMin = Math.round((pt.parada_s / 60) * 10) / 10;
 
       var nome = String(pt.ponto || '').toUpperCase();
-      var esperadoMin = /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
-        : /GARAGEM/.test(nome) ? 20
-        : TEMPO_ESPERADO_PADRAO; // 40 min para qualquer outro
+      // Ponto de apoio tem teto FIXO de 30min; demais usam o esperado por tipo.
+      var esperadoMin = isApoio ? 30
+        : (/RODOVI[AÁ]RIA|RODOVIARIA/.test(nome) ? 15
+          : /GARAGEM/.test(nome) ? 20
+          : TEMPO_ESPERADO_PADRAO); // 40 min para qualquer outro
       var semLimite = false;
+
+      // Excesso = parada − esperado (valor REAL). apoio: registra qualquer
+      // excesso acima de 30min; normal: gate de 5min de tolerância.
+      var overage = Math.round((paradaMin - esperadoMin) * 10) / 10;
+      var excessoMin = (semLimite || esperadoMin === null) ? 0
+        : (isApoio ? Math.max(0, overage) : (overage > 5 ? overage : 0));
+
+      // apoio dentro do teto → parada legítima, não entra no relatório
+      if (isApoio && excessoMin <= 0) return;
 
       paradas.push({
         ponto: pt.ponto,
@@ -402,11 +414,10 @@ var ReportService = (() => {
         saida: pt.saida,
         parada_min: paradaMin,
         esperado_min: esperadoMin,
-        excesso_min: semLimite || esperadoMin === null
-          ? 0
-          : Math.max(0, Math.round((paradaMin - esperadoMin - 5) * 10) / 10),
+        excesso_min: excessoMin,
         sem_limite: semLimite,
         tipo: tipoKey,
+        isApoio: isApoio,
       });
     });
     return paradas;
@@ -816,7 +827,7 @@ var ReportService = (() => {
     // 2. Indicadores (cards em tabela 5×2)
     h += subTitle('Indicadores');
     var cards = [
-      ['Onde mais se perdeu tempo', c.maiorResponsavelAtraso ? fmtDelta(c.maiorResponsavelAtraso.valorMin) : '—', c.maiorResponsavelAtraso ? c.maiorResponsavelAtraso.local : 'Sem atraso relevante', '#d94040'],
+      ['Onde mais se perdeu tempo', c.maiorResponsavelAtraso ? fmtDelta(c.maiorResponsavelAtraso.valorMin) : '—', c.maiorResponsavelAtraso ? c.maiorResponsavelAtraso.local : 'Sem atraso relevante', '#d94040', c.pontosComAtraso],
       ['Maior parada (excesso)', c.maiorParada ? fmtDelta(c.maiorParada.valorMin) : '—', c.maiorParada ? c.maiorParada.local : 'Dentro do previsto', '#d94040'],
       ['Maior recuperação', c.maiorRecuperacao ? ('−' + Math.round(c.maiorRecuperacao.valorMin) + ' min') : '—', c.maiorRecuperacao ? c.maiorRecuperacao.local : 'Sem recuperação', '#22a96a'],
       ['Trecho mais lento', c.trechoMaisLento ? (c.trechoMaisLento.vel + ' km/h') : '—', c.trechoMaisLento ? c.trechoMaisLento.trecho : '—', '#3b82f6'],
@@ -847,6 +858,7 @@ var ReportService = (() => {
              '<div style="font-size:8px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#8a8f99;line-height:1.2;">' + esc(cd[0]) + '</div>' +
              '<div style="font-size:15px;font-weight:800;color:' + cd[3] + ';margin:2px 0 1px;">' + esc(cd[1]) + '</div>' +
              '<div style="font-size:8.5px;color:#9aa0ad;line-height:1.2;">' + esc(cd[2]) + '</div>' +
+             (cd[4] ? '<div style="font-size:8px;font-weight:700;color:' + cd[3] + ';margin-top:3px;">' + cd[4] + ' ponto' + (cd[4] === 1 ? '' : 's') + ' com atraso</div>' : '') +
              '</td>';
       }
       // Completa a última linha para não deixar células faltando (bordas irregulares no Word).
@@ -870,20 +882,17 @@ var ReportService = (() => {
            '<th style="' + TH + 'text-align:left;">Local</th>' +
            '<th style="' + TH + 'text-align:center;">Real</th>' +
            '<th style="' + TH + 'text-align:center;">Programado</th>' +
-           '<th style="' + TH + 'text-align:center;">Atraso acum.</th>' +
            '<th style="' + TH + 'text-align:center;">Variação</th>' +
            '<th style="' + TH + 'text-align:left;">Tendência</th>' +
            '</tr></thead><tbody>';
       d.timeline.forEach(function (t) {
         var col = toneColor(t.tendencia);
         var tend = t.tendencia === 'perdeu' ? 'Perdeu tempo' : (t.tendencia === 'recuperou' ? 'Recuperou tempo' : 'Sem alteração');
-        var deltaTxt = (t.deltaMin > 0 ? '+' : (t.deltaMin < 0 ? '−' : '')) + Math.abs(Math.round(t.deltaMin)) + ' min';
         h += '<tr>' +
              '<td style="' + TD + '"><strong>' + esc(t.local) + '</strong></td>' +
              '<td style="' + TD + 'text-align:center;font-family:monospace;">' + esc(t.horarioReal) + '</td>' +
              '<td style="' + TD + 'text-align:center;font-family:monospace;color:#1565c0;">' + esc(t.horarioComercial) + '</td>' +
-             '<td style="' + TD + 'text-align:center;font-weight:700;">' + esc(fmtDelta(t.atrasoAcumMin)) + '</td>' +
-             '<td style="' + TD + 'text-align:center;color:' + col + ';font-weight:700;">' + deltaTxt + '</td>' +
+             '<td style="' + TD + 'text-align:center;color:' + col + ';font-weight:700;">' + esc(fmtDelta(t.atrasoAcumMin)) + '</td>' +
              '<td style="' + TD + 'color:' + col + ';">' + tend + '</td>' +
              '</tr>';
       });
@@ -1397,7 +1406,10 @@ var ReportService = (() => {
             : /RODOVI[AÁ]RIA|RODOVIARIA/.test(nome)    ? 30
             : isGaragem                                 ? 20
             : TEMPO_ESPERADO_PADRAO;
-          var excessoMin = (isExtremo || isGaragem || isApoio) ? 0 : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
+          // apoio: parada legítima, mas com teto de 30min — acima disso registra excesso.
+          var excessoMin = (isExtremo || isGaragem) ? 0
+            : isApoio ? Math.max(0, Math.round((paradaMin - 30) * 10) / 10)
+            : Math.max(0, Math.round((paradaMin - esperadoMin) * 10) / 10);
           var showInicioTag = isFirst && !isGaragem;
           var showFimTag    = isLast  && !isGaragem && _showFim;
           var rowBg = showInicioTag  ? 'background:#f0fff8;'
@@ -1450,78 +1462,9 @@ var ReportService = (() => {
       }
     }
 
-    // Paradas com excesso
-    if (excessos.length > 0) {
-      h +=
-        '<h4 style="font-size:13px;margin:0 0 8px;color:#d94040;">Paradas com Excesso de Tempo (' +
-        excessos.length +
-        ")</h4>";
-      h +=
-        '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;">';
-      h +=
-        '<thead><tr style="background:#f5f5f5;"><th style="padding:6px 8px;text-align:left;">Ponto</th>' +
-        '<th style="padding:6px 8px;text-align:right;">Parada</th>' +
-        '<th style="padding:6px 8px;text-align:right;">Esperado</th>' +
-        '<th style="padding:6px 8px;text-align:right;color:#d94040;">Excesso</th>' +
-        '<th style="padding:6px 8px;">Entrada</th><th style="padding:6px 8px;">Saída</th></tr></thead>';
-      h += "<tbody>";
-      excessos.forEach(function (e) {
-        h +=
-          '<tr style="border-bottom:1px solid #eee;">' +
-          '<td style="padding:5px 8px;">' +
-          (e.ponto || "—") +
-          "</td>" +
-          '<td style="padding:5px 8px;text-align:right;">' +
-          _fmtMin(e.parada_min) +
-          "</td>" +
-          '<td style="padding:5px 8px;text-align:right;">' +
-          (e.esperado_min !== null ? _fmtMin(e.esperado_min) : '—') +
-          "</td>" +
-          '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:700;">+' +
-          _fmtMin(e.excesso_min) +
-          "</td>" +
-          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' +
-          _formatDateTimeBr(e.entrada) +
-          "</td>" +
-          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' +
-          _formatDateTimeBr(e.saida) +
-          "</td>" +
-          "</tr>";
-      });
-      h += "</tbody></table>";
-    }
-
-    // Paradas fora do esquema
-    if (paradasFora.length > 0) {
-      h +=
-        '<h4 style="font-size:13px;margin:0 0 8px;color:#d00000;">Paradas Fora do Esquema (' +
-        paradasFora.length + ')</h4>';
-      h +=
-        '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;">';
-      h +=
-        '<thead><tr style="background:#f5f5f5;">' +
-        '<th style="padding:6px 8px;text-align:left;">Ponto</th>' +
-        '<th style="padding:6px 8px;text-align:right;">Parada</th>' +
-        '<th style="padding:6px 8px;">Entrada</th>' +
-        '<th style="padding:6px 8px;">Saída</th>' +
-        '<th style="padding:6px 8px;text-align:center;">Status</th>' +
-        '</tr></thead><tbody>';
-      paradasFora.forEach(function(p) {
-        var statusHtml = p.proibido
-          ? '<span style="color:#d00000;font-weight:700;display:inline-flex;align-items:center;gap:3px;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'12\' height=\'12\'><circle cx=\'12\' cy=\'12\' r=\'10\'/><line x1=\'4.93\' y1=\'4.93\' x2=\'19.07\' y2=\'19.07\'/></svg> Irregular</span>'
-          : '<span style="color:#e8a020;font-weight:600;">Não previsto</span>';
-        var rowBg = p.proibido ? 'background:#fff3f3;' : 'background:#fffbf0;';
-        h +=
-          '<tr style="border-bottom:1px solid #eee;' + rowBg + '">' +
-          '<td style="padding:5px 8px;font-style:italic;">' + (p.ponto || '—') + '</td>' +
-          '<td style="padding:5px 8px;text-align:right;color:#d94040;font-weight:600;">' + _fmtMin(p.parada_min) + '</td>' +
-          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.entrada) + '</td>' +
-          '<td style="padding:5px 8px;font-family:monospace;font-size:10px;">' + _formatDateTimeBr(p.saida) + '</td>' +
-          '<td style="padding:5px 8px;text-align:center;">' + statusHtml + '</td>' +
-          '</tr>';
-      });
-      h += '</tbody></table>';
-    }
+    // Paradas com excesso e paradas fora do esquema já aparecem, de forma mais
+    // completa, nas tabelas "Paradas Críticas"/"Trechos Críticos" do Diagnóstico
+    // Inteligente — não duplicar aqui.
 
     // Pontos não visitados
     if (naoVisit.length > 0) {
@@ -1539,30 +1482,21 @@ var ReportService = (() => {
       h += "</ul>";
     }
 
-    // Eventos de velocidade — só os NÃO justificados entram no relatório
-    // principal. Os justificados (contexto urbano/garagem ou justificativa
-    // manual) vão para a seção de auditoria mais abaixo.
+    // Eventos de velocidade — considera apenas os NÃO justificados para a
+    // checagem de "sem ocorrências" abaixo (contexto urbano/garagem ou
+    // justificativa manual não são pendências).
     var eventosPendentes = eventos.filter(function (ev) { return !ev.justificado; });
-    var eventosJustif    = eventos.filter(function (ev) { return ev.justificado; });
 
-    if (eventosPendentes.length > 0) {
-      h +=
-        '<h4 style="font-size:13px;margin:0 0 8px;color:#555;">Eventos de Velocidade (' +
-        eventosPendentes.length +
-        ")</h4>";
-      h += '<ul style="font-size:11px;margin:0 0 16px;padding-left:20px;">';
-      eventosPendentes.forEach(function (ev) {
-        var cor = ev.nivel === "critico" ? "#d94040" : "#8a6500";
-        h +=
-          '<li style="margin-bottom:3px;color:' +
-          cor +
-          '">' +
-          (ev.descricao || ev.tipo) +
-          ' · <em style="color:#888;">' +
-          (ev.trecho || "") +
-          "</em></li>";
-      });
-      h += "</ul>";
+    // Gráfico de velocidade por trecho (mesmo gráfico exibido na aplicação),
+    // com a tabela de referência "trecho → velocidade" logo abaixo para deixar
+    // claro qual barra corresponde a qual trecho.
+    var pontosNoTrechoRelato = {};
+    tripForMap.forEach(function (pt) { if (pt.ponto) pontosNoTrechoRelato[pt.ponto] = true; });
+    var trechoSegmentsVel = (params.segments || []).filter(function (s) {
+      return s.velocidadeKmh != null && (pontosNoTrechoRelato[s.de] || pontosNoTrechoRelato[s.para]);
+    });
+    if (trechoSegmentsVel.length > 0) {
+      h += _buildVelocidadeChartHtml(trechoSegmentsVel);
     }
 
     // Tabela completa de paradas (se não há excesso mas há paradas)
@@ -1606,75 +1540,93 @@ var ReportService = (() => {
         '<p style="color:#22a96a;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2.5\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'13\' height=\'13\'><polyline points=\'20 6 9 17 4 12\'/></svg> Viagem sem ocorrências operacionais registradas.</p>';
     }
 
-    // Seção de auditoria — alertas justificados (não são pendências)
-    if (eventosJustif.length > 0) {
-      h +=
-        '<h4 style="font-size:12px;margin:18px 0 8px;color:#22a96a;font-weight:700;">' +
-        'Alertas Justificados (auditoria) — ' + eventosJustif.length + '</h4>';
-      h += '<ul style="font-size:11px;margin:0 0 16px;padding-left:20px;color:#5a6070;">';
-      eventosJustif.forEach(function (ev) {
-        var cat = ev.justCategoria ? ' — <strong style="color:#333;">' + ev.justCategoria + '</strong>' : '';
-        h +=
-          '<li style="margin-bottom:3px;">' +
-          (ev.descricao || ev.tipo) +
-          ' · <em style="color:#888;">' + (ev.trecho || "") + '</em>' +
-          cat +
-          (ev.justMotivo ? ' <span style="color:#888;">(' + ev.justMotivo + ')</span>' : '') +
-          "</li>";
-      });
-      h += "</ul>";
+    return h;
+  }
+
+  /**
+   * Monta o gráfico de barras de velocidade por trecho — mesmo visual do
+   * gráfico exibido na aplicação (analysis.html/renderVelocidadeChart), em
+   * SVG estático (sem tooltip, já que o PDF não é interativo). Uma tabela de
+   * referência abaixo do gráfico identifica cada barra pelo trecho (De → Para).
+   */
+  function _buildVelocidadeChartHtml(segments) {
+    var IDEAL_MIN = 80, IDEAL_MAX = 90;
+    var colorFor = function (v) {
+      if (v < 70) return '#e8a020';   // abaixo do ideal
+      if (v <= 90) return '#22a96a';  // aceitável
+      if (v <= 100) return '#f47920'; // excesso
+      return '#d94040';              // crítico
+    };
+
+    var maxVel = segments.reduce(function (m, s) { return Math.max(m, s.velocidadeKmh); }, 0);
+    var maxY = Math.max(100, Math.ceil(maxVel / 20) * 20);
+
+    var leftPad = 34, rightPad = 10, topPad = 16, bottomPad = 24, plotH = 160;
+    var maxChartWidth = 660;
+    var gap = 8;
+    var barW = Math.max(10, Math.min(30, Math.floor((maxChartWidth - leftPad - rightPad - (segments.length - 1) * gap) / segments.length)));
+    var innerW = segments.length * barW + (segments.length - 1) * gap;
+    var W = leftPad + innerW + rightPad;
+    var H = topPad + plotH + bottomPad;
+
+    var y = function (v) { return topPad + plotH * (1 - v / maxY); };
+
+    var svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="' + W + '" height="' + H + '" xmlns="http://www.w3.org/2000/svg">';
+
+    // Faixa ideal destacada (80–90 km/h)
+    svg += '<rect x="' + leftPad + '" y="' + y(IDEAL_MAX) + '" width="' + innerW +
+           '" height="' + (y(IDEAL_MIN) - y(IDEAL_MAX)) + '" fill="rgba(34,169,106,0.10)"/>';
+
+    // Linhas de grade + rótulos do eixo Y
+    for (var g = 0; g <= maxY; g += 20) {
+      var gy = y(g);
+      svg += '<line x1="' + leftPad + '" y1="' + gy + '" x2="' + (leftPad + innerW) + '" y2="' + gy + '" stroke="#dde1ee" stroke-width="1"/>';
+      svg += '<text x="' + (leftPad - 6) + '" y="' + (gy + 3) + '" text-anchor="end" font-size="8" fill="#8a8f99">' + g + '</text>';
     }
 
-    // Esquema da viagem (referência da rota planejada)
-    var esquemaOrdenado = esquemaPontos.slice().sort(function(a, b) {
-      return (a.ordem || 0) - (b.ordem || 0);
+    // Barras
+    segments.forEach(function (s, i) {
+      var v = s.velocidadeKmh;
+      var bx = leftPad + i * (barW + gap);
+      var by = y(v);
+      var bh = Math.max(0, (topPad + plotH) - by);
+      var lx = bx + barW / 2;
+      svg += '<rect x="' + bx + '" y="' + by + '" width="' + barW + '" height="' + bh + '" rx="2" fill="' + colorFor(v) + '"/>';
+      svg += '<text x="' + lx + '" y="' + (by - 4) + '" text-anchor="middle" font-size="8" fill="#5a6070">' + Math.round(v) + '</text>';
+      svg += '<text x="' + lx + '" y="' + (topPad + plotH + 14) + '" text-anchor="middle" font-size="8" fill="#8a8f99">' + (i + 1) + '</text>';
     });
-    if (esquemaOrdenado.length > 0) {
-      var temComercial = esquemaOrdenado.some(function(ep) { return ep.horario_comercial; });
-      var temParada    = esquemaOrdenado.some(function(ep) { return ep.tempo_local; });
-      var TH = 'background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;' +
-               'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;';
-      var TD = 'padding:7px 10px;border:1px solid #dde1ee;vertical-align:middle;';
-      h +=
-        '<div style="margin-top:28px;border-top:2px solid #f47920;padding-top:16px;">' +
-        '<h4 style="font-size:13px;margin:0 0 10px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
-        'Esquema da Viagem — ' + linhaStr +
-        (horarioEsquema ? ' &nbsp;·&nbsp; <span style="color:#f47920;">' + horarioEsquema + '</span>' : '') +
-        '</h4>' +
-        '<table style="width:100%;border-collapse:collapse;font-size:11px;border:1px solid #cdd2e5;">';
-      h +=
-        '<thead><tr>' +
-        '<th style="' + TH + 'text-align:center;width:36px;">#</th>' +
-        '<th style="' + TH + 'text-align:left;">Cidade</th>' +
-        (temComercial ? '<th style="' + TH + 'text-align:center;">Horário</th>' : '') +
-        (temParada    ? '<th style="' + TH + 'text-align:center;">Parada</th>'  : '') +
-        '</tr></thead><tbody>';
-      esquemaOrdenado.forEach(function(ep, idx) {
-        var isFirst = idx === 0;
-        var isLast  = idx === esquemaOrdenado.length - 1;
-        var rowBg   = isFirst ? 'background:#f0fff8;'
-                    : isLast  ? 'background:#fff8f0;'
-                    : (!ep.horario_comercial && temComercial) ? 'background:#fff8f2;' : '';
-        var nomeCel = '<strong>' + (ep.nome_ponto || ep.id_ponto || '—') + '</strong>' +
-                      (isFirst
-                        ? ' <span style="font-size:9px;background:#f47920;color:#fff;' +
-                          'border-radius:3px;padding:1px 5px;margin-left:3px;display:inline-flex;align-items:center;"><svg xmlns=\'http://www.w3.org/2000/svg\' fill=\'none\' stroke=\'currentColor\' stroke-width=\'2\' stroke-linecap=\'round\' stroke-linejoin=\'round\' viewBox=\'0 0 24 24\' width=\'9\' height=\'9\'><line x1=\'22\' y1=\'2\' x2=\'11\' y2=\'13\'/><polygon points=\'22 2 15 22 11 13 2 9 22 2\'/></svg></span>'
-                        : '');
-        var horCel = ep.horario_comercial
-          ? '<strong style="color:#1565c0;">' + ep.horario_comercial + '</strong>'
-          : '<span style="color:#ccc;">—</span>';
-        var paradaCel = (isFirst || isLast) ? '—'
-                      : (ep.tempo_local ? ep.tempo_local : '00:05');
-        h +=
-          '<tr style="' + rowBg + '">' +
-          '<td style="' + TD + 'text-align:center;color:#888;">' + (ep.ordem || idx + 1) + '</td>' +
-          '<td style="' + TD + '">' + nomeCel + '</td>' +
-          (temComercial ? '<td style="' + TD + 'text-align:center;font-family:monospace;">' + horCel    + '</td>' : '') +
-          (temParada    ? '<td style="' + TD + 'text-align:center;">'                       + paradaCel + '</td>' : '') +
-          '</tr>';
-      });
-      h += '</tbody></table></div>';
-    }
+
+    svg += '</svg>';
+
+    var h = '<div style="margin-bottom:16px;">';
+    h += '<h4 style="font-size:13px;margin:0 0 8px;color:#1a1d23;font-weight:700;">Eventos de Velocidade — Gráfico por Trecho (' + segments.length + ')</h4>';
+    h += '<div style="font-size:9px;color:#5a6070;margin-bottom:8px;">' +
+         '<span style="color:#e8a020;">■</span> Abaixo do ideal (&lt;70) &nbsp; ' +
+         '<span style="color:#22a96a;">■</span> Aceitável (70–90) &nbsp; ' +
+         '<span style="color:#f47920;">■</span> Excesso (90–100) &nbsp; ' +
+         '<span style="color:#d94040;">■</span> Crítico (&gt;100) &nbsp; ' +
+         '<span style="background:rgba(34,169,106,0.10);border:1px solid #cdd2e5;padding:0 4px;">&nbsp;</span> Faixa ideal (80–90)' +
+         '</div>';
+    h += svg;
+
+    // Tabela de referência: qual barra (#) corresponde a qual trecho
+    var TH = 'background:#f0f2f8;padding:5px 8px;font-size:9px;font-weight:700;text-transform:uppercase;' +
+             'letter-spacing:.05em;color:#5a6070;border:1px solid #cdd2e5;white-space:nowrap;';
+    var TD = 'padding:5px 8px;border:1px solid #dde1ee;vertical-align:middle;font-size:10px;';
+    h += '<table style="width:100%;border-collapse:collapse;margin-top:8px;border:1px solid #cdd2e5;">' +
+         '<thead><tr>' +
+         '<th style="' + TH + 'text-align:center;width:28px;">#</th>' +
+         '<th style="' + TH + 'text-align:left;">Trecho (De → Para)</th>' +
+         '<th style="' + TH + 'text-align:center;">Vel. média</th>' +
+         '</tr></thead><tbody>';
+    segments.forEach(function (s, i) {
+      h += '<tr>' +
+           '<td style="' + TD + 'text-align:center;color:#888;">' + (i + 1) + '</td>' +
+           '<td style="' + TD + '">' + (s.de || '—') + ' &#8594; ' + (s.para || '—') + '</td>' +
+           '<td style="' + TD + 'text-align:center;font-weight:700;color:' + colorFor(s.velocidadeKmh) + ';">' + s.velocidadeKmh + ' km/h</td>' +
+           '</tr>';
+    });
+    h += '</tbody></table></div>';
 
     return h;
   }

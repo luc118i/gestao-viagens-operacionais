@@ -36,6 +36,7 @@ var _osrmSeqKey      = '';
 var _osrmGeometry    = null;
 var _osrmLegGeoms    = null;   // geometria real (curva) de cada leg — [[lat,lng],...] por leg, ou null
 var _comercialTimes  = {};
+var _tiposParada     = {};   // { idPonto: { troca:bool, abastecimento:bool, alimentacao:bool } }
 var _horStartIdx     = 0;
 var _customStopTimes = {};
 var _temposPermanencia = {};   // { codigoLocal: minutos } — vindo da aba TEMPO_PERMANENCIA
@@ -87,8 +88,12 @@ var _horOsmHidden     = (function(){ try { return localStorage.getItem('vc_hor_o
 var ANTT_MAX_KM  = 495; // km — máximo entre pontos de apoio consecutivos (ANTT)
 var ANTT_WARN_KM = 395; // km — aviso de proximidade ao limite
 var ANTT_MIN_KM  = 30;  // km — pontos de apoio desnecessariamente próximos
+var ANTT_TROCA_MAX_KM  = 660; // km — máximo entre pontos de Troca de Motorista (ANTT)
+var ANTT_TROCA_WARN_KM = 560; // km — aviso de proximidade ao limite de troca
 var _anttMap          = {};   // { rowIdx → { type, dist, fromNome } }
 var _anttStatus       = null; // estado do fim da rota
+var _anttTrocaMap     = {};   // { rowIdx → { type, dist, fromNome } } — limite de Troca de Motorista
+var _anttTrocaStatus  = null;
 var _anttWarnIdx      = -1;   // índice da linha com badge warn atual (para substituição por error)
 var _anttSuggCands    = [];   // candidatos de sugestão calculados
 var _anttSuggCacheKey = '';   // chave do último batch de cache consultado
@@ -123,14 +128,37 @@ function _stopTime(tipo) {
 
 var STOP_PADRAO_MIN = 30;  // padrão para pontos fora da aba TEMPO_PERMANENCIA
 
+// Minutos extras quando o ponto acumula operação além de Embarque/Desemb.
+// (que já está embutido no tempo-base de TEMPO_PERMANENCIA/padrão).
+var TIPO_PARADA_BONUS_MIN = { alimentacao: 30, troca: 15, abastecimento: 15 };
+
+function _tiposParadaBonusMin(idPonto) {
+  var flags = _tiposParada[idPonto];
+  if (!flags) return 0;
+  var bonus = 0;
+  for (var k in TIPO_PARADA_BONUS_MIN) { if (flags[k]) bonus += TIPO_PARADA_BONUS_MIN[k]; }
+  return bonus;
+}
+
 function _getStopTime(idx, tipo) {
   var key = _seq[idx] ? _seq[idx].idPonto : idx;
-  // Hierarquia: 1º edição manual feita na sessão
-  //             2º TEMPO_PERMANENCIA (aba)
-  //             3º 30 min fixo (tudo que não está na aba)
-  if (_customStopTimes[key] !== undefined)   return _customStopTimes[key];
-  if (_temposPermanencia[key] !== undefined) return _temposPermanencia[key];
-  return STOP_PADRAO_MIN;
+  if (_customStopTimes[key] !== undefined) return _customStopTimes[key];  // 1º edição manual — valor final, sem bônus
+
+  var temComercial = !!_comercialTimes[key];
+  var tagBonus = _tiposParadaBonusMin(key);
+
+  // 2º TEMPO_PERMANENCIA (aba): tempo oficial do local; soma bônus só quando
+  // o ponto também é embarque/desembarque (função a mais em cima da já existente).
+  if (_temposPermanencia[key] !== undefined) {
+    return _temposPermanencia[key] + (temComercial ? tagBonus : 0);
+  }
+
+  // 3º sem registro na aba:
+  //    - é embarque/desembarque → 30 min padrão (baseline do embarque) + bônus das tags.
+  //    - ponto de apoio puro (sem comercial) → o tempo vem só da soma das tags
+  //      marcadas (zera o padrão fixo); sem tag nenhuma, cai nos 30 min padrão.
+  if (temComercial) return STOP_PADRAO_MIN + tagBonus;
+  return tagBonus > 0 ? tagBonus : STOP_PADRAO_MIN;
 }
 
 // Haversine client-side (km) — mantido para uso eventual no mapa
@@ -690,6 +718,14 @@ function _isApoioAntt(idx) {
   return !_comercialTimes[p.idPonto];
 }
 
+/** Ponto de Troca de Motorista ANTT = ponto marcado com a tag "troca" no Operação. */
+function _isTrocaAntt(idx) {
+  var p = _seq[idx];
+  if (!p) return false;
+  var flags = _tiposParada[p.idPonto];
+  return !!(flags && flags.troca);
+}
+
 // ============================================================
 //  Investigação de Divergência — Model + View + Controller
 //  Fase 1 (atual): só evidências determinísticas, sem IA — hipóteses por
@@ -972,25 +1008,27 @@ function _fecharModalInvestigacao() {
 }
 
 /**
- * Percorre a sequência acumulando km entre pontos de apoio consecutivos.
- * - Pontos de apoio: qualquer ponto sem horário comercial → zera o contador.
- * - Pontos comerciais: alerta no PRIMEIRO que cruzar 395 km (warn) ou 495 km (error).
- * - Último ponto: sempre verifica o trecho final.
- * Preenche _anttMap[rowIdx] = { type, dist, fromNome }.
+ * Percorre a sequência acumulando km desde o último ponto que satisfaz
+ * isResetPoint(idx), sinalizando quando ultrapassa maxKm (error) ou warnKm
+ * (warn) — com dedup (só o primeiro cruzamento gera alerta) e sempre
+ * verificando o trecho final. minKm opcional sinaliza pontos de reset
+ * próximos demais entre si (info). Genérico: usado tanto pro limite de
+ * Ponto de Apoio (495km) quanto pro de Troca de Motorista (660km).
+ * @returns {{ map: Object, accumKm: number, maxStretch: number, lastResetIdx: number }}
  */
-function _computeAnttAlerts(c) {
-  _anttMap     = {};
-  _anttWarnIdx = -1;
-  if (!c || _seq.length < 2) return;
+function _computeAnttGeneric(c, isResetPoint, maxKm, warnKm, minKm) {
+  var map = {};
+  if (!c || _seq.length < 2) return { map: map, accumKm: 0, maxStretch: 0, lastResetIdx: 0 };
 
   var startIdx     = Math.min(_horStartIdx, _seq.length - 1);
   var vel          = parseFloat(document.getElementById('horVelMedia').value) || 80;
   var lastNome     = _seq[startIdx] ? _seq[startIdx].nomePonto : '';
-  var lastApoioIdx = startIdx;
+  var lastResetIdx = startIdx;
   var accumDist    = 0;
-  var maxStretch   = 0;   // maior trecho já fechado (entre dois apoios)
+  var maxStretch   = 0;   // maior trecho já fechado (entre dois resets)
   var warnFired    = false;
   var errorFired   = false;
+  var warnIdx      = -1;
 
   for (var i = startIdx + 1; i < c.pontos.length; i++) {
     var p = c.pontos[i];
@@ -1001,47 +1039,67 @@ function _computeAnttAlerts(c) {
     accumDist += seg;
 
     var isLast  = (i === _seq.length - 1);
-    var isApoio = _isApoioAntt(i);
+    var isReset = isResetPoint(i);
     var d       = Math.round(accumDist);
 
-    if (isApoio) {
+    if (isReset) {
       if (d > maxStretch) maxStretch = d;
-      if      (d > ANTT_MAX_KM)            _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
-      else if (d > ANTT_WARN_KM)           _anttMap[i] = { type: 'warn',  dist: d, fromNome: lastNome };
-      else if (d > 0 && d < ANTT_MIN_KM)  _anttMap[i] = { type: 'info',  dist: d, fromNome: lastNome };
+      if      (d > maxKm)                     map[i] = { type: 'error', dist: d, fromNome: lastNome };
+      else if (d > warnKm)                    map[i] = { type: 'warn',  dist: d, fromNome: lastNome };
+      else if (minKm && d > 0 && d < minKm)   map[i] = { type: 'info',  dist: d, fromNome: lastNome };
       lastNome     = _seq[i].nomePonto;
-      lastApoioIdx = i;
+      lastResetIdx = i;
       accumDist    = 0;
       warnFired    = false;
       errorFired   = false;
     } else {
-      if (!errorFired && d > ANTT_MAX_KM) {
-        if (warnFired) { delete _anttMap[_anttWarnIdx]; }
-        _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
+      if (!errorFired && d > maxKm) {
+        if (warnFired) { delete map[warnIdx]; }
+        map[i] = { type: 'error', dist: d, fromNome: lastNome };
         errorFired = true;
-      } else if (!warnFired && d > ANTT_WARN_KM) {
-        _anttMap[i] = { type: 'warn', dist: d, fromNome: lastNome };
-        _anttWarnIdx = i;
+      } else if (!warnFired && d > warnKm) {
+        map[i] = { type: 'warn', dist: d, fromNome: lastNome };
+        warnIdx = i;
         warnFired = true;
       }
       if (isLast) {
         if (d > maxStretch) maxStretch = d;
-        if (!_anttMap[i] && !errorFired) {
-          if      (d > ANTT_MAX_KM)  _anttMap[i] = { type: 'error', dist: d, fromNome: lastNome };
-          else if (d > ANTT_WARN_KM) _anttMap[i] = { type: 'warn',  dist: d, fromNome: lastNome };
+        if (!map[i] && !errorFired) {
+          if      (d > maxKm)  map[i] = { type: 'error', dist: d, fromNome: lastNome };
+          else if (d > warnKm) map[i] = { type: 'warn',  dist: d, fromNome: lastNome };
         }
       }
     }
   }
 
-  var apoioPt = _seq[lastApoioIdx];
+  return { map: map, accumKm: Math.round(accumDist), maxStretch: maxStretch, lastResetIdx: lastResetIdx };
+}
+
+/** Limite ANTT de Ponto de Apoio (495km) — preenche _anttMap / _anttStatus. */
+function _computeAnttAlerts(c) {
+  var r = _computeAnttGeneric(c, _isApoioAntt, ANTT_MAX_KM, ANTT_WARN_KM, ANTT_MIN_KM);
+  _anttMap = r.map;
+  var apoioPt = _seq[r.lastResetIdx];
   _anttStatus = {
-    accumKm:       Math.round(accumDist),
-    remaining:     Math.round(ANTT_MAX_KM - accumDist),
-    maxStretch:    maxStretch,
-    lastApoioNome: lastNome,
+    accumKm:       r.accumKm,
+    remaining:     Math.round(ANTT_MAX_KM - r.accumKm),
+    maxStretch:    r.maxStretch,
+    lastApoioNome: apoioPt ? apoioPt.nomePonto : '',
     lastApoioLat:  apoioPt ? (apoioPt.lat || null) : null,
     lastApoioLng:  apoioPt ? (apoioPt.lng || null) : null
+  };
+
+  _computeAnttTrocaAlerts(c);
+}
+
+/** Limite ANTT de Troca de Motorista (660km) — preenche _anttTrocaMap / _anttTrocaStatus. */
+function _computeAnttTrocaAlerts(c) {
+  var r = _computeAnttGeneric(c, _isTrocaAntt, ANTT_TROCA_MAX_KM, ANTT_TROCA_WARN_KM, 0);
+  _anttTrocaMap = r.map;
+  _anttTrocaStatus = {
+    accumKm:    r.accumKm,
+    remaining:  Math.round(ANTT_TROCA_MAX_KM - r.accumKm),
+    maxStretch: r.maxStretch
   };
 }
 
@@ -1718,7 +1776,7 @@ function _drawLegHoverOnMap() {
   });
 }
 
-/** Retorna o HTML do badge ANTT para inserir na célula de nome. */
+/** Retorna o HTML do badge ANTT (Ponto de Apoio, 495km) para a célula de nome. */
 function _anttBadgeHtml(idx) {
   var a = _anttMap[idx];
   if (!a) return '';
@@ -1736,21 +1794,39 @@ function _anttBadgeHtml(idx) {
   return ' <span class="antt-badge antt-' + a.type + '" title="' + esc(tip) + '">' + lbl + '</span>';
 }
 
+/** Retorna o HTML do badge ANTT de Troca de Motorista (660km) para a célula de nome. */
+function _anttTrocaBadgeHtml(idx) {
+  var a = _anttTrocaMap[idx];
+  if (!a) return '';
+  var badgeIco = a.type === 'error' ? ico('alert-triangle', 11) : ico('zap', 11);
+  var lbl = a.type === 'error'
+    ? badgeIco + ' ' + a.dist + 'km s/ troca'
+    : badgeIco + ' ' + a.dist + 'km (lim. ' + ANTT_TROCA_MAX_KM + ')';
+  var tip = a.type === 'error'
+    ? a.dist + 'km desde ' + a.fromNome + ' — excede o limite ANTT de ' + ANTT_TROCA_MAX_KM + 'km entre trocas de motorista'
+    : a.dist + 'km desde ' + a.fromNome + ' — próximo ao limite ANTT de troca (' + ANTT_TROCA_MAX_KM + 'km)';
+  return ' <span class="antt-badge antt-troca-' + a.type + '" title="' + esc(tip) + '">' + lbl + '</span>';
+}
+
 /** Atualiza indicadores ANTT nos TRs existentes (uso em partial updates). */
 function _applyAnttToRows(c) {
   _computeAnttAlerts(c);
   for (var i = 0; i < c.pontos.length; i++) {
     var row = document.getElementById('horRow' + i);
     if (!row || c.pontos[i].preDep) continue;
-    row.classList.remove('antt-row-error','antt-row-warn','antt-row-info');
+    row.classList.remove('antt-row-error','antt-row-warn','antt-row-info','antt-troca-row-error','antt-troca-row-warn');
     var tds = row.querySelectorAll('td');
     if (!tds[0]) continue;
-    var old = tds[0].querySelector('.antt-badge');
-    if (old) old.remove();
+    tds[0].querySelectorAll('.antt-badge').forEach(function(el) { el.remove(); });
     var a = _anttMap[i];
     if (a) {
       row.classList.add('antt-row-' + a.type);
       tds[0].insertAdjacentHTML('beforeend', _anttBadgeHtml(i));
+    }
+    var at = _anttTrocaMap[i];
+    if (at) {
+      row.classList.add('antt-troca-row-' + at.type);
+      tds[0].insertAdjacentHTML('beforeend', _anttTrocaBadgeHtml(i));
     }
   }
   _updateAnttWarnBar();
@@ -1838,6 +1914,8 @@ function _renderHorarioWith(osrmLegs) {
     else if (isLast)   clsArr.push('row-last');
     var anttA = !preDep && _anttMap[i];
     if (anttA) clsArr.push('antt-row-' + anttA.type);
+    var anttT = !preDep && _anttTrocaMap[i];
+    if (anttT) clsArr.push('antt-troca-row-' + anttT.type);
     var cls = clsArr.length ? ' class="' + clsArr.join(' ') + '"' : '';
 
     if (preDep) {
@@ -1848,14 +1926,7 @@ function _renderHorarioWith(osrmLegs) {
     }
 
     var tvCel = _buildLegViaCell(i, c);
-
-    var tpVals = [2,5,10,15,20,30,40];
-    var tpMatch = tpVals.indexOf(p.tp) !== -1 ? p.tp : null;
-    var tpOpts = (tpMatch === null ? '<option value="' + p.tp + '" selected>' + _hhmm(p.tp) + '</option>' : '')
-      + tpVals.map(function(v){
-          return '<option value="' + v + '"' + (p.tp === v ? ' selected' : '') + '>' + _hhmm(v) + '</option>';
-        }).join('');
-    var tpCel = '<select class="hor-tp-input" onchange="onStopTimeChange(' + i + ',this.value)">' + tpOpts + '</select>';
+    var tpCel = _tpSelectHtml(i, p.tp);
 
     var chegStr = p.chegadaMin !== null ? _ms(p.chegadaMin) : partida;
     if (isStart) chegStr = partida;
@@ -1869,6 +1940,8 @@ function _renderHorarioWith(osrmLegs) {
       + esc(p.nomePonto)
       + (isStart ? ' <span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;">' + ico('send',9) + '</span>' : '')
       + _anttBadgeHtml(i)
+      + _anttTrocaBadgeHtml(i)
+      + _tiposParadaCellHtml(i)
       + '</td>';
 
     var comVal  = _comercialTimes[_seq[i].idPonto] || '';
@@ -1932,6 +2005,71 @@ function _renderHorarioWith(osrmLegs) {
       nm.scrollTop = _savedScroll;
     }
   });
+}
+
+// ============================================================
+//  Operação no ponto — Troca de motorista / Abastecimento / Alimentação
+//  Embarque/Desemb. é implícito (qualquer ponto com horário comercial);
+//  só estas 3 tags são marcadas manualmente aqui.
+// ============================================================
+var _TIPO_PARADA_DEFS = [
+  { key: 'troca',         icon: 'user-swap', color: '#2563EB', label: 'Troca de motorista' },
+  { key: 'abastecimento', icon: 'fuel',     color: '#16A34A', label: 'Abastecimento' },
+  { key: 'alimentacao',   icon: 'utensils', color: '#CA8A04', label: 'Alimentação' }
+];
+
+function _tiposParadaBtnsHtml(i) {
+  var idPonto = _seq[i].idPonto;
+  var flags   = _tiposParada[idPonto] || {};
+  return _TIPO_PARADA_DEFS.map(function(def) {
+    var active = !!flags[def.key];
+    var style = 'display:inline-flex;align-items:center;justify-content:center;'
+      + 'width:28px;height:28px;border-radius:7px;cursor:pointer;line-height:1;'
+      + (active
+          ? 'background:' + def.color + ';border:1px solid ' + def.color + ';color:#fff;opacity:1;'
+          : 'background:#fff;border:1px solid #e2e5eb;color:' + def.color + ';opacity:0.45;');
+    return '<button type="button" title="' + esc(def.label) + (active ? ' (marcado)' : '') + '" '
+      + 'onclick="event.stopPropagation();toggleTipoParada(' + i + ',\'' + def.key + '\')" '
+      + 'style="' + style + '">' + ico(def.icon, 15) + '</button>';
+  }).join('');
+}
+
+function _tiposParadaCellHtml(i) {
+  return '<span id="tpBadges' + i + '" style="display:inline-flex;align-items:center;gap:6px;vertical-align:middle;margin-left:14px;padding-left:14px;border-left:1px solid #e2e5eb;">'
+    + _tiposParadaBtnsHtml(i) + '</span>';
+}
+
+// Monta o <select> de tempo de parada — compartilhado entre o render inicial
+// da linha e a atualização parcial depois de mudar uma tag de operação.
+function _tpSelectHtml(i, tp) {
+  var tpVals = [2,5,10,15,20,30,40,45,50,60,75,90];
+  var tpMatch = tpVals.indexOf(tp) !== -1 ? tp : null;
+  var tpOpts = (tpMatch === null ? '<option value="' + tp + '" selected>' + _hhmm(tp) + '</option>' : '')
+    + tpVals.map(function(v){
+        return '<option value="' + v + '"' + (tp === v ? ' selected' : '') + '>' + _hhmm(v) + '</option>';
+      }).join('');
+  return '<select class="hor-tp-input" onchange="onStopTimeChange(' + i + ',this.value)">' + tpOpts + '</select>';
+}
+
+function toggleTipoParada(idx, tag) {
+  var idPonto = _seq[idx].idPonto;
+  var flags = _tiposParada[idPonto] || (_tiposParada[idPonto] = {});
+  // Acumulável: um ponto pode ser Troca + Alimentação ao mesmo tempo, etc.
+  flags[tag] = !flags[tag];
+  _markDirty();
+
+  var wrap = document.getElementById('tpBadges' + idx);
+  if (wrap) wrap.innerHTML = _tiposParadaBtnsHtml(idx);
+
+  // Recalcula o horário (o tempo de parada deste ponto mudou com a tag) e
+  // atualiza o select de "Parada" da linha — só quando não há edição manual
+  // guardada na sessão, que sempre tem prioridade sobre o cálculo automático.
+  _partialUpdateSchedule();
+  if (_customStopTimes[idPonto] === undefined && _lastCalc && _lastCalc.pontos[idx]) {
+    var row = document.getElementById('horRow' + idx);
+    var tds = row ? row.querySelectorAll('td') : null;
+    if (tds && tds[2]) tds[2].innerHTML = _tpSelectHtml(idx, _lastCalc.pontos[idx].tp);
+  }
 }
 
 // ============================================================
@@ -3764,6 +3902,10 @@ function carregarPontos(idEsq) {
       pontos.forEach(function(p) {
         var t = _normalizeHHMM(p.horarioComercial);
         if (t) _comercialTimes[p.idPonto] = t;
+      });
+      _tiposParada = {};
+      pontos.forEach(function(p) {
+        _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao };
       });
       // tempo_local não é mais usado como fallback: parada vem da aba e, fora
       // dela, do padrão fixo de 30 min. _customStopTimes só guarda edições da sessão.
@@ -6307,6 +6449,8 @@ function _setupEsqStateLote(e, pts) {
   });
   _comercialTimes = {};
   pts.forEach(function(p) { var t = _normalizeHHMM(p.horarioComercial); if (t) _comercialTimes[p.idPonto] = t; });
+  _tiposParada = {};
+  pts.forEach(function(p) { _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao }; });
   _customStopTimes = {};  // tempo_local não é mais fallback (aba → 30 min fixo)
   _legVia = {}; _legVelPers = {};
   pts.forEach(function(p) { _setLegViaRaw(p.idPonto, p.tipoTrecho); });
@@ -6328,14 +6472,14 @@ function _legsFromCacheMap(cacheMap) {
 
 function _snapshotEsqState() {
   return {
-    sel: _sel, seq: _seq, com: _comercialTimes, cst: _customStopTimes, lv: _legVia, lvp: _legVelPers,
+    sel: _sel, seq: _seq, com: _comercialTimes, tp: _tiposParada, cst: _customStopTimes, lv: _legVia, lvp: _legVelPers,
     hsi: _horStartIdx, legs: _osrmLegs, st: _osrmStatus, geo: _osrmGeometry,
     partida: (document.getElementById('horHoraPartida') || {}).value,
     vel:     (document.getElementById('horVelMedia')   || {}).value
   };
 }
 function _restoreEsqState(s) {
-  _sel = s.sel; _seq = s.seq; _comercialTimes = s.com; _customStopTimes = s.cst; _legVia = s.lv; _legVelPers = s.lvp || {};
+  _sel = s.sel; _seq = s.seq; _comercialTimes = s.com; _tiposParada = s.tp || {}; _customStopTimes = s.cst; _legVia = s.lv; _legVelPers = s.lvp || {};
   _horStartIdx = s.hsi; _osrmLegs = s.legs; _osrmStatus = s.st; _osrmGeometry = s.geo;
   var hp = document.getElementById('horHoraPartida'); if (hp && s.partida != null) hp.value = s.partida;
   var hv = document.getElementById('horVelMedia');    if (hv && s.vel != null)     hv.value = s.vel;
@@ -7015,12 +7159,18 @@ function salvarSeq() {
       btn.disabled = false; btn.textContent = 'Salvar Sequência';
       toast('Erro ao salvar: ' + (e.message || e), 'error');
     })
-    .salvarSequenciaPontos(_sel.id_esquema, _seq.map(function(p) {
+    .salvarSequenciaPontos(_sel.id_esquema, _seq.map(function(p, idx) {
+      var flags = _tiposParada[p.idPonto] || {};
       return {
         idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
         horarioComercial: _comercialTimes[p.idPonto] || '',
-        tempoLocal: _customStopTimes[p.idPonto] != null ? _customStopTimes[p.idPonto] : '',
-        tipoTrecho: _legViaSerialized(p.idPonto)
+        // Sempre grava o tempo efetivo (edição manual ou calculado pela regra
+        // TEMPO_PERMANENCIA + bônus) — não deixa mais tempo_local vazio quando
+        // não há override, pra downstream (app de consulta, relatórios) ler
+        // direto sem duplicar a regra.
+        tempoLocal: _getStopTime(idx, p.tipo),
+        tipoTrecho: _legViaSerialized(p.idPonto),
+        troca: !!flags.troca, abastecimento: !!flags.abastecimento, alimentacao: !!flags.alimentacao
       };
     }));
 }

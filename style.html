@@ -1240,6 +1240,43 @@
   }
 
   /* ============================================================
+     VELOCIDADE POR TRECHO — gráfico
+     ============================================================ */
+
+  .vel-chart-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 16px 8px;
+    box-shadow: var(--shadow-sm);
+  }
+  .vel-chart-legend {
+    display: flex; flex-wrap: wrap; gap: 12px;
+    margin-bottom: 8px; font-size: 11px; color: var(--text2);
+  }
+  .vel-chart-legend .vcl-item { display: inline-flex; align-items: center; gap: 5px; }
+  .vel-chart-legend .vcl-dot { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .vel-chart-legend .vcl-band {
+    width: 14px; height: 9px; border-radius: 2px; flex-shrink: 0;
+    background: rgba(34, 169, 106, 0.18); border: 1px solid rgba(34, 169, 106, 0.4);
+  }
+  .vel-chart-wrap { position: relative; overflow-x: auto; overflow-y: hidden; padding-bottom: 4px; }
+  .vel-chart-svg { display: block; }
+  .vel-chart-svg .vel-bar { cursor: pointer; }
+  .vel-chart-svg .vel-bar rect { transition: opacity 0.12s; }
+  .vel-chart-svg .vel-bar:hover rect { opacity: 0.82; }
+
+  .vel-chart-tip {
+    position: absolute; z-index: 5; pointer-events: none;
+    background: var(--text); color: #fff; border-radius: 8px;
+    padding: 7px 10px; font-size: 11px; line-height: 1.5;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18); max-width: 260px;
+  }
+  .vel-chart-tip .vct-t { font-weight: 700; margin-bottom: 2px; }
+  .vel-chart-tip .vct-v { font-weight: 600; }
+  .vel-chart-tip .vct-m { color: rgba(255, 255, 255, 0.75); }
+
+  /* ============================================================
      ALERTAS OPERACIONAIS — cards modernos (v2)
      ============================================================ */
 
