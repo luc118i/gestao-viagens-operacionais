@@ -19,7 +19,10 @@ var RoteiroApi = (function () {
 
   /**
    * Lista os esquemas que possuem pontos cadastrados (para a busca/refino).
-   * @returns {{ esquemas: Array<{id:number, nomeLinha:string, codLinha:?string, horario:string, sentido:string}>, lastUpdated: string }}
+   * `pontosNomes` vem junto pra permitir buscar por local do roteiro (ex.:
+   * "Montes Claros") mesmo quando a cidade não aparece no título da linha —
+   * evita uma chamada getRoteiro por esquema só pra montar o índice de busca.
+   * @returns {{ esquemas: Array<{id:number, nomeLinha:string, codLinha:?string, horario:string, sentido:string, pontosNomes:string[]}>, lastUpdated: string }}
    */
   function getLinhas() {
     var esquemas = EsquemasService.getEsquemas();
@@ -35,6 +38,7 @@ var RoteiroApi = (function () {
         codLinha: e.cod_linha ? String(e.cod_linha).trim() : null,
         horario: e.horario || '',
         sentido: _sentido(e.sentido, e.nome_linha),
+        pontosNomes: pts.map(function (p) { return p.nome_ponto || ''; }).filter(Boolean),
       });
     });
     return { esquemas: out, lastUpdated: _lastUpdated() };
