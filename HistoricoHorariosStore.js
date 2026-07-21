@@ -606,7 +606,7 @@ var HistoricoHorariosStore = (() => {
       }
       somaTempoPorDestinoNorm[key].soma += t.tempoRealizadoMin;
       somaTempoPorDestinoNorm[key].qtd += 1;
-      const nomeOrigem = t.trechoDe || '—';
+      const nomeOrigem = t.trechoDe || 'garagem (início da linha)';
       somaTempoPorDestinoNorm[key].origens[nomeOrigem] = (somaTempoPorDestinoNorm[key].origens[nomeOrigem] || 0) + 1;
     });
 
