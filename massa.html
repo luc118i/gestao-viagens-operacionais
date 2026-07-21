@@ -155,8 +155,16 @@
      importada) + Ações — o max-width:760px do .report-screen-body-inner
      (pensado pra formulário centralizado do modal de Relatório) deixa essa
      tabela sufocada, forçando scroll horizontal cedo demais. Alarga só
-     esse modal. */
-  #modalMassa .report-screen-body-inner { max-width: 1180px; }
+     esse modal, acompanhando a largura da tela (até um teto) em vez de um
+     valor fixo — em monitores grandes aproveita o espaço extra e cabem
+     mais colunas de viagem antes de precisar rolar. */
+  #modalMassa .report-screen-body-inner { max-width: min(1600px, 96vw); }
+
+  /* Com muitas viagens importadas a tabela ganha muitas colunas de data —
+     reduz um pouco o respiro de cada célula só nessa grade pra caber mais
+     colunas visíveis antes do scroll horizontal entrar em ação. */
+  #massaHorariosTable th, #massaHorariosTable td { padding: 7px 8px; }
+  #massaHorariosTable { font-size: 11.5px; }
 
   /* Botão de limpar (×) no combobox de linha — sem ele, trocar de linha
      exigia apagar manualmente o texto já selecionado (rótulo tipo "150 —
@@ -1341,6 +1349,30 @@
       return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
     }
 
+    // Espelha _sugestaoModaHoraMediaMin do servidor: hora = moda, minutos =
+    // média arredondada pra cima pro próximo múltiplo de 5.
+    function _sugestaoModaHoraMediaMinClient(minutosArr) {
+      if (!minutosArr.length) return null;
+      const contagemHoras = {};
+      minutosArr.forEach(function (min) {
+        const h = Math.floor(min / 60);
+        contagemHoras[h] = (contagemHoras[h] || 0) + 1;
+      });
+      let horaModa = Math.floor(minutosArr[0] / 60);
+      let maxContagem = 0;
+      minutosArr.forEach(function (min) {
+        const h = Math.floor(min / 60);
+        if (contagemHoras[h] > maxContagem) {
+          maxContagem = contagemHoras[h];
+          horaModa = h;
+        }
+      });
+      const mediaMinutos = minutosArr.reduce(function (a, b) { return a + (b % 60); }, 0) / minutosArr.length;
+      const minutoArredondado = Math.ceil(mediaMinutos / 5) * 5;
+      if (minutoArredondado >= 60) return (horaModa + 1) * 60;
+      return horaModa * 60 + minutoArredondado;
+    }
+
     // Espelha _minutosParaHora do servidor (normaliza pra 0–1439).
     function _minutosParaHoraClient(min) {
       const norm = ((Math.round(min) % 1440) + 1440) % 1440;
@@ -1361,10 +1393,16 @@
         .map(_horaParaMinutosClient)
         .filter(function (v) { return v != null; });
       if (!minutos.length) { loc.sugestao = ''; loc.diffMin = null; return; }
-      const mediaMin = Math.round(minutos.reduce(function (a, b) { return a + b; }, 0) / minutos.length);
-      loc.sugestao = _minutosParaHoraClient(mediaMin);
+      let sugestaoMin = _sugestaoModaHoraMediaMinClient(minutos);
       const programadoMin = _horaParaMinutosClient(loc.programado);
-      loc.diffMin = programadoMin != null ? mediaMin - programadoMin : null;
+      // Espelha o teto de ±2h do servidor (HistoricoHorariosStore.getPivot).
+      if (sugestaoMin != null && programadoMin != null) {
+        const LIMITE_SUGESTAO_DESVIO_MIN = 120;
+        if (sugestaoMin - programadoMin > LIMITE_SUGESTAO_DESVIO_MIN) sugestaoMin = programadoMin + LIMITE_SUGESTAO_DESVIO_MIN;
+        else if (programadoMin - sugestaoMin > LIMITE_SUGESTAO_DESVIO_MIN) sugestaoMin = programadoMin - LIMITE_SUGESTAO_DESVIO_MIN;
+      }
+      loc.sugestao = _minutosParaHoraClient(sugestaoMin);
+      loc.diffMin = programadoMin != null ? sugestaoMin - programadoMin : null;
     }
 
     // Só atualiza o estado local (_pivotAtual + _sugestoesPendentes) e

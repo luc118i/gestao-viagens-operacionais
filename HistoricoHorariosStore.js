@@ -37,6 +37,11 @@ var HistoricoHorariosStore = (() => {
   // estimativa padrão em vez de deixar em branco.
   const TEMPO_DESLOCAMENTO_FALLBACK_MIN = 30;
 
+  // Teto de desvio da sugestão automática em relação ao horário comercial —
+  // o setor não aceita solicitação de mudança acima disso, então não faz
+  // sentido sugerir um valor que nunca vai ser aprovado.
+  const LIMITE_SUGESTAO_DESVIO_MIN = 120;
+
   // ---- Sugestão manual (override do usuário na grade "Histórico da
   // linha") — guardada à parte porque é por (linha, local), não por
   // registro de PDF importado. Sobrescreve a sugestão calculada até o
@@ -476,6 +481,38 @@ var HistoricoHorariosStore = (() => {
   }
 
   /**
+   * Sugestão automática a partir dos horários reais de várias viagens: a
+   * HORA usa a moda (o valor de hora que mais se repete — o "horário
+   * cheio" real da maioria das viagens, sem ser puxado por um outlier
+   * isolado de madrugada/atraso enorme), e os MINUTOS usam a média,
+   * arredondada pra cima pro próximo múltiplo de 5 (sugestão fica sempre
+   * "redonda", fácil de comunicar pro motorista/operação).
+   * @param {number[]} minutosArr minutos desde meia-noite de cada viagem
+   * @returns {number|null} minutos desde meia-noite da sugestão, ou null
+   */
+  function _sugestaoModaHoraMediaMin(minutosArr) {
+    if (!minutosArr.length) return null;
+    const contagemHoras = {};
+    minutosArr.forEach(function (min) {
+      const h = Math.floor(min / 60);
+      contagemHoras[h] = (contagemHoras[h] || 0) + 1;
+    });
+    let horaModa = Math.floor(minutosArr[0] / 60);
+    let maxContagem = 0;
+    minutosArr.forEach(function (min) {
+      const h = Math.floor(min / 60);
+      if (contagemHoras[h] > maxContagem) {
+        maxContagem = contagemHoras[h];
+        horaModa = h;
+      }
+    });
+    const mediaMinutos = minutosArr.reduce(function (a, b) { return a + (b % 60); }, 0) / minutosArr.length;
+    const minutoArredondado = Math.ceil(mediaMinutos / 5) * 5;
+    if (minutoArredondado >= 60) return (horaModa + 1) * 60;
+    return horaModa * 60 + minutoArredondado;
+  }
+
+  /**
    * Normaliza nome de local pra comparação (remove acento, caixa alta,
    * espaços colapsados) — o nome do local vem de duas fontes que nem
    * sempre concordam: o texto extraído do PDF ("RODOVIARIA DE GOIANIA -
@@ -619,10 +656,15 @@ var HistoricoHorariosStore = (() => {
         .filter(Boolean)
         .map(_horaParaMinutos)
         .filter(function (v) { return v != null; });
-      const sugestaoAutoMin = minutos.length
-        ? Math.round(minutos.reduce(function (a, b) { return a + b; }, 0) / minutos.length)
-        : null;
+      let sugestaoAutoMin = _sugestaoModaHoraMediaMin(minutos);
       const programadoMin = _horaParaMinutos(info.programado);
+      // Trava a sugestão automática em ±2h do horário comercial — o setor
+      // não aprova pedido de mudança maior que isso, então limita aqui em
+      // vez de sugerir um valor inviável na prática.
+      if (sugestaoAutoMin != null && programadoMin != null) {
+        if (sugestaoAutoMin - programadoMin > LIMITE_SUGESTAO_DESVIO_MIN) sugestaoAutoMin = programadoMin + LIMITE_SUGESTAO_DESVIO_MIN;
+        else if (programadoMin - sugestaoAutoMin > LIMITE_SUGESTAO_DESVIO_MIN) sugestaoAutoMin = programadoMin - LIMITE_SUGESTAO_DESVIO_MIN;
+      }
 
       // Sugestão manual (se o usuário editou na grade) prevalece sobre a
       // calculada — inclusive pro cálculo de desvio/cor/filtro de relevância.
