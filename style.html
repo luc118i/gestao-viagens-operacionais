@@ -1889,7 +1889,11 @@
   .report-screen {
     position: fixed;
     inset: 0;
-    z-index: 1000;
+    /* Tem que ficar acima do .app-header (z-index:1100, sticky) — senão o
+       navbar principal (com "+ Nova Análise"/"Análise em Massa") continua
+       visível e clicável por cima dessa tela "cheia", e o próprio cabeçalho
+       da tela em massa fica espremido logo abaixo dele. */
+    z-index: 1200;
     background: var(--bg);
     display: flex;
     flex-direction: column;
@@ -2057,7 +2061,7 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    z-index: 900;
+    z-index: 1300;
   }
 
   .toast {
@@ -2421,6 +2425,13 @@
 
   /* Oculta o select de esquema no header até ter uma análise */
   .app--upload-only .header-center { display: none !important; }
+
+  /* "Análise em Massa" só faz sentido na tela inicial (antes de carregar
+     uma viagem) — com uma análise individual aberta, o header já fica
+     cheio de botões (Relatório/Motorista/Nova Análise/Esquemas + badges)
+     e esse botão só sufoca a barra sem ter função ali. */
+  #btnAnaliseMassa { display: none; }
+  .app--upload-only #btnAnaliseMassa { display: inline-flex; }
 
   /* A seção de config ocupa todo o espaço disponível e centraliza */
   .app--upload-only .section-config {

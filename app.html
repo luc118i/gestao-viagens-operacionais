@@ -74,6 +74,9 @@
       _initModalMotorista();
       _initModalRelatorio();
 
+      // Análise em Massa (importação de PDFs)
+      if (typeof MassaModule !== 'undefined') MassaModule.init();
+
       // Botão "Gerar Relatório" inline (Coluna 3)
       var btnGerarInline = document.getElementById('btnGerarRelatorioInline');
       if (btnGerarInline) {
@@ -3917,6 +3920,30 @@
       };
     }
 
+    /**
+     * Retorna a linha selecionada no combobox do cabeçalho, independente de
+     * já existir uma viagem processada na sessão (ao contrário de
+     * getDiagnosticoPayload, que exige _analysis/_enrichedTrip). Usado pela
+     * Análise em Massa, que só precisa saber qual linha está selecionada.
+     * @returns {{idEsquema:string, nomeLinha:string}}
+     */
+    function getEsquemaSelecionado() {
+      var idEsquema = (document.getElementById('selectEsquema') || {}).value || '';
+      var esqObj = _esquemas.find(function (e) { return String(e.id_esquema) === String(idEsquema); });
+      return { idEsquema: idEsquema, nomeLinha: esqObj ? esqObj.nome_linha : '' };
+    }
+
+    /**
+     * Lista de esquemas carregados (id/nome/horário/sentido), para telas
+     * que precisam do próprio seletor de linha — ex: Análise em Massa, que
+     * fica disponível mesmo no modo "upload-only" (combobox do cabeçalho
+     * escondido antes de processar uma viagem).
+     * @returns {Array}
+     */
+    function getEsquemas() {
+      return _esquemas;
+    }
+
     return {
       init,
       getTrip,
@@ -3925,6 +3952,8 @@
       getComparacao,
       getVinculos,
       getDiagnosticoPayload,
+      getEsquemaSelecionado,
+      getEsquemas,
       _removerVinculo,
       _confirmarCard,
       _toggleEditCard,

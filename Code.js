@@ -2384,3 +2384,377 @@ function explicarDivergenciaComercial(payload) {
     return { ok: false, erro: String(e.message || e) };
   }
 }
+
+// ============================================================
+//  ANÁLISE EM MASSA (importação de PDFs "Análise de Viagem")
+// ============================================================
+
+/**
+ * Retorna os nomes de arquivo PDF já importados para o front-end filtrar
+ * duplicados antes de tentar salvar (dedupe por nome de arquivo).
+ * @returns {{ok:boolean, arquivos?:Object, erro?:string}}
+ */
+function getArquivosHistoricoJaImportados() {
+  try {
+    // União das duas abas: um CSV sem trechos válidos (viagem com muitos
+    // pontos intermediários sem distância calculável) não grava nada em
+    // HISTORICO_TRECHOS, então só apareceria em HISTORICO_HORARIOS — olhar
+    // só uma das duas deixaria esse arquivo passar como "novo" de novo.
+    var arquivos = HistoricoTrechosStore.arquivosJaImportados();
+    var doHorarios = HistoricoHorariosStore.arquivosJaImportados();
+    for (var nome in doHorarios) arquivos[nome] = true;
+    return { ok: true, arquivos: arquivos };
+  } catch (e) {
+    Logger.log('[getArquivosHistoricoJaImportados] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Salva os trechos e o desvio de horário (real x programado) extraídos (no
+ * navegador) de um CSV de telemetria. Recusa duplicata pelo nome do arquivo
+ * — a menos que `substituir` seja true, caso em que apaga os registros
+ * antigos desse arquivo (em ambas as abas) antes de gravar os novos. Serve
+ * pro caso de reimportar um CSV que veio poluído/incompleto da primeira vez.
+ *
+ * @param {string} nomeArquivo
+ * @param {{idEsquema:string, nomeLinha:string, veiculo:string, dataViagem:string, horarioViagem:string}} meta
+ * @param {Array<Object>} trechos
+ * @param {Array<Object>} [horarios]
+ * @param {boolean} [substituir]
+ * @returns {{ok:boolean, motivo?:string, linhasGravadas?:number, erro?:string}}
+ */
+function salvarHistoricoTrechos(nomeArquivo, meta, trechos, horarios, substituir) {
+  // Trava: o startRow de cada gravação vem de sheet.getLastRow()+1, sem
+  // proteção própria contra concorrência — se dois arquivos forem salvos ao
+  // mesmo tempo (ex: várias abas abertas, ou uma futura mudança no
+  // cliente voltar a disparar em paralelo), as duas chamadas podem ler o
+  // mesmo getLastRow() antes de qualquer uma escrever, e a que escrever
+  // por último sobrescreve o intervalo de linhas da outra — dados de um
+  // arquivo inteiro somem silenciosamente. O client já salva um arquivo de
+  // cada vez, mas a trava aqui é a garantia de verdade — e também protege
+  // o par exclusão+gravação do "substituir" como uma operação só.
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    return { ok: false, erro: 'Sistema ocupado salvando outro arquivo — tente novamente em instantes.' };
+  }
+  try {
+    if (substituir) {
+      HistoricoTrechosStore.excluirPorArquivo(nomeArquivo);
+      HistoricoHorariosStore.excluirPorArquivo(nomeArquivo);
+    }
+
+    var resTrechos = HistoricoTrechosStore.salvarRegistros(nomeArquivo, meta, trechos);
+
+    // Salva horários independente do resultado de trechos — são dados
+    // separados (o "Histórico da linha" só depende deste aqui) e uma
+    // viagem sem trechos válidos (muitos pontos intermediários sem
+    // distância calculável) não deveria bloquear os horários, que podem
+    // estar perfeitos.
+    var horariosSalvos = 0;
+    if (horarios && horarios.length) {
+      var resHorarios = HistoricoHorariosStore.salvarRegistros(nomeArquivo, meta, horarios);
+      if (resHorarios && resHorarios.ok) horariosSalvos = resHorarios.linhasGravadas || 0;
+    }
+
+    if (!resTrechos.ok) {
+      // Trechos falharam (arquivo duplicado, por ex.) — só é falha de
+      // verdade se os horários também não foram salvos.
+      if (horariosSalvos > 0) return { ok: true, linhasGravadas: horariosSalvos };
+      return resTrechos;
+    }
+    return { ok: true, linhasGravadas: (resTrechos.linhasGravadas || 0) + horariosSalvos };
+  } catch (e) {
+    Logger.log('[salvarHistoricoTrechos] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+/**
+ * Processa um CSV de telemetria bruto (mesmo formato aceito pelo fluxo de
+ * viagem única em app.html) e monta os arrays `trechos`/`paradasCriticas`/
+ * `naoVisitados`/`horarios` no formato que salvarHistoricoTrechos espera —
+ * pra Análise em Massa.
+ *
+ * Reaproveita o mesmo motor de análise da tela principal (AnalysisService
+ * → ComparisonService → DiagnosticoService.buildContext, camada 100%
+ * determinística, sem IA) em vez de reconstruir os dados por regex sobre
+ * texto de PDF renderizado — que já causou vários bugs (encoding,
+ * formatos de duração tipo "1h25", artefatos de quebra de página). O CSV
+ * é o dado de origem do próprio PDF, então isso é estritamente mais
+ * confiável.
+ *
+ * @param {string} csvText   — conteúdo do CSV já decodificado (ISO-8859-1) no cliente
+ * @param {string} idEsquema
+ * @returns {{ok:boolean, meta?:Object, trechos?:Array, paradasCriticas?:Array, naoVisitados?:Array, horarios?:Array, erro?:string}}
+ */
+function analisarCsvParaHistorico(csvText, idEsquema) {
+  try {
+    if (!idEsquema) return { ok: false, erro: 'Selecione uma linha (esquema) antes de processar.' };
+
+    var enrichedTrip = AnalysisService.processReport(csvText);
+    var an = AnalysisService.analyzeTrip(enrichedTrip);
+    var esquemaPontos = EsquemasService.getPontosDoEsquema(idEsquema) || [];
+
+    var ctx = DiagnosticoService.buildContext({
+      enrichedTrip: enrichedTrip,
+      esquemaPontos: esquemaPontos,
+      segments: an.segments,
+      summary: an.summary,
+      idEsquema: idEsquema
+    });
+
+    // DIAGNÓSTICO TEMPORÁRIO — remover depois de identificar por que
+    // "horarios" às vezes vem vazio mesmo com esquema/pontos cadastrados.
+    Logger.log('[analisarCsvParaHistorico] idEsquema=' + idEsquema +
+      ' | esquemaPontos=' + esquemaPontos.length +
+      ' | enrichedTrip=' + enrichedTrip.length +
+      ' | timeline=' + (ctx.timeline || []).length);
+    esquemaPontos.forEach(function (ep) {
+      Logger.log('  esquemaPonto: id_ponto=' + ep.id_ponto + ' nome_ponto=' + ep.nome_ponto + ' horario_comercial=' + ep.horario_comercial);
+    });
+    enrichedTrip.forEach(function (pt) {
+      if (pt.matched) {
+        Logger.log('  enrichedTrip ponto matched: codigo=' + pt.codigo + ' ponto=' + pt.ponto + ' entrada=' + pt.entrada);
+      }
+    });
+
+    // Rótulo em português, mesma convenção usada quando isso vinha do
+    // texto do PDF ("Sem alteração" / "Perdeu tempo" / "Recuperou tempo").
+    var TENDENCIA_LABEL = { estavel: 'Sem alteração', perdeu: 'Perdeu tempo', recuperou: 'Recuperou tempo' };
+    var horarios = (ctx.timeline || []).map(function (t) {
+      return {
+        local: t.local,
+        horarioReal: t.horarioReal,
+        horarioProgramado: t.horarioComercial,
+        variacaoMin: t.atrasoAcumMin,
+        tendencia: TENDENCIA_LABEL[t.tendencia] || t.tendencia
+      };
+    });
+
+    // ctx.trechosCriticos.trecho vem como "A → B" (DiagnosticoService._buildTrechos) —
+    // separa de nomes de local não devem conter essa seta.
+    var trechos = (ctx.trechosCriticos || []).map(function (t) {
+      var partes = String(t.trecho || '').split(' → ');
+      return {
+        trechoDe: partes[0] || '',
+        trechoPara: partes.length > 1 ? partes.slice(1).join(' → ') : '',
+        velMedia: t.velMedia,
+        velIdeal: t.velIdeal,
+        tempoEsperadoMin: t.tempoEsperadoMin,
+        tempoRealizadoMin: t.tempoRealizadoMin,
+        impactoMin: t.tempoPerdidoMin,
+        criticidade: t.criticidade
+      };
+    });
+
+    var paradasCriticas = (ctx.paradasCriticas || []).map(function (p) {
+      return {
+        local: p.local,
+        previstoMin: p.previstoMin,
+        realizadoMin: p.realizadoMin,
+        excessoMin: p.excessoMin,
+        criticidade: p.criticidade
+      };
+    });
+
+    var naoVisitados = (ctx.pontosIgnorados || []).map(function (p) { return p.local; });
+
+    var meta = {
+      veiculo: an.summary.veiculo || '',
+      dataViagem: an.summary.dataViagem || '',
+      horarioViagem: '' // não vem do CSV — preenchido no client com o horário do esquema
+    };
+
+    return {
+      ok: true,
+      meta: meta,
+      trechos: trechos,
+      paradasCriticas: paradasCriticas,
+      naoVisitados: naoVisitados,
+      horarios: horarios
+    };
+  } catch (e) {
+    Logger.log('[analisarCsvParaHistorico] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Retorna a tabela dinâmica (pivot) de horários real × programado por
+ * local — uma coluna por viagem importada — só com locais de desvio
+ * considerável, para a view "Histórico da linha" da Análise em Massa.
+ *
+ * @param {string} idEsquema
+ * @param {string} [dataInicio]  "YYYY-MM-DD" — filtra viagens a partir dessa data
+ * @param {string} [dataFim]     "YYYY-MM-DD" — filtra viagens até essa data
+ * @returns {{ok:boolean, pivotHorarios?:{locais:Array,datas:Array}, erro?:string}}
+ */
+function getHistoricoAgregadoLinha(idEsquema, dataInicio, dataFim) {
+  try {
+    return {
+      ok: true,
+      pivotHorarios: HistoricoHorariosStore.getPivot(idEsquema, dataInicio, dataFim)
+    };
+  } catch (e) {
+    Logger.log('[getHistoricoAgregadoLinha] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Verifica se o esquema tem pontos cadastrados e se todos têm Horário
+ * Comercial preenchido — usado pra avisar o usuário na Análise em Massa
+ * assim que ele seleciona a linha, ANTES de subir qualquer CSV. Sem
+ * Horário Comercial, um ponto realmente visitado some silenciosamente da
+ * grade "Histórico da linha" (não aparece "não visitado", só não entra
+ * de jeito nenhum na comparação real × programado).
+ *
+ * @param {string} idEsquema
+ * @returns {{ok:boolean, totalPontos?:number, pontosSemHorario?:Array<string>, erro?:string}}
+ */
+function verificarEsquemaParaHistorico(idEsquema) {
+  try {
+    if (!idEsquema) return { ok: false, erro: 'idEsquema ausente.' };
+    var pontos = EsquemasService.getPontosDoEsquema(idEsquema) || [];
+    var pontosSemHorario = pontos
+      .filter(function (p) { return !String(p.horario_comercial || '').trim(); })
+      .map(function (p) { return String(p.nome_ponto || p.id_ponto || '').trim(); })
+      .filter(function (nome) { return !!nome; });
+    return { ok: true, totalPontos: pontos.length, pontosSemHorario: pontosSemHorario };
+  } catch (e) {
+    Logger.log('[verificarEsquemaParaHistorico] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Gera o PDF "Solicitação de Mudança" — a grade "Histórico da linha"
+ * (real × programado, agregada de várias viagens importadas) formatada
+ * como relatório para embasar pedido de ajuste do horário comercial.
+ * Chama o endpoint standalone /reports/solicitacao-mudanca da API de
+ * relatórios (renderização direta, não passa pelo fluxo de ocorrência).
+ *
+ * @param {string} idEsquema
+ * @param {string} [dataInicio]  "YYYY-MM-DD" — mesmo filtro de período aplicado na tela
+ * @param {string} [dataFim]     "YYYY-MM-DD"
+ * @returns {{ok:boolean, url?:string, erro?:string}}
+ */
+function gerarPdfSolicitacaoMudanca(idEsquema, dataInicio, dataFim) {
+  try {
+    if (!idEsquema) return { ok: false, erro: 'Selecione uma linha antes de gerar o PDF.' };
+
+    var props = PropertiesService.getScriptProperties();
+    var baseUrl = (props.getProperty('REPORT_API_URL') || '').replace(/\/$/, '');
+    if (!baseUrl) return { ok: false, erro: 'REPORT_API_URL não configurada nas Script Properties.' };
+
+    var pivot = HistoricoHorariosStore.getPivot(idEsquema, dataInicio, dataFim);
+    if (!pivot.locais.length) {
+      return { ok: false, erro: 'Nenhum local com desvio considerável para gerar o relatório.' };
+    }
+
+    var esquemas = EsquemasService.getEsquemas() || [];
+    var esq = esquemas.filter(function (e) { return String(e.id_esquema) === String(idEsquema); })[0] || {};
+
+    var codigoViagem = [esq.cod_linha, esq.sentido ? '(' + esq.sentido + ')' : '']
+      .filter(function (s) { return s; })
+      .join(' ');
+
+    var payload = {
+      itinerario: esq.nome_linha || idEsquema,
+      codigoViagem: codigoViagem || null,
+      horarioViagem: esq.horario || '',
+      datas: pivot.datas,
+      locais: pivot.locais.map(function (loc) {
+        return {
+          local: loc.local,
+          tempoDeslocamento: loc.tempoDeslocamento || null,
+          programado: loc.programado || null,
+          porData: loc.porData || {},
+          sugestao: loc.sugestao || null,
+          diffMin: loc.diffMin != null ? loc.diffMin : null
+        };
+      })
+    };
+
+    var resp = UrlFetchApp.fetch(baseUrl + '/reports/solicitacao-mudanca', {
+      method: 'post',
+      contentType: 'application/json',
+      payload: JSON.stringify(payload),
+      muteHttpExceptions: true
+    });
+
+    var code = resp.getResponseCode();
+    var body = resp.getContentText();
+    if (code < 200 || code > 299) {
+      return { ok: false, erro: 'API retornou HTTP ' + code + ': ' + body };
+    }
+
+    var parsed = {};
+    try { parsed = JSON.parse(body); } catch (e) { parsed = {}; }
+    if (!parsed.url) return { ok: false, erro: 'API não retornou a URL do PDF.' };
+
+    return { ok: true, url: parsed.url };
+  } catch (e) {
+    Logger.log('[gerarPdfSolicitacaoMudanca] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Salva a sugestão de horário editada manualmente pelo usuário na grade
+ * "Histórico da linha" — sobrescreve o cálculo automático até reimportar
+ * os PDFs ou remover o local (excluirLocalHistoricoHorarios).
+ *
+ * @param {string} idEsquema
+ * @param {string} local
+ * @param {string} sugestao  "HH:MM"
+ * @returns {{ok:boolean, motivo?:string, erro?:string}}
+ */
+function salvarSugestaoManualHistorico(idEsquema, local, sugestao) {
+  try {
+    return HistoricoHorariosStore.salvarSugestaoManual(idEsquema, local, sugestao);
+  } catch (e) {
+    Logger.log('[salvarSugestaoManualHistorico] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Remove definitivamente um local da grade "Histórico da linha" — apaga
+ * os registros de horário desse local nessa linha. Ação destrutiva: só
+ * volta reimportando os PDFs.
+ *
+ * @param {string} idEsquema
+ * @param {string} local
+ * @returns {{ok:boolean, linhasRemovidas?:number, erro?:string}}
+ */
+function excluirLocalHistoricoHorarios(idEsquema, local) {
+  try {
+    return HistoricoHorariosStore.excluirLocal(idEsquema, local);
+  } catch (e) {
+    Logger.log('[excluirLocalHistoricoHorarios] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Remove definitivamente uma coluna de data (uma viagem importada
+ * inteira, todos os locais) da grade "Histórico da linha".
+ *
+ * @param {string} idEsquema
+ * @param {string} data  "DD/MM/YYYY"
+ * @returns {{ok:boolean, linhasRemovidas?:number, erro?:string}}
+ */
+function excluirDataHistoricoHorarios(idEsquema, data) {
+  try {
+    return HistoricoHorariosStore.excluirPorData(idEsquema, data);
+  } catch (e) {
+    Logger.log('[excluirDataHistoricoHorarios] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}

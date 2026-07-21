@@ -276,6 +276,8 @@ var AnalysisService = (() => {
     }
 
     // --- Alertas por ponto individual ---
+    let totalExcessoMin = 0;
+    let qtdParadasExcesso = 0;
     enrichedTrip.forEach((pt, idx) => {
       // Local não identificado
       if (!pt.matched) {
@@ -314,6 +316,8 @@ var AnalysisService = (() => {
 
         if (paradaMin > limiteMin + TOLERANCIA_MIN) {
           const excedente = Math.round(paradaMin - limiteMin);
+          totalExcessoMin += excedente;
+          qtdParadasExcesso += 1;
           alerts.push(_classificarPtAlerta({
             tipo: 'PARADA_LONGA',
             descricao: `Parada de ${TimeUtils.formatDuration(pt.parada_s)} em "${pt.ponto}" (limite: ${limiteMin}min)`,
@@ -362,6 +366,8 @@ var AnalysisService = (() => {
       tempoTotalMin:   Math.round(tempoTotal),
       velocidadeMedia: veloMedia,
       maiorParada:     maiorParada,
+      totalExcessoMin: totalExcessoMin,
+      qtdParadasExcesso: qtdParadasExcesso,
       totalAlertas:    alerts.length,
       alertasCriticos: alerts.filter(a => a.severidade === 'critico' || a.nivel === 'critico').length,
       alertasJustificados: alerts.filter(a => a.autoJustificado || a.severidade === 'justificado').length,
@@ -684,8 +690,21 @@ var AnalysisService = (() => {
       delete pt._compactado;
     });
 
-    // 3) Remove paradas muito curtas (micro-manobras / cercas curtas).
-    const cleaned = merged.filter(pt => {
+    // 3) Remove paradas muito curtas (micro-manobras / cercas curtas) —
+    //    exceto o ÚLTIMO ponto da viagem (diz a que horas ela realmente
+    //    terminou) e o último ponto NÃO-garagem (o destino comercial final
+    //    do itinerário, que costuma ser seguido de uma parada na garagem).
+    //    Sem essa exceção, um veículo que só passa rápido pelo destino
+    //    final antes de seguir pra garagem faz esse ponto sumir da viagem
+    //    inteira e aparecer como "não visitado" — mesmo tendo sido
+    //    realizado.
+    const ultimoIdx = merged.length - 1;
+    let ultimoNaoGaragemIdx = -1;
+    for (let i = merged.length - 1; i >= 0; i--) {
+      if (!merged[i].garagem) { ultimoNaoGaragemIdx = i; break; }
+    }
+    const cleaned = merged.filter((pt, idx) => {
+      if (idx === ultimoIdx || idx === ultimoNaoGaragemIdx) return true;
       if (!pt.parada_s || pt.parada_s <= 0) return true;
       return pt.parada_s >= LIMITE_PARADA_MINIMA_S;
     });

@@ -1,0 +1,1635 @@
+<!-- ============================================================
+     Tela: Análise em Massa (importação de CSVs de telemetria)
+     Sobe vários CSVs brutos (mesmo formato do fluxo de viagem única) de
+     uma linha, roda o mesmo motor de análise da tela principal
+     (AnalysisService/ComparisonService/DiagnosticoService) no servidor e
+     persiste trechos/horários em HISTORICO_TRECHOS/HISTORICO_HORARIOS
+     para comparação ao longo do tempo.
+     ============================================================ -->
+<div class="report-screen" id="modalMassa">
+  <div class="report-screen-panel">
+    <div class="report-screen-header">
+      <button class="rs-back" id="btnCloseMassaModal" title="Voltar">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="18" height="18"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+      </button>
+      <div>
+        <div class="report-screen-title">Análise em Massa</div>
+        <div class="report-screen-sub" id="massaSubtitle">Suba vários CSVs de telemetria da linha selecionada para achar locais com desvio sistemático do horário comercial</div>
+      </div>
+    </div>
+
+    <div class="report-screen-body">
+      <div class="report-screen-body-inner">
+
+        <!-- Seletor de linha — próprio do modal, já que o combobox do
+             cabeçalho fica escondido antes de processar uma viagem (modo
+             "upload-only"). Vale tanto para Importar quanto Histórico.
+             Mesmo padrão visual/comportamento do combobox de linha do
+             cabeçalho (esquemaSearch/esquemaDropdown). -->
+        <div class="form-group" style="max-width:420px;">
+          <label class="form-label">Linha (esquema)</label>
+          <div class="esquema-combobox" id="massaEsquemaCombobox">
+            <div class="esquema-combobox-input-wrap" id="massaEsquemaInputWrap">
+              <input
+                type="text"
+                id="massaEsquemaSearch"
+                class="esquema-search-input"
+                placeholder="Pesquisar linha, código ou horário…"
+                autocomplete="off"
+              />
+              <button type="button" id="massaEsquemaLimpar" class="esquema-combobox-clear" title="Limpar linha selecionada" style="display:none;">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+              <span class="esquema-combobox-chevron"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="6 9 12 15 18 9"/></svg></span>
+            </div>
+            <div class="esquema-dropdown" id="massaEsquemaDropdown"></div>
+          </div>
+          <input type="hidden" id="massaEsquemaValue" value="" />
+        </div>
+
+        <!-- Sub-abas: Importar / Histórico da linha -->
+        <div style="display:flex; gap:8px; margin-bottom:18px; border-bottom:1px solid var(--border);">
+          <button type="button" class="massa-subtab active" id="massaTabImportar" data-tab="importar">Importar CSVs</button>
+          <button type="button" class="massa-subtab" id="massaTabHistorico" data-tab="historico">Histórico da linha</button>
+        </div>
+
+        <!-- ===== Sub-vista: Importar ===== -->
+        <div id="massaViewImportar">
+          <label for="massaFileInput" class="upload-zone" id="massaUploadZone" style="cursor:pointer; display:flex;">
+            <span class="upload-icon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="28" height="28"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
+            <div class="upload-text">
+              <strong>Clique ou arraste os CSVs</strong>
+              <span>Vários CSVs de telemetria (.csv) da mesma linha — selecione a linha (esquema) acima antes</span>
+            </div>
+          </label>
+          <input type="file" id="massaFileInput" accept=".csv,.txt,text/csv,text/plain" multiple style="display:none;" />
+
+          <div id="massaPreviewEmpty" style="margin-top:16px; font-size:12px; color:var(--text3); text-align:center;">
+            Nenhum arquivo processado ainda.
+          </div>
+
+          <div id="massaPreviewWrap" style="display:none; margin-top:18px;">
+            <table class="analysis-table" id="massaPreviewTable">
+              <thead>
+                <tr>
+                  <th>Arquivo</th>
+                  <th>Veículo</th>
+                  <th>Data</th>
+                  <th>Trechos extraídos</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody id="massaPreviewBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ===== Sub-vista: Histórico da linha ===== -->
+        <div id="massaViewHistorico" style="display:none;">
+          <!-- Filtro de período — fora do massaHorariosWrap de propósito:
+               precisa continuar visível mesmo quando o filtro não encontra
+               nenhum resultado, senão o usuário fica sem como ajustar o
+               período de novo. -->
+          <div id="massaHistoricoFiltro" class="massa-filtro-periodo" style="display:none;">
+            <span class="massa-filtro-label">Período</span>
+            <div class="massa-filtro-campo">
+              <span class="massa-filtro-campo-label">De</span>
+              <div class="massa-date-wrap">
+                <input type="text" id="massaFiltroDataInicio" class="massa-date-input" placeholder="dd/mm/aaaa" readonly
+                  title="Clique pra abrir o calendário — atalhos: H = hoje · S = 7 dias atrás" />
+                <svg class="massa-date-icon" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              </div>
+            </div>
+            <div class="massa-filtro-campo">
+              <span class="massa-filtro-campo-label">Até</span>
+              <div class="massa-date-wrap">
+                <input type="text" id="massaFiltroDataFim" class="massa-date-input" placeholder="dd/mm/aaaa" readonly
+                  title="Clique pra abrir o calendário — atalhos: H = hoje · S = 7 dias atrás" />
+                <svg class="massa-date-icon" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+              </div>
+            </div>
+            <button type="button" class="btn btn-ghost massa-filtro-limpar" id="massaBtnLimparFiltroData">Limpar</button>
+            <span class="massa-filtro-atalho-hint"><kbd>H</kbd> hoje<kbd>S</kbd> −7 dias</span>
+          </div>
+
+          <div id="massaHistoricoEmpty" style="font-size:12px; color:var(--text3); text-align:center; padding:24px 0;">
+            Nenhum histórico importado ainda para esta linha.
+          </div>
+
+          <div id="massaHorariosWrap" style="display:none;">
+            <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:4px;">
+              <div>
+                <div style="font-size:13px; font-weight:700; color:var(--text);">Locais com Maior Desvio de Horário</div>
+                <div style="font-size:11px; color:var(--text3); margin-top:2px;">Real × programado, uma coluna por viagem importada em ordem cronológica. Mostra só locais com desvio considerável (≥1h); ordenados pela sequência do trajeto.</div>
+              </div>
+              <div style="display:flex; gap:8px; flex-shrink:0;">
+                <button type="button" class="btn btn-primary" id="massaBtnSalvarSugestoes" style="white-space:nowrap; display:none;">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                  Salvar Sugestões
+                </button>
+                <button type="button" class="btn btn-ghost" id="massaBtnGerarPdf" style="white-space:nowrap;">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                  Gerar PDF
+                </button>
+              </div>
+            </div>
+            <div id="massaConfirmarRemoverData" class="massa-confirmar-banner" style="display:none;"></div>
+            <div style="overflow-x:auto; margin-top:8px;">
+              <table class="analysis-table" id="massaHorariosTable"></table>
+            </div>
+          </div>
+        </div>
+
+      </div><!-- /report-screen-body-inner -->
+    </div><!-- /report-screen-body -->
+
+    <div class="report-screen-footer">
+      <button class="btn btn-ghost" id="massaBtnCancelar">Fechar</button>
+      <button class="btn btn-primary" id="massaBtnSalvar" disabled>Salvar e Analisar</button>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* A grade "Histórico da linha" tem várias colunas (uma por data
+     importada) + Ações — o max-width:760px do .report-screen-body-inner
+     (pensado pra formulário centralizado do modal de Relatório) deixa essa
+     tabela sufocada, forçando scroll horizontal cedo demais. Alarga só
+     esse modal. */
+  #modalMassa .report-screen-body-inner { max-width: 1180px; }
+
+  /* Botão de limpar (×) no combobox de linha — sem ele, trocar de linha
+     exigia apagar manualmente o texto já selecionado (rótulo tipo "150 —
+     BRASILIA X SAO PAULO · 12:30 · Volta"), o que não era nada óbvio. */
+  #massaEsquemaInputWrap { position: relative; }
+  .esquema-combobox-clear {
+    position: absolute; right: 26px; top: 50%; transform: translateY(-50%);
+    display: flex; align-items: center; justify-content: center;
+    width: 20px; height: 20px; padding: 0; border: none; border-radius: 50%;
+    background: none; color: var(--text3); cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+  }
+  .esquema-combobox-clear:hover { background: var(--bg); color: var(--laranja); }
+
+  .massa-filtro-periodo {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    margin-bottom: 14px; padding: 10px 14px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .massa-filtro-label {
+    font-weight: 700; color: var(--text3); text-transform: uppercase;
+    font-size: 10.5px; letter-spacing: 0.05em;
+  }
+  .massa-filtro-campo { display: flex; align-items: center; gap: 7px; }
+  .massa-filtro-campo-label { color: var(--text3); font-weight: 600; font-size: 12px; }
+  .massa-date-wrap { position: relative; display: inline-flex; }
+  .massa-date-input {
+    padding: 5px 26px 5px 9px; border: 1.5px solid var(--border); border-radius: 7px;
+    font-size: 12.5px; color: var(--text); background: var(--bg); width: 100px;
+    cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s;
+  }
+  .massa-date-input:hover { border-color: var(--laranja); }
+  .massa-date-input:focus {
+    outline: none; border-color: var(--laranja);
+    box-shadow: 0 0 0 3px rgba(244, 121, 32, 0.15);
+  }
+  .massa-date-icon {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    color: var(--text3); pointer-events: none;
+  }
+  .massa-filtro-limpar { padding: 5px 12px; font-size: 12px; }
+  .massa-filtro-atalho-hint {
+    margin-left: auto; display: flex; align-items: center; gap: 6px;
+    color: var(--text3); font-size: 11px; white-space: nowrap;
+  }
+  .massa-filtro-atalho-hint kbd {
+    background: var(--bg); border: 1px solid var(--border); border-bottom-width: 2px;
+    border-radius: 4px; padding: 1px 6px; margin-right: 3px;
+    font-family: inherit; font-size: 10.5px; font-weight: 700; color: var(--text2);
+  }
+
+  /* Calendário próprio pros campos De/Até — o <input type="date"> nativo
+     abre o seletor do sistema operacional/navegador, que não é estilizável
+     por CSS de jeito nenhum (fica fora do alcance do author stylesheet). */
+  .massa-datepicker {
+    position: absolute; z-index: 1400; width: 250px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.18); padding: 12px;
+  }
+  .massa-dp-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .massa-dp-titulo { font-weight: 700; color: var(--text); font-size: 13px; text-transform: capitalize; }
+  .massa-dp-nav {
+    border: none; background: none; cursor: pointer; color: var(--text3); font-size: 15px;
+    width: 26px; height: 26px; border-radius: 6px; display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .massa-dp-nav:hover { background: var(--bg); color: var(--laranja); }
+  .massa-dp-semana {
+    display: grid; grid-template-columns: repeat(7, 1fr); text-align: center;
+    color: var(--text3); font-size: 10px; font-weight: 700; margin-bottom: 4px;
+  }
+  .massa-dp-dias { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+  .massa-dp-dia {
+    border: none; background: none; cursor: pointer; padding: 6px 0; border-radius: 7px;
+    color: var(--text); font-size: 12px; transition: background 0.15s, color 0.15s;
+  }
+  .massa-dp-dia:hover { background: rgba(244, 121, 32, 0.14); }
+  .massa-dp-dia.fora { color: var(--text3); opacity: 0.45; }
+  .massa-dp-dia.hoje { color: var(--laranja); font-weight: 700; }
+  .massa-dp-dia.selecionado { background: var(--laranja); color: #fff; font-weight: 700; }
+  .massa-dp-dia.selecionado:hover { background: var(--laranja); }
+  .massa-dp-footer {
+    display: flex; justify-content: space-between; margin-top: 8px; padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .massa-dp-link {
+    border: none; background: none; cursor: pointer; color: var(--laranja);
+    font-size: 12px; font-weight: 600; padding: 2px 4px;
+  }
+  .massa-dp-link:hover { text-decoration: underline; }
+
+  .massa-subtab {
+    padding: 9px 16px; border: none; background: none; cursor: pointer;
+    font-size: 13px; font-weight: 600; color: var(--text3);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+  }
+  .massa-subtab.active { color: var(--laranja); border-bottom-color: var(--laranja); }
+  .massa-status-ok { color: #22a96a; font-weight: 600; }
+  .massa-status-dup { color: #e8a020; font-weight: 600; }
+  .massa-status-processando { color: var(--text3); font-weight: 600; display: inline-flex; align-items: center; gap: 6px; }
+  .massa-spinner {
+    width: 12px; height: 12px; border-radius: 50%;
+    border: 2px solid var(--border); border-top-color: var(--laranja);
+    animation: massa-spin 0.7s linear infinite;
+  }
+  @keyframes massa-spin { to { transform: rotate(360deg); } }
+  .massa-upload-disabled { opacity: 0.5; pointer-events: none; }
+  .massa-status-erro { color: #d94040; font-weight: 600; }
+  .massa-status-substituir { color: var(--laranja); font-weight: 600; }
+  .massa-link-btn {
+    border: none; background: none; padding: 0; margin-left: 6px;
+    color: var(--laranja); font-size: 11px; font-weight: 700;
+    text-decoration: underline; cursor: pointer;
+  }
+  .massa-link-btn:hover { color: #c25a00; }
+  /* Sobrescreve o top:108px de .analysis-table thead (pensado pra tela
+     principal, compensando a barra superior do app) — aqui a tabela rola
+     dentro do corpo do modal, não da página, então o header devia grudar
+     no topo do próprio contâiner de scroll, não flutuar no meio das linhas. */
+  #massaHorariosTable thead { top: 0; }
+  #massaHorariosTable td, #massaHorariosTable th {
+    white-space: nowrap;
+    border-right: 1px solid var(--border);
+  }
+  #massaHorariosTable td:last-child, #massaHorariosTable th:last-child { border-right: none; }
+  /* Coluna de Ações fixa na borda direita — com várias colunas de data o
+     scroll horizontal empurrava o botão de remover pra fora da vista. */
+  #massaHorariosTable td:last-child, #massaHorariosTable th:last-child {
+    position: sticky; right: 0; background: var(--surface);
+    box-shadow: -6px 0 6px -6px rgba(0,0,0,0.15);
+  }
+  #massaHorariosTable tr:hover td:last-child { background: #f5f7ff; }
+
+  #massaHorariosTable td:first-child, #massaHorariosTable th:first-child {
+    white-space: normal; max-width: 220px;
+  }
+  /* "Tempo Desl." tem tooltip explicando de qual ponto veio o trecho —
+     sublinhado pontilhado dá a dica de que há mais informação no hover. */
+  #massaHorariosTable td[title] { cursor: help; border-bottom: 1px dotted var(--text3); }
+  #massaHorariosTable .massa-sugestao-input {
+    width: 60px; border: none; border-bottom: 1px solid var(--border);
+    background: transparent; font-size: 12px; font-weight: 700;
+    font-family: inherit; padding: 2px 0; color: inherit;
+  }
+  #massaHorariosTable .massa-sugestao-input:focus {
+    outline: none; border-bottom-color: var(--laranja);
+  }
+  #massaHorariosTable .massa-sugestao-input.tem-pendencia {
+    border-bottom-style: dashed; border-bottom-color: #e8a020; border-bottom-width: 2px;
+  }
+  #massaHorariosTable .massa-acao-btn {
+    border: 1px solid var(--border); background: var(--surface);
+    border-radius: 6px; padding: 4px 8px; font-size: 11px; font-weight: 600;
+    color: var(--text3); cursor: pointer;
+  }
+  #massaHorariosTable .massa-acao-btn:hover { color: var(--text); border-color: var(--text3); }
+  #massaHorariosTable .massa-acao-lixeira { display: flex; align-items: center; justify-content: center; padding: 5px; }
+  #massaHorariosTable .massa-acao-lixeira:hover { color: #d94040; border-color: #d94040; }
+  #massaHorariosTable .massa-acao-confirmar { background: #d94040; border-color: #d94040; color: #fff; }
+  #massaHorariosTable .massa-acao-confirmar:hover { color: #fff; background: #c23434; }
+
+  /* × pra remover uma coluna de data (viagem inteira) — só aparece nítido
+     no hover do cabeçalho, pra não poluir a tabela toda hora. */
+  #massaHorariosTable thead th { position: relative; }
+  #massaHorariosTable .massa-data-remover {
+    border: none; background: none; cursor: pointer; padding: 0;
+    margin-left: 6px; color: var(--text3); opacity: 0.35; font-size: 11px;
+    transition: opacity 0.15s, color 0.15s;
+  }
+  #massaHorariosTable th:hover .massa-data-remover { opacity: 1; }
+  #massaHorariosTable .massa-data-remover:hover { color: #d94040; }
+
+  .massa-confirmar-banner {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 10px; padding: 10px 14px; border-radius: 8px;
+    background: #fdf0ee; border: 1px solid #f0c4bd; font-size: 12.5px; color: var(--text2);
+  }
+  .massa-confirmar-banner strong { color: #b4362a; }
+  .massa-confirmar-banner .massa-confirmar-acoes { display: flex; gap: 8px; flex-shrink: 0; }
+
+  /* Linha destacada ao clicar — "circula" a linha inteira com um contorno,
+     além de um leve tom de fundo em todas as células dela. */
+  #massaHorariosTable tbody tr[data-idx] { cursor: pointer; }
+  #massaHorariosTable tr.massa-linha-selecionada { outline: 2px solid var(--laranja); outline-offset: -2px; }
+  #massaHorariosTable tr.massa-linha-selecionada td { background: rgba(244, 121, 32, 0.07); }
+  #massaHorariosTable tr.massa-linha-selecionada td:last-child { background: rgba(244, 121, 32, 0.07); }
+</style>
+
+<script>
+  // ============================================================
+  //  MassaModule  —  Análise em Massa (importação de CSVs)
+  //  O CSV é lido no navegador (mesmo encoding do fluxo de viagem única —
+  //  ISO-8859-1/Latin-1) e o texto decodificado é mandado pro servidor, que
+  //  roda o mesmo motor de análise da tela principal (AnalysisService →
+  //  ComparisonService → DiagnosticoService.buildContext) pra extrair
+  //  trechos/paradas/horários — nada de regex sobre texto de PDF renderizado.
+  // ============================================================
+  const MassaModule = (() => {
+
+    let _arquivosJaImportados = {}; // cache: { nomeArquivo: true }
+    let _pendentes = [];            // [{ fileName, meta, trechos, paradasCriticas, naoVisitados, horarios, status }]
+    let _processando = false;       // true enquanto algum CSV ainda está sendo analisado no servidor
+
+    // ------------------------------------------------------------
+    //  Leitura do CSV (client-side) + análise (round-trip ao servidor)
+    // ------------------------------------------------------------
+    function _lerArquivoTexto(file) {
+      return new Promise(function (resolve, reject) {
+        const reader = new FileReader();
+        reader.onload = function (e) { resolve(e.target.result); };
+        reader.onerror = function () { reject(new Error('Erro ao ler o arquivo.')); };
+        // ISO-8859-1 (Latin-1) cobre Windows-1252 — mesmo encoding usado no
+        // upload principal (ui.html), padrão dos relatórios de monitoramento.
+        reader.readAsText(file, 'ISO-8859-1');
+      });
+    }
+
+    function _resultadoParaPendente(fileName, res) {
+      if (!res || !res.ok) {
+        return {
+          fileName: fileName,
+          meta: {}, trechos: [], paradasCriticas: [], naoVisitados: [], horarios: [],
+          status: 'erro',
+          motivoErro: (res && res.erro) || 'Erro ao processar o CSV.'
+        };
+      }
+      let status = 'ok';
+      if (_arquivosJaImportados[fileName]) status = 'duplicado';
+      // Erro só se NEM trechos NEM horários vieram — uma viagem com muitos
+      // pontos intermediários (postos, restaurantes) sem distância
+      // calculável entre eles pode legitimamente ficar sem trechos, mas
+      // ainda ter os horários dos pontos do esquema perfeitos (o que
+      // interessa pro "Histórico da linha" não depende de trechos).
+      else if (!res.trechos.length && !res.horarios.length) status = 'erro';
+      return {
+        fileName: fileName,
+        meta: res.meta,
+        trechos: res.trechos,
+        paradasCriticas: res.paradasCriticas,
+        naoVisitados: res.naoVisitados,
+        horarios: res.horarios,
+        status: status
+      };
+    }
+
+    function _processarArquivo(file, idEsquema) {
+      return _lerArquivoTexto(file).then(function (csvText) {
+        return new Promise(function (resolve) {
+          google.script.run
+            .withSuccessHandler(function (res) {
+              resolve(_resultadoParaPendente(file.name, res));
+            })
+            .withFailureHandler(function (err) {
+              console.error('[MassaModule] Erro ao processar ' + file.name, err);
+              resolve({
+                fileName: file.name,
+                meta: {}, trechos: [], paradasCriticas: [], naoVisitados: [], horarios: [],
+                status: 'erro',
+                motivoErro: (err && err.message) ? err.message : String(err)
+              });
+            })
+            .analisarCsvParaHistorico(csvText, idEsquema);
+        });
+      });
+    }
+
+    // Um arquivo "duplicado" só é bloqueado por padrão — o link "Substituir"
+    // marca p.substituir=true, o que faz _salvarImportacao tratá-lo como
+    // pronto pra salvar, apagando antes os registros antigos desse mesmo
+    // arquivo (útil quando o CSV da primeira importação veio poluído).
+    function _statusLabel(p, idx) {
+      if (p.status === 'processando') return '<span class="massa-status-processando"><span class="massa-spinner"></span>Processando…</span>';
+      if (p.status === 'duplicado') {
+        if (p.substituir) {
+          return '<span class="massa-status-substituir">Será substituído</span>' +
+            '<button type="button" class="massa-link-btn" data-acao="cancelar-substituir" data-idx="' + idx + '">cancelar</button>';
+        }
+        return '<span class="massa-status-dup">Já importado</span>' +
+          '<button type="button" class="massa-link-btn" data-acao="substituir" data-idx="' + idx + '">Substituir</button>';
+      }
+      if (p.status === 'erro') {
+        const titulo = p.motivoErro ? ' title="' + _esc(p.motivoErro) + '"' : '';
+        const texto = p.motivoErro ? _esc(p.motivoErro) : 'Nenhum trecho reconhecido';
+        return '<span class="massa-status-erro"' + titulo + '>' + texto + '</span>';
+      }
+      return '<span class="massa-status-ok">Pronto para importar</span>';
+    }
+
+    function _renderPreview() {
+      const wrap = document.getElementById('massaPreviewWrap');
+      const empty = document.getElementById('massaPreviewEmpty');
+      const body = document.getElementById('massaPreviewBody');
+      const btnSalvar = document.getElementById('massaBtnSalvar');
+      const uploadZone = document.getElementById('massaUploadZone');
+      if (!body) return;
+
+      if (uploadZone) uploadZone.classList.toggle('massa-upload-disabled', _processando);
+
+      if (_pendentes.length === 0) {
+        wrap.style.display = 'none';
+        empty.style.display = 'block';
+        btnSalvar.disabled = true;
+        return;
+      }
+
+      wrap.style.display = 'block';
+      empty.style.display = 'none';
+      // Enquanto qualquer CSV do lote ainda está processando, trava o botão
+      // — senão dá pra salvar antes dos outros arquivos terminarem de
+      // analisar no servidor, deixando parte do lote de fora silenciosamente.
+      btnSalvar.disabled = _processando || !_pendentes.some(_pendenteProntoParaSalvar);
+      // Se o lote pronto pra salvar for só substituições (nenhum arquivo
+      // novo, tudo já importado antes), o botão avisa isso em vez de dizer
+      // "Salvar" — que soaria como se fosse gravar algo inédito.
+      const prontos = _pendentes.filter(_pendenteProntoParaSalvar);
+      const sóSubstituicoes = prontos.length > 0 && prontos.every(function (p) { return p.status === 'duplicado'; });
+      btnSalvar.textContent = sóSubstituicoes
+        ? (prontos.length > 1 ? 'Substituir Todos' : 'Substituir')
+        : 'Salvar e Analisar';
+
+      body.innerHTML = _pendentes.map(function (p, idx) {
+        return '<tr>' +
+          '<td>' + _esc(p.fileName) + '</td>' +
+          '<td>' + _esc(p.meta.veiculo || '—') + '</td>' +
+          '<td>' + _esc(p.meta.dataViagem || '—') + '</td>' +
+          '<td>' + p.trechos.length + '</td>' +
+          '<td>' + _statusLabel(p, idx) + '</td>' +
+          '</tr>';
+      }).join('');
+
+      body.querySelectorAll('.massa-link-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const idx = parseInt(btn.getAttribute('data-idx'), 10);
+          const acao = btn.getAttribute('data-acao');
+          const p = _pendentes[idx];
+          if (!p) return;
+          p.substituir = (acao === 'substituir');
+          _renderPreview();
+        });
+      });
+    }
+
+    // Um arquivo entra no lote de salvamento se estiver pronto ('ok') OU se
+    // for um duplicado explicitamente marcado pra substituir.
+    function _pendenteProntoParaSalvar(p) {
+      return p.status === 'ok' || (p.status === 'duplicado' && p.substituir);
+    }
+
+    function _esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Dispara o download de um arquivo via link temporário — não usa
+    // window.open(url, '_blank'): como o servidor manda Content-Disposition:
+    // attachment (sem HTML pra renderizar), o Chrome abre uma aba em branco
+    // só pra iniciar o download e fecha ela sozinho logo em seguida; se isso
+    // acontecer antes do download terminar de baixar, ele cancela o download
+    // no meio (aparece como "Cancelado" no gerenciador de downloads).
+    function _baixarArquivo(url) {
+      const a = document.createElement('a');
+      a.href = url;
+      a.rel = 'noopener';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }
+
+    // "YYYY-MM-DD" de hoje + offsetDias — formato aceito por <input type="date">.
+    function _dataIsoComOffset(offsetDias) {
+      const d = new Date();
+      d.setDate(d.getDate() + offsetDias);
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return yyyy + '-' + mm + '-' + dd;
+    }
+
+    // ------------------------------------------------------------
+    //  Datepicker próprio pros campos De/Até (Período) — o valor "de
+    //  verdade" (ISO "YYYY-MM-DD", o que o servidor espera) fica em
+    //  input.dataset.iso; o input em si só mostra "DD/MM/AAAA" formatado.
+    // ------------------------------------------------------------
+    function _isoDeDate(d) {
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return yyyy + '-' + mm + '-' + dd;
+    }
+
+    function _fmtDataBr(iso) {
+      const m = String(iso || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      return m ? (m[3] + '/' + m[2] + '/' + m[1]) : '';
+    }
+
+    function _setInputData(input, isoOuVazio) {
+      input.dataset.iso = isoOuVazio || '';
+      input.value = isoOuVazio ? _fmtDataBr(isoOuVazio) : '';
+    }
+
+    function _getInputDataIso(input) {
+      return (input && input.dataset.iso) || '';
+    }
+
+    let _dpInputAtivo = null;
+    let _dpMesAtual = null; // Date (dia 1 do mês exibido no painel)
+
+    function _fecharDatepicker() {
+      const painel = document.getElementById('massaDatepickerPainel');
+      if (painel) painel.remove();
+      _dpInputAtivo = null;
+    }
+
+    function _abrirDatepicker(input) {
+      if (_dpInputAtivo === input) return; // já aberto pra esse campo
+      _fecharDatepicker();
+      _dpInputAtivo = input;
+
+      const isoAtual = _getInputDataIso(input);
+      const base = isoAtual ? new Date(isoAtual + 'T00:00:00') : new Date();
+      _dpMesAtual = new Date(base.getFullYear(), base.getMonth(), 1);
+
+      const painel = document.createElement('div');
+      painel.id = 'massaDatepickerPainel';
+      painel.className = 'massa-datepicker';
+      document.body.appendChild(painel);
+
+      const rect = input.getBoundingClientRect();
+      painel.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+      painel.style.left = (rect.left + window.scrollX) + 'px';
+
+      _renderDatepicker();
+    }
+
+    function _renderDatepicker() {
+      const painel = document.getElementById('massaDatepickerPainel');
+      if (!painel || !_dpInputAtivo) return;
+
+      const NOMES_MES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
+      const ano = _dpMesAtual.getFullYear();
+      const mes = _dpMesAtual.getMonth();
+      const isoSelecionado = _getInputDataIso(_dpInputAtivo);
+      const hojeIso = _dataIsoComOffset(0);
+
+      const primeiroDia = new Date(ano, mes, 1);
+      const inicioGrade = new Date(ano, mes, 1 - primeiroDia.getDay());
+
+      const diasHtml = [];
+      for (let i = 0; i < 42; i++) {
+        const d = new Date(inicioGrade.getFullYear(), inicioGrade.getMonth(), inicioGrade.getDate() + i);
+        const iso = _isoDeDate(d);
+        const classes = ['massa-dp-dia'];
+        if (d.getMonth() !== mes) classes.push('fora');
+        if (iso === hojeIso) classes.push('hoje');
+        if (iso === isoSelecionado) classes.push('selecionado');
+        diasHtml.push('<button type="button" class="' + classes.join(' ') + '" data-iso="' + iso + '">' + d.getDate() + '</button>');
+      }
+
+      painel.innerHTML =
+        '<div class="massa-dp-header">' +
+          '<button type="button" class="massa-dp-nav" data-nav="-1">&#8249;</button>' +
+          '<span class="massa-dp-titulo">' + NOMES_MES[mes] + ' de ' + ano + '</span>' +
+          '<button type="button" class="massa-dp-nav" data-nav="1">&#8250;</button>' +
+        '</div>' +
+        '<div class="massa-dp-semana">' + ['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map(function (d) { return '<span>' + d + '</span>'; }).join('') + '</div>' +
+        '<div class="massa-dp-dias">' + diasHtml.join('') + '</div>' +
+        '<div class="massa-dp-footer">' +
+          '<button type="button" class="massa-dp-link" data-acao="limpar">Limpar</button>' +
+          '<button type="button" class="massa-dp-link" data-acao="hoje">Hoje</button>' +
+        '</div>';
+
+      painel.querySelectorAll('.massa-dp-nav').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          const delta = parseInt(btn.getAttribute('data-nav'), 10);
+          _dpMesAtual = new Date(_dpMesAtual.getFullYear(), _dpMesAtual.getMonth() + delta, 1);
+          _renderDatepicker();
+        });
+      });
+      painel.querySelectorAll('.massa-dp-dia').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation();
+          _setInputData(_dpInputAtivo, btn.getAttribute('data-iso'));
+          _dpInputAtivo.dispatchEvent(new Event('change', { bubbles: true }));
+          _fecharDatepicker();
+        });
+      });
+      painel.querySelector('[data-acao="limpar"]').addEventListener('click', function (e) {
+        e.stopPropagation();
+        _setInputData(_dpInputAtivo, '');
+        _dpInputAtivo.dispatchEvent(new Event('change', { bubbles: true }));
+        _fecharDatepicker();
+      });
+      painel.querySelector('[data-acao="hoje"]').addEventListener('click', function (e) {
+        e.stopPropagation();
+        _setInputData(_dpInputAtivo, hojeIso);
+        _dpInputAtivo.dispatchEvent(new Event('change', { bubbles: true }));
+        _fecharDatepicker();
+      });
+    }
+
+    async function _onFilesSelected(fileList) {
+      const files = Array.prototype.slice.call(fileList || []);
+      if (!files.length) return;
+
+      // A análise do CSV precisa do esquema (pontos + horário comercial)
+      // pra montar a comparação real × programado — diferente do fluxo
+      // antigo de PDF, que só precisava do esquema na hora de salvar.
+      const ctx = _esquemaSelecionadoLocal();
+      if (!ctx.idEsquema) {
+        UIModule.showToast('Selecione uma linha (esquema) antes de subir os CSVs.', 'warning', 5000);
+        return;
+      }
+
+      // Placeholder "Processando…" pra cada arquivo aparecer na hora,
+      // antes mesmo do round-trip com o servidor terminar — sem isso, o
+      // usuário só via os arquivos já concluídos e conseguia clicar em
+      // "Salvar e Analisar" achando que o lote inteiro já tinha carregado.
+      const inicio = _pendentes.length;
+      files.forEach(function (file) {
+        _pendentes.push({
+          fileName: file.name,
+          meta: {}, trechos: [], paradasCriticas: [], naoVisitados: [], horarios: [],
+          status: 'processando'
+        });
+      });
+      _processando = true;
+      _renderPreview();
+
+      for (let i = 0; i < files.length; i++) {
+        const idx = inicio + i;
+        try {
+          _pendentes[idx] = await _processarArquivo(files[i], ctx.idEsquema);
+        } catch (e) {
+          console.error('[MassaModule] Erro ao processar ' + files[i].name, e);
+          _pendentes[idx] = {
+            fileName: files[i].name,
+            meta: {}, trechos: [], paradasCriticas: [], naoVisitados: [], horarios: [],
+            status: 'erro'
+          };
+        }
+        _renderPreview();
+      }
+
+      _processando = false;
+      _renderPreview();
+    }
+
+    // ------------------------------------------------------------
+    //  Seletor de linha próprio do modal (não depende do combobox do
+    //  cabeçalho, que fica escondido em modo "upload-only") — mesmo
+    //  padrão de busca do combobox de linha do cabeçalho. Busca as linhas
+    //  direto do servidor se o AppModule ainda não tiver carregado (evita
+    //  a corrida em que o modal abre antes de _loadDadosIniciais terminar).
+    // ------------------------------------------------------------
+    let _esquemasCache = null; // null = ainda não carregado; [] = carregado e vazio
+
+    function _carregarEsquemas(cb) {
+      const doAppModule = (typeof AppModule !== 'undefined' && AppModule.getEsquemas) ? (AppModule.getEsquemas() || []) : [];
+      if (doAppModule.length) { _esquemasCache = doAppModule; cb(); return; }
+      if (_esquemasCache && _esquemasCache.length) { cb(); return; }
+      google.script.run
+        .withSuccessHandler(function (dados) {
+          _esquemasCache = (dados && dados.esquemas) || [];
+          cb();
+        })
+        .withFailureHandler(function (err) {
+          console.warn('[MassaModule] Não foi possível carregar esquemas.', err);
+          _esquemasCache = _esquemasCache || [];
+          cb();
+        })
+        .getDadosIniciais();
+    }
+
+    function _esquemasAtuais() {
+      if (_esquemasCache && _esquemasCache.length) return _esquemasCache;
+      const doAppModule = (typeof AppModule !== 'undefined' && AppModule.getEsquemas) ? (AppModule.getEsquemas() || []) : [];
+      return doAppModule;
+    }
+
+    function _renderMassaEsquemaOpts(query) {
+      const dropdown = document.getElementById('massaEsquemaDropdown');
+      if (!dropdown) return;
+      const q = (query || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const esquemas = _esquemasAtuais();
+
+      const filtrados = esquemas.filter(function (e) {
+        if (!q) return true;
+        const id = String(e.id_esquema || '').toLowerCase();
+        const nome = (e.nome_linha || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+        const hor = (e.horario || '').toLowerCase();
+        return id.indexOf(q) !== -1 || nome.indexOf(q) !== -1 || hor.indexOf(q) !== -1;
+      });
+
+      if (filtrados.length === 0) {
+        dropdown.innerHTML = '<div class="esquema-opt-noresult">' + (esquemas.length === 0 ? 'Carregando linhas…' : 'Nenhum resultado encontrado.') + '</div>';
+        return;
+      }
+
+      dropdown.innerHTML = filtrados.map(function (e) {
+        const id = _esc(String(e.id_esquema));
+        const nome = _esc(e.nome_linha || e.id_esquema);
+        const hor = e.horario ? '<span class="tag-horario">' + _esc(e.horario) + '</span>' : '';
+        const sent = e.sentido ? '<span class="tag-sentido">' + _esc(e.sentido) + '</span>' : '';
+        return '<div class="esquema-opt" data-id="' + id + '">' +
+          '<div class="esquema-opt-main">' + id + ' &mdash; ' + nome + '</div>' +
+          ((hor || sent) ? '<div class="esquema-opt-meta">' + hor + sent + '</div>' : '') +
+          '</div>';
+      }).join('');
+
+      dropdown.querySelectorAll('.esquema-opt').forEach(function (el) {
+        el.addEventListener('click', function () {
+          _selecionarMassaEsquema(el.getAttribute('data-id'));
+        });
+      });
+    }
+
+    function _atualizarBotaoLimparMassaEsquema() {
+      const input = document.getElementById('massaEsquemaSearch');
+      const btnLimpar = document.getElementById('massaEsquemaLimpar');
+      if (btnLimpar) btnLimpar.style.display = (input && input.value) ? 'flex' : 'none';
+    }
+
+    function _selecionarMassaEsquema(idEsquema) {
+      const hidden = document.getElementById('massaEsquemaValue');
+      const input = document.getElementById('massaEsquemaSearch');
+      if (hidden) hidden.value = idEsquema || '';
+
+      const esqObj = _esquemasAtuais().find(function (e) { return String(e.id_esquema) === String(idEsquema); });
+      if (input) {
+        if (esqObj) {
+          let label = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+          if (esqObj.horario) label += '  ·  ' + esqObj.horario;
+          if (esqObj.sentido) label += '  ·  ' + esqObj.sentido;
+          input.value = label;
+        } else {
+          input.value = '';
+        }
+      }
+      _atualizarBotaoLimparMassaEsquema();
+
+      const combobox = document.getElementById('massaEsquemaCombobox');
+      if (combobox) combobox.classList.remove('open');
+
+      const viewHistorico = document.getElementById('massaViewHistorico');
+      if (viewHistorico && viewHistorico.style.display !== 'none') _carregarHistorico();
+
+      if (idEsquema) _verificarEsquemaSelecionado(idEsquema);
+    }
+
+    // Avisa proativamente sobre problemas de cadastro do esquema que
+    // fazem pontos sumirem silenciosamente da grade "Histórico da linha"
+    // (sem Horário Comercial, ou esquema sem nenhum ponto cadastrado) —
+    // melhor avisar na hora de escolher a linha do que só quando o CSV já
+    // foi importado e um ponto simplesmente não aparece em lugar nenhum.
+    function _verificarEsquemaSelecionado(idEsquema) {
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res || !res.ok) return;
+
+          if (res.totalPontos === 0) {
+            UIModule.showToast(
+              'Esse esquema não tem nenhum ponto cadastrado — a Análise em Massa não vai conseguir comparar horário real × programado.',
+              'error', 8000
+            );
+            return;
+          }
+
+          const semHorario = res.pontosSemHorario || [];
+          if (semHorario.length > 0) {
+            const lista = semHorario.slice(0, 4).join(', ') + (semHorario.length > 4 ? ' e mais ' + (semHorario.length - 4) : '');
+            UIModule.showToast(
+              semHorario.length + ' ponto(s) sem Horário Comercial cadastrado (' + lista + ') — eles não vão aparecer no Histórico da linha até isso ser corrigido no esquema.',
+              'warning', 9000
+            );
+          }
+        })
+        .withFailureHandler(function (err) {
+          console.warn('[MassaModule] Não foi possível verificar o esquema.', err);
+        })
+        .verificarEsquemaParaHistorico(idEsquema);
+    }
+
+    function _initMassaEsquemaCombobox() {
+      const combobox = document.getElementById('massaEsquemaCombobox');
+      const input = document.getElementById('massaEsquemaSearch');
+      const btnLimpar = document.getElementById('massaEsquemaLimpar');
+      if (!combobox || !input) return;
+
+      input.addEventListener('focus', function () {
+        combobox.classList.add('open');
+        _renderMassaEsquemaOpts(input.value);
+      });
+      input.addEventListener('input', function () {
+        combobox.classList.add('open');
+        // Se o usuário digitar, a seleção anterior deixa de valer até escolher de novo.
+        const hidden = document.getElementById('massaEsquemaValue');
+        if (hidden) hidden.value = '';
+        _atualizarBotaoLimparMassaEsquema();
+        _renderMassaEsquemaOpts(input.value);
+      });
+
+      // Botão de limpar (×): esvazia o campo e a seleção, e já deixa o
+      // dropdown aberto com todas as linhas pra escolher a próxima — sem
+      // precisar apagar manualmente o rótulo da linha anterior.
+      if (btnLimpar) {
+        btnLimpar.addEventListener('click', function (e) {
+          e.stopPropagation();
+          _selecionarMassaEsquema('');
+          input.focus();
+          combobox.classList.add('open');
+          _renderMassaEsquemaOpts('');
+        });
+      }
+      input.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') { combobox.classList.remove('open'); return; }
+        if (e.key === 'Enter') {
+          const first = document.querySelector('#massaEsquemaDropdown .esquema-opt');
+          if (first) first.click();
+        }
+      });
+      document.addEventListener('click', function (e) {
+        if (!combobox.contains(e.target)) combobox.classList.remove('open');
+      });
+    }
+
+    function _popularSelectEsquema() {
+      const hidden = document.getElementById('massaEsquemaValue');
+      const valorAtual = hidden ? hidden.value : '';
+      _carregarEsquemas(function () {
+        if (valorAtual) _selecionarMassaEsquema(valorAtual);
+      });
+    }
+
+    function _esquemaSelecionadoLocal() {
+      const hidden = document.getElementById('massaEsquemaValue');
+      const idEsquema = hidden ? hidden.value : '';
+      const esqObj = _esquemasAtuais().find(function (e) { return String(e.id_esquema) === idEsquema; });
+      return {
+        idEsquema: idEsquema,
+        nomeLinha: esqObj ? esqObj.nome_linha : '',
+        // O CSV não traz "Horário da Viagem" (o PDF trazia, no cabeçalho) —
+        // usa o horário cadastrado no esquema como informativo.
+        horario: esqObj ? (esqObj.horario || '') : ''
+      };
+    }
+
+    // ------------------------------------------------------------
+    //  Salvar importação (envia só os dados extraídos, não o CSV)
+    // ------------------------------------------------------------
+    function _salvarImportacao() {
+      const ctx = _esquemaSelecionadoLocal();
+      const idEsquema = ctx.idEsquema || '';
+      const nomeLinha = ctx.nomeLinha || '';
+
+      if (!idEsquema) {
+        UIModule.showToast('Selecione uma linha (esquema) antes de salvar a importação.', 'warning', 5000);
+        return;
+      }
+
+      const aSalvar = _pendentes.filter(_pendenteProntoParaSalvar);
+      if (!aSalvar.length) {
+        UIModule.showToast('Nenhum CSV pronto para importar.', 'warning', 4000);
+        return;
+      }
+
+      const btnSalvar = document.getElementById('massaBtnSalvar');
+      const sóSubstituicoes = aSalvar.every(function (p) { return p.status === 'duplicado'; });
+      btnSalvar.disabled = true;
+      btnSalvar.textContent = sóSubstituicoes ? 'Substituindo...' : 'Salvando...';
+
+      let sucesso = 0, falhas = 0;
+      const motivosFalha = [];
+
+      // Salva um CSV de cada vez (não em paralelo): o startRow de cada
+      // gravação vem de sheet.getLastRow()+1, sem trava própria — disparar
+      // vários salvamentos ao mesmo tempo faz duas chamadas lerem o mesmo
+      // getLastRow() antes de qualquer uma escrever, e a que escrever por
+      // último sobrescreve o intervalo de linhas da outra (dados de
+      // arquivos inteiros somem silenciosamente). Sequencial evita a
+      // corrida sem precisar confiar só na trava do servidor.
+      let i = 0;
+      _salvarProximo();
+
+      function _salvarProximo() {
+        if (i >= aSalvar.length) { _finalizarSalvar(); return; }
+        const p = aSalvar[i];
+        i++;
+
+        const meta = {
+          idEsquema: idEsquema,
+          nomeLinha: nomeLinha,
+          veiculo: p.meta.veiculo || '',
+          dataViagem: p.meta.dataViagem || '',
+          // O CSV não traz "Horário da Viagem" — usa o horário do esquema.
+          horarioViagem: p.meta.horarioViagem || ctx.horario || ''
+        };
+        google.script.run
+          .withSuccessHandler(function (res) {
+            if (res && res.ok) { sucesso++; p.status = 'importado'; }
+            else {
+              falhas++;
+              const motivo = (res && (res.motivo || res.erro)) || 'motivo desconhecido';
+              motivosFalha.push(p.fileName + ': ' + motivo);
+              console.warn('[MassaModule] Falha ao salvar ' + p.fileName, res);
+            }
+            _salvarProximo();
+          })
+          .withFailureHandler(function (err) {
+            falhas++;
+            const motivo = (err && err.message) ? err.message : String(err);
+            motivosFalha.push(p.fileName + ': ' + motivo);
+            console.error('[MassaModule] Erro ao salvar ' + p.fileName, err);
+            _salvarProximo();
+          })
+          .salvarHistoricoTrechos(p.fileName, meta, p.trechos, p.horarios || [], !!p.substituir);
+      }
+
+      function _finalizarSalvar() {
+        btnSalvar.textContent = 'Salvar e Analisar';
+        _pendentes = _pendentes.filter(function (p) { return p.status !== 'importado'; });
+        _renderPreview();
+        _carregarArquivosJaImportados();
+
+        if (falhas > 0) {
+          UIModule.showToast(
+            sucesso + ' importada(s), ' + falhas + ' com erro — ' + motivosFalha.slice(0, 3).join(' | '),
+            'warning', 9000
+          );
+        } else {
+          UIModule.showToast(sucesso + ' viagem(ns) importada(s) com sucesso.', 'success', 4000);
+        }
+
+        // Já mostra o resultado na tela, sem precisar trocar de aba manualmente.
+        if (sucesso > 0) _switchTab('historico');
+      }
+    }
+
+    function _carregarArquivosJaImportados() {
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) _arquivosJaImportados = res.arquivos || {};
+        })
+        .withFailureHandler(function (err) {
+          console.warn('[MassaModule] Não foi possível carregar arquivos já importados.', err);
+        })
+        .getArquivosHistoricoJaImportados();
+    }
+
+    // ------------------------------------------------------------
+    //  Histórico da linha (view agregada)
+    // ------------------------------------------------------------
+    // Estado da grade atual — guardado à parte pra permitir editar a
+    // Sugestão e remover local por índice (evita ter que escapar o nome do
+    // local em atributos/seletores) e recarregar sem perder o contexto.
+    let _idEsquemaHistorico = '';
+    let _pivotAtual = { locais: [], datas: [] };
+    let _confirmandoRemoverIdx = -1;
+    // Índice a focar assim que a tabela terminar de redesenhar depois de um
+    // Enter na Sugestão — o re-render troca todo o innerHTML da tabela
+    // (o input antigo deixa de existir), então precisa focar de novo no
+    // índice certo depois de reconstruir o DOM.
+    let _focarIdxAposRender = -1;
+    // Edições de Sugestão feitas nesta sessão mas ainda não gravadas na
+    // planilha — { local: valor }. Só vão pro servidor quando o usuário
+    // clicar em "Salvar Sugestões"; editar não recarrega mais a tabela
+    // inteira a cada tecla, que era o motivo do loading toda hora.
+    let _sugestoesPendentes = {};
+    // Linha destacada visualmente ao clicar nela — persiste entre
+    // re-renders (edição de Sugestão, etc.) até clicar em outra linha.
+    let _linhaSelecionadaIdx = -1;
+    // Data (coluna) aguardando confirmação de remoção — mostra um banner
+    // acima da tabela com Remover/Cancelar em vez de tentar espremer uma
+    // confirmação de 2 passos dentro do cabeçalho apertado da coluna.
+    let _dataParaConfirmarRemocao = null;
+
+    function _carregarHistorico() {
+      const ctx = _esquemaSelecionadoLocal();
+      const idEsquema = ctx.idEsquema || '';
+      _idEsquemaHistorico = idEsquema;
+      _confirmandoRemoverIdx = -1;
+      _sugestoesPendentes = {};
+      _linhaSelecionadaIdx = -1;
+      _dataParaConfirmarRemocao = null;
+      const empty = document.getElementById('massaHistoricoEmpty');
+      const horariosWrap = document.getElementById('massaHorariosWrap');
+      const filtroWrap = document.getElementById('massaHistoricoFiltro');
+
+      if (!idEsquema) {
+        empty.textContent = 'Selecione uma linha para ver o histórico.';
+        empty.style.display = 'block';
+        horariosWrap.style.display = 'none';
+        filtroWrap.style.display = 'none';
+        return;
+      }
+
+      filtroWrap.style.display = 'flex';
+      const dataInicio = _getInputDataIso(document.getElementById('massaFiltroDataInicio'));
+      const dataFim = _getInputDataIso(document.getElementById('massaFiltroDataFim'));
+
+      // Mostra "Carregando…" na hora — sem isso, o texto de "vazio" padrão
+      // do HTML ficava visível por um instante toda vez que a aba abria (ou
+      // logo após salvar uma importação), passando a impressão de que nada
+      // tinha sido salvo antes da resposta do servidor chegar.
+      empty.innerHTML = '<span class="massa-status-processando"><span class="massa-spinner"></span>Carregando histórico…</span>';
+      empty.style.display = 'block';
+      horariosWrap.style.display = 'none';
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          const pivot = (res && res.ok) ? (res.pivotHorarios || { locais: [], datas: [] }) : { locais: [], datas: [] };
+          _pivotAtual = pivot;
+
+          if (!pivot.locais.length) {
+            empty.textContent = (dataInicio || dataFim)
+              ? 'Nenhum local com desvio considerável nesse período — tente ampliar o filtro.'
+              : 'Nenhum histórico importado ainda para esta linha (ou nenhum local com desvio considerável).';
+            empty.style.display = 'block';
+            horariosWrap.style.display = 'none';
+            return;
+          }
+          empty.style.display = 'none';
+          horariosWrap.style.display = 'block';
+          _renderHistoricoTable();
+        })
+        .withFailureHandler(function (err) {
+          console.error('[MassaModule] Erro ao carregar histórico.', err);
+          UIModule.showToast('Erro ao carregar histórico da linha.', 'error', 5000);
+        })
+        .getHistoricoAgregadoLinha(idEsquema, dataInicio, dataFim);
+    }
+
+    // Monta a tabela dinâmica (uma coluna por data) de horário real ×
+    // programado por local, no formato: Local | Tempo Desl. | Programado |
+    // <data1> | <data2> | ... | Sugestão | Ações. Referencia cada local pelo
+    // índice em _pivotAtual.locais (data-idx) — evita ter que escapar o nome
+    // do local em atributos/handlers.
+    function _renderPivotHorarios(pivot) {
+      const datas = pivot.datas || [];
+      const headFixos = ['Local', 'Tempo Desl.', 'Programado'].map(function (c) {
+        return '<th>' + _esc(c) + '</th>';
+      }).join('');
+      const headDatas = datas.map(function (d) {
+        return '<th>' + _esc(d) +
+          '<button type="button" class="massa-data-remover" data-data="' + _esc(d) + '" title="Remover esta viagem da grade (todos os locais)">&#10005;</button>' +
+          '</th>';
+      }).join('');
+      const headFinais = ['Sugestão', ''].map(function (c) {
+        return '<th>' + _esc(c) + '</th>';
+      }).join('');
+      const thead = '<thead><tr>' + headFixos + headDatas + headFinais + '</tr></thead>';
+
+      const rows = (pivot.locais || []).map(function (loc, idx) {
+        const cells = [];
+        cells.push('<td>' + _esc(loc.local) + '</td>');
+        const tituloTempoDesl = !loc.tempoDeslocamento
+          ? ''
+          : loc.tempoDeslocamentoEstimado
+            ? 'estimativa: locais muito próximos (sem medição confiável de tempo entre eles)'
+            : _esc(loc.tempoDeslocamento) + ' a partir de ' + _esc(loc.tempoDeslocamentoOrigem || '—') + ', que foi o ponto anterior nessa(s) viagem(ns)';
+        const valorTempoDesl = !loc.tempoDeslocamento
+          ? '—'
+          : loc.tempoDeslocamentoEstimado
+            ? '<i>' + _esc(loc.tempoDeslocamento) + '</i>'
+            : _esc(loc.tempoDeslocamento);
+        cells.push(
+          '<td' + (tituloTempoDesl ? ' title="' + tituloTempoDesl + '"' : '') + '>' +
+          valorTempoDesl +
+          '</td>'
+        );
+        cells.push('<td style="font-weight:700;">' + _esc(loc.programado || '—') + '</td>');
+        datas.forEach(function (d) {
+          const real = loc.porData ? loc.porData[d] : '';
+          cells.push('<td>' + (real ? _esc(real) : '—') + '</td>');
+        });
+        const corSugestao = loc.diffMin == null ? '' : (Math.abs(loc.diffMin) >= 10 ? 'color:#d94040;' : 'color:#22a96a;');
+        const pendente = Object.prototype.hasOwnProperty.call(_sugestoesPendentes, loc.local);
+        cells.push(
+          '<td>' +
+          '<input type="text" class="massa-sugestao-input' + (pendente ? ' tem-pendencia' : '') + '" style="' + corSugestao + '" ' +
+          'data-idx="' + idx + '" value="' + _esc(loc.sugestao || '') + '" placeholder="--:--" ' +
+          'title="' + (pendente ? 'Ainda não salvo — clique em Salvar Sugestões' : '') + '" />' +
+          '</td>'
+        );
+        cells.push('<td>' + _renderAcoesCell(idx) + '</td>');
+        const classeSelecionada = idx === _linhaSelecionadaIdx ? ' class="massa-linha-selecionada"' : '';
+        return '<tr data-idx="' + idx + '"' + classeSelecionada + '>' + cells.join('') + '</tr>';
+      }).join('');
+
+      return thead + '<tbody>' + rows + '</tbody>';
+    }
+
+    function _renderAcoesCell(idx) {
+      if (_confirmandoRemoverIdx === idx) {
+        return (
+          '<div style="display:flex; gap:6px; white-space:nowrap;">' +
+          '<button type="button" class="massa-acao-btn massa-acao-confirmar" data-idx="' + idx + '" data-acao="confirmar-remover">Remover</button>' +
+          '<button type="button" class="massa-acao-btn" data-idx="' + idx + '" data-acao="cancelar-remover">Cancelar</button>' +
+          '</div>'
+        );
+      }
+      return (
+        '<button type="button" class="massa-acao-btn massa-acao-lixeira" data-idx="' + idx + '" data-acao="pedir-remover" title="Remover local desta grade (apaga o histórico dele nesta linha)">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>' +
+        '</button>'
+      );
+    }
+
+    function _renderHistoricoTable() {
+      const horariosTable = document.getElementById('massaHorariosTable');
+      horariosTable.innerHTML = _renderPivotHorarios(_pivotAtual);
+      _attachHistoricoHandlers();
+      _atualizarBotaoSalvarSugestoes();
+
+      if (_focarIdxAposRender >= 0) {
+        const alvo = horariosTable.querySelector('.massa-sugestao-input[data-idx="' + _focarIdxAposRender + '"]');
+        if (alvo) alvo.focus();
+        _focarIdxAposRender = -1;
+      }
+    }
+
+    function _atualizarBotaoSalvarSugestoes() {
+      const btn = document.getElementById('massaBtnSalvarSugestoes');
+      if (!btn) return;
+      const qtd = Object.keys(_sugestoesPendentes).length;
+      if (qtd === 0) {
+        btn.style.display = 'none';
+        return;
+      }
+      btn.style.display = 'inline-flex';
+      btn.disabled = false;
+      btn.innerHTML =
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>' +
+        'Salvar Sugestões (' + qtd + ')';
+    }
+
+    function _attachHistoricoHandlers() {
+      const table = document.getElementById('massaHorariosTable');
+      if (!table) return;
+
+      table.querySelectorAll('.massa-sugestao-input').forEach(function (input) {
+        // Clicar já seleciona tudo — dá pra digitar por cima direto, sem
+        // precisar apagar o valor antigo primeiro.
+        input.addEventListener('focus', function () { input.select(); });
+
+        // Máscara: usuário só digita números (ex: "2130"), o ":" entra
+        // sozinho depois dos 2 primeiros dígitos — sem precisar digitar
+        // o caractere manualmente.
+        input.addEventListener('input', function () {
+          const digitos = input.value.replace(/\D/g, '').slice(0, 4);
+          input.value = digitos.length > 2
+            ? digitos.slice(0, 2) + ':' + digitos.slice(2)
+            : digitos;
+        });
+
+        // Enter salva (via blur/change) e pula pro próximo ponto da lista —
+        // igual navegar por células de planilha.
+        input.addEventListener('keydown', function (e) {
+          if (e.key !== 'Enter') return;
+          e.preventDefault();
+          const idx = parseInt(input.getAttribute('data-idx'), 10);
+          if (idx + 1 < _pivotAtual.locais.length) _focarIdxAposRender = idx + 1;
+          input.blur();
+        });
+
+        input.addEventListener('change', function () {
+          const idx = parseInt(input.getAttribute('data-idx'), 10);
+          _aplicarSugestaoLocal(idx, input.value.trim(), input);
+        });
+      });
+
+      table.querySelectorAll('.massa-acao-btn').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          const idx = parseInt(btn.getAttribute('data-idx'), 10);
+          const acao = btn.getAttribute('data-acao');
+          if (acao === 'pedir-remover') {
+            _confirmandoRemoverIdx = idx;
+            _renderHistoricoTable();
+          } else if (acao === 'cancelar-remover') {
+            _confirmandoRemoverIdx = -1;
+            _renderHistoricoTable();
+          } else if (acao === 'confirmar-remover') {
+            _confirmarRemoverLocal(idx, btn);
+          }
+        });
+      });
+
+      // Clicar em qualquer lugar da linha a destaca visualmente — direto
+      // no DOM (sem re-renderizar a tabela toda), pra não perder foco/
+      // seleção de um input que porventura já esteja em edição.
+      table.querySelectorAll('tbody tr[data-idx]').forEach(function (tr) {
+        tr.addEventListener('click', function () {
+          const idx = parseInt(tr.getAttribute('data-idx'), 10);
+          _selecionarLinha(idx);
+        });
+      });
+
+      table.querySelectorAll('.massa-data-remover').forEach(function (btn) {
+        btn.addEventListener('click', function (e) {
+          e.stopPropagation(); // não deixa o clique "vazar" pra seleção de linha
+          _dataParaConfirmarRemocao = btn.getAttribute('data-data');
+          _renderBannerConfirmarRemoverData();
+        });
+      });
+    }
+
+    function _renderBannerConfirmarRemoverData() {
+      const banner = document.getElementById('massaConfirmarRemoverData');
+      if (!banner) return;
+      if (!_dataParaConfirmarRemocao) {
+        banner.style.display = 'none';
+        banner.innerHTML = '';
+        return;
+      }
+      banner.style.display = 'flex';
+      banner.innerHTML =
+        '<span>Remover a viagem de <strong>' + _esc(_dataParaConfirmarRemocao) + '</strong> da grade? ' +
+        'Apaga o horário dela em todos os locais desta linha — não dá pra desfazer.</span>' +
+        '<div class="massa-confirmar-acoes">' +
+        '<button type="button" class="btn btn-ghost" id="massaBtnCancelarRemoverData" style="padding:5px 12px; font-size:12px;">Cancelar</button>' +
+        '<button type="button" class="btn" id="massaBtnConfirmarRemoverData" style="padding:5px 12px; font-size:12px; background:#d94040; color:#fff; border:1px solid #d94040;">Remover</button>' +
+        '</div>';
+
+      document.getElementById('massaBtnCancelarRemoverData').addEventListener('click', function () {
+        _dataParaConfirmarRemocao = null;
+        _renderBannerConfirmarRemoverData();
+      });
+      document.getElementById('massaBtnConfirmarRemoverData').addEventListener('click', _removerDataConfirmada);
+    }
+
+    function _removerDataConfirmada() {
+      const data = _dataParaConfirmarRemocao;
+      if (!data) return;
+      const idEsquemaNaHora = _idEsquemaHistorico;
+
+      // Otimista: some da grade na hora (usuário já confirmou), recalcula
+      // Sugestão/desvio de cada local com as datas que sobraram, e o
+      // pedido ao servidor roda em segundo plano.
+      const idx = _pivotAtual.datas.indexOf(data);
+      if (idx !== -1) _pivotAtual.datas.splice(idx, 1);
+      _pivotAtual.locais.forEach(function (loc) {
+        if (loc.porData) delete loc.porData[data];
+        _recomputarSugestaoLocal(loc, _pivotAtual.datas);
+      });
+      _dataParaConfirmarRemocao = null;
+      _renderHistoricoTable();
+      _renderBannerConfirmarRemoverData();
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) {
+            UIModule.showToast('Viagem de ' + data + ' removida da grade.', 'success', 3000);
+          } else {
+            UIModule.showToast((res && res.erro) || 'Erro ao remover viagem — recarregando.', 'error', 5000);
+            if (_idEsquemaHistorico === idEsquemaNaHora) _carregarHistorico();
+          }
+        })
+        .withFailureHandler(function (err) {
+          UIModule.showToast('Erro ao remover viagem: ' + (err && err.message ? err.message : String(err)) + ' — recarregando.', 'error', 6000);
+          if (_idEsquemaHistorico === idEsquemaNaHora) _carregarHistorico();
+        })
+        .excluirDataHistoricoHorarios(_idEsquemaHistorico, data);
+    }
+
+    function _selecionarLinha(idx) {
+      if (_linhaSelecionadaIdx === idx) return;
+      const table = document.getElementById('massaHorariosTable');
+      if (!table) return;
+      const anterior = table.querySelector('tr.massa-linha-selecionada');
+      if (anterior) anterior.classList.remove('massa-linha-selecionada');
+      const nova = table.querySelector('tbody tr[data-idx="' + idx + '"]');
+      if (nova) nova.classList.add('massa-linha-selecionada');
+      _linhaSelecionadaIdx = idx;
+    }
+
+    // "HH:MM" -> minutos desde meia-noite (espelha _horaParaMinutos do
+    // servidor) — precisamos recalcular localmente pra cor/relevância da
+    // linha refletirem a edição na hora, já que agora não há round-trip.
+    function _horaParaMinutosClient(hhmm) {
+      const m = String(hhmm || '').match(/(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    }
+
+    // Espelha _minutosParaHora do servidor (normaliza pra 0–1439).
+    function _minutosParaHoraClient(min) {
+      const norm = ((Math.round(min) % 1440) + 1440) % 1440;
+      const h = Math.floor(norm / 60), m = norm % 60;
+      return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
+    }
+
+    // Recalcula Sugestão/diffMin de um local a partir das datas que
+    // sobraram (depois de remover uma coluna) — mesma lógica de
+    // HistoricoHorariosStore.getPivot, só que no cliente, pra refletir a
+    // remoção na hora sem esperar um reload do servidor. Sugestão manual
+    // (override do usuário) nunca é recalculada — ela sempre prevalece.
+    function _recomputarSugestaoLocal(loc, datasRestantes) {
+      if (loc.sugestaoManual) return;
+      const minutos = datasRestantes
+        .map(function (d) { return loc.porData ? loc.porData[d] : null; })
+        .filter(Boolean)
+        .map(_horaParaMinutosClient)
+        .filter(function (v) { return v != null; });
+      if (!minutos.length) { loc.sugestao = ''; loc.diffMin = null; return; }
+      const mediaMin = Math.round(minutos.reduce(function (a, b) { return a + b; }, 0) / minutos.length);
+      loc.sugestao = _minutosParaHoraClient(mediaMin);
+      const programadoMin = _horaParaMinutosClient(loc.programado);
+      loc.diffMin = programadoMin != null ? mediaMin - programadoMin : null;
+    }
+
+    // Só atualiza o estado local (_pivotAtual + _sugestoesPendentes) e
+    // redesenha a tabela — nada vai pro servidor aqui. O salvamento de
+    // verdade acontece só quando o usuário clica em "Salvar Sugestões",
+    // evitando o loading de recarregar a grade inteira a cada edição.
+    function _aplicarSugestaoLocal(idx, valor, inputEl) {
+      const loc = _pivotAtual.locais[idx];
+      if (!loc) return;
+
+      if (!/^\d{1,2}:\d{2}$/.test(valor)) {
+        UIModule.showToast('Horário inválido — use o formato HH:MM (ex: 07:30).', 'warning', 4000);
+        inputEl.value = loc.sugestao || '';
+        // Nada vai re-renderizar a tabela nesse caminho — descarta o "focar
+        // próximo" pendente (Enter com valor inválido) pra não vazar e
+        // acabar focando o item errado num redesenho futuro sem relação.
+        _focarIdxAposRender = -1;
+        return;
+      }
+
+      loc.sugestao = valor;
+      loc.sugestaoManual = true;
+      const sugestaoMin = _horaParaMinutosClient(valor);
+      const programadoMin = _horaParaMinutosClient(loc.programado);
+      loc.diffMin = (sugestaoMin != null && programadoMin != null) ? sugestaoMin - programadoMin : null;
+
+      _sugestoesPendentes[loc.local] = valor;
+      _renderHistoricoTable();
+    }
+
+    // Envia todas as sugestões pendentes pro servidor, uma de cada vez
+    // (mesmo padrão sequencial da importação de CSV — evita a mesma
+    // corrida de concorrência já vista em outras gravações em lote), e só
+    // recarrega a grade UMA vez no final.
+    function _salvarSugestoesPendentes() {
+      const entradas = Object.keys(_sugestoesPendentes).map(function (local) {
+        return { local: local, valor: _sugestoesPendentes[local] };
+      });
+      if (!entradas.length) return;
+
+      const btn = document.getElementById('massaBtnSalvarSugestoes');
+      btn.disabled = true;
+      btn.textContent = 'Salvando...';
+
+      let sucesso = 0, falhas = 0;
+      const motivosFalha = [];
+      let i = 0;
+
+      _salvarProxima();
+
+      function _salvarProxima() {
+        if (i >= entradas.length) { _finalizar(); return; }
+        const item = entradas[i];
+        i++;
+        google.script.run
+          .withSuccessHandler(function (res) {
+            if (res && res.ok) sucesso++;
+            else {
+              falhas++;
+              motivosFalha.push(item.local + ': ' + ((res && res.motivo) || 'motivo desconhecido'));
+            }
+            _salvarProxima();
+          })
+          .withFailureHandler(function (err) {
+            falhas++;
+            motivosFalha.push(item.local + ': ' + (err && err.message ? err.message : String(err)));
+            _salvarProxima();
+          })
+          .salvarSugestaoManualHistorico(_idEsquemaHistorico, item.local, item.valor);
+      }
+
+      function _finalizar() {
+        _sugestoesPendentes = {};
+        if (falhas > 0) {
+          UIModule.showToast(
+            sucesso + ' salva(s), ' + falhas + ' com erro — ' + motivosFalha.slice(0, 3).join(' | '),
+            'warning', 9000
+          );
+        } else {
+          UIModule.showToast(sucesso + ' sugestão(ões) salva(s) com sucesso.', 'success', 3000);
+        }
+        _carregarHistorico();
+      }
+    }
+
+    function _confirmarRemoverLocal(idx, btnEl) {
+      const loc = _pivotAtual.locais[idx];
+      if (!loc) return;
+
+      const idEsquemaNaHora = _idEsquemaHistorico;
+
+      // Otimista: some da tela na hora (o usuário já confirmou a
+      // intenção), o pedido ao servidor roda em segundo plano. Se falhar,
+      // a linha volta e o erro aparece — não faz sentido travar a UI
+      // esperando a exclusão de fato acontecer na planilha.
+      _pivotAtual.locais.splice(idx, 1);
+      _confirmandoRemoverIdx = -1;
+      delete _sugestoesPendentes[loc.local]; // não faz sentido salvar sugestão de um local removido
+      _renderHistoricoTable();
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (res && res.ok) {
+            UIModule.showToast('"' + loc.local + '" removido da grade.', 'success', 3000);
+          } else {
+            UIModule.showToast((res && res.erro) || 'Erro ao remover local — restaurando.', 'error', 5000);
+            if (_idEsquemaHistorico === idEsquemaNaHora) {
+              _pivotAtual.locais.splice(idx, 0, loc);
+              _renderHistoricoTable();
+            }
+          }
+        })
+        .withFailureHandler(function (err) {
+          UIModule.showToast('Erro ao remover local: ' + (err && err.message ? err.message : String(err)) + ' — restaurando.', 'error', 6000);
+          if (_idEsquemaHistorico === idEsquemaNaHora) {
+            _pivotAtual.locais.splice(idx, 0, loc);
+            _renderHistoricoTable();
+          }
+        })
+        .excluirLocalHistoricoHorarios(_idEsquemaHistorico, loc.local);
+    }
+
+    function _gerarPdfSolicitacaoMudanca() {
+      const btn = document.getElementById('massaBtnGerarPdf');
+      if (!_idEsquemaHistorico) {
+        UIModule.showToast('Selecione uma linha para gerar o PDF.', 'warning', 4000);
+        return;
+      }
+      if (!_pivotAtual.locais.length) {
+        UIModule.showToast('Nenhum local com desvio considerável pra gerar o relatório.', 'warning', 4000);
+        return;
+      }
+
+      const textoOriginal = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="massa-spinner"></span> Gerando...';
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          btn.disabled = false;
+          btn.innerHTML = textoOriginal;
+          if (res && res.ok && res.url) {
+            _baixarArquivo(res.url);
+            UIModule.showToast('PDF gerado com sucesso.', 'success', 3000);
+          } else {
+            UIModule.showToast((res && res.erro) || 'Erro ao gerar PDF.', 'error', 6000);
+          }
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          btn.innerHTML = textoOriginal;
+          UIModule.showToast('Erro ao gerar PDF: ' + (err && err.message ? err.message : String(err)), 'error', 6000);
+        })
+        .gerarPdfSolicitacaoMudanca(
+          _idEsquemaHistorico,
+          _getInputDataIso(document.getElementById('massaFiltroDataInicio')),
+          _getInputDataIso(document.getElementById('massaFiltroDataFim'))
+        );
+    }
+
+    function _switchTab(tab) {
+      const tabImportar = document.getElementById('massaTabImportar');
+      const tabHistorico = document.getElementById('massaTabHistorico');
+      const viewImportar = document.getElementById('massaViewImportar');
+      const viewHistorico = document.getElementById('massaViewHistorico');
+      const footer = document.getElementById('massaBtnSalvar');
+
+      const isImportar = tab === 'importar';
+      tabImportar.classList.toggle('active', isImportar);
+      tabHistorico.classList.toggle('active', !isImportar);
+      viewImportar.style.display = isImportar ? 'block' : 'none';
+      viewHistorico.style.display = isImportar ? 'none' : 'block';
+      footer.style.display = isImportar ? 'inline-flex' : 'none';
+
+      if (!isImportar) _carregarHistorico();
+    }
+
+    // ------------------------------------------------------------
+    //  Init
+    // ------------------------------------------------------------
+    function init() {
+      const overlay = document.getElementById('modalMassa');
+      const btnOpen = document.getElementById('btnAnaliseMassa');
+      const btnClose = document.getElementById('btnCloseMassaModal');
+      const btnCancel = document.getElementById('massaBtnCancelar');
+      const fileInput = document.getElementById('massaFileInput');
+      const btnSalvar = document.getElementById('massaBtnSalvar');
+
+      if (!overlay) return;
+
+      if (btnOpen) {
+        btnOpen.addEventListener('click', function () {
+          _pendentes = [];
+          _processando = false;
+          _renderPreview();
+          _popularSelectEsquema();
+          _carregarArquivosJaImportados();
+          _switchTab('importar');
+          overlay.classList.add('open');
+        });
+      }
+      if (btnClose) btnClose.addEventListener('click', function () { overlay.classList.remove('open'); _fecharDatepicker(); });
+      if (btnCancel) btnCancel.addEventListener('click', function () { overlay.classList.remove('open'); _fecharDatepicker(); });
+
+      if (fileInput) {
+        fileInput.addEventListener('change', function (ev) {
+          _onFilesSelected(ev.target.files);
+          fileInput.value = '';
+        });
+      }
+      if (btnSalvar) btnSalvar.addEventListener('click', _salvarImportacao);
+
+      const btnGerarPdf = document.getElementById('massaBtnGerarPdf');
+      if (btnGerarPdf) btnGerarPdf.addEventListener('click', _gerarPdfSolicitacaoMudanca);
+
+      const btnSalvarSugestoes = document.getElementById('massaBtnSalvarSugestoes');
+      if (btnSalvarSugestoes) btnSalvarSugestoes.addEventListener('click', _salvarSugestoesPendentes);
+
+      const filtroInicio = document.getElementById('massaFiltroDataInicio');
+      const filtroFim = document.getElementById('massaFiltroDataFim');
+      const btnLimparFiltro = document.getElementById('massaBtnLimparFiltroData');
+      if (filtroInicio) filtroInicio.addEventListener('change', _carregarHistorico);
+      if (filtroFim) filtroFim.addEventListener('change', _carregarHistorico);
+      if (btnLimparFiltro) {
+        btnLimparFiltro.addEventListener('click', function () {
+          if (filtroInicio) _setInputData(filtroInicio, '');
+          if (filtroFim) _setInputData(filtroFim, '');
+          _carregarHistorico();
+        });
+      }
+
+      // Clique abre o calendário próprio; H/S continuam funcionando como
+      // atalho (hoje / 7 dias atrás) mesmo com o campo agora sendo texto.
+      [filtroInicio, filtroFim].forEach(function (input) {
+        if (!input) return;
+        input.addEventListener('click', function (e) {
+          e.stopPropagation();
+          _abrirDatepicker(input);
+        });
+        input.addEventListener('keydown', function (e) {
+          if (e.key === 'Escape') { _fecharDatepicker(); return; }
+          const tecla = e.key.toLowerCase();
+          if (tecla !== 'h' && tecla !== 's') return;
+          e.preventDefault();
+          _setInputData(input, _dataIsoComOffset(tecla === 'h' ? 0 : -7));
+          input.dispatchEvent(new Event('change', { bubbles: true }));
+          _fecharDatepicker();
+        });
+      });
+
+      // Clica fora do painel (e fora dos campos De/Até) fecha o calendário.
+      document.addEventListener('click', function (e) {
+        const painel = document.getElementById('massaDatepickerPainel');
+        if (!painel) return;
+        if (painel.contains(e.target)) return;
+        if (e.target === filtroInicio || e.target === filtroFim) return;
+        _fecharDatepicker();
+      });
+
+      _initMassaEsquemaCombobox();
+
+      document.getElementById('massaTabImportar').addEventListener('click', function () { _switchTab('importar'); });
+      document.getElementById('massaTabHistorico').addEventListener('click', function () { _switchTab('historico'); });
+    }
+
+    return { init: init };
+  })();
+</script>

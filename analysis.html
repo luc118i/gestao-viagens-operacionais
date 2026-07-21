@@ -896,6 +896,20 @@
         _setText('sumMaiorParadaLabel', 'Maior Parada');
       }
 
+      // Excesso de parada: soma apenas o tempo além do limite em cada parada
+      var elExc = document.getElementById('sumExcessoParadaDur');
+      if (summary.totalExcessoMin > 0) {
+        _setText('sumExcessoParadaDur', _fmtMinutes(summary.totalExcessoMin));
+        _setText('sumExcessoParadaLabel', 'excedido em ' + summary.qtdParadasExcesso + (summary.qtdParadasExcesso === 1 ? ' parada' : ' paradas'));
+        if (elExc) elExc.className = 'sum-value vermelho';
+        var cardExc = document.getElementById('sumExcessoParadaCard');
+        if (cardExc) cardExc.title = 'Soma do tempo que excedeu o limite de permanência em ' + summary.qtdParadasExcesso + ' parada(s) (tempo além do previsto, não a duração total das paradas)';
+      } else {
+        _setText('sumExcessoParadaDur', '—');
+        _setText('sumExcessoParadaLabel', 'Tempo Excedido em Paradas');
+        if (elExc) elExc.className = 'sum-value';
+      }
+
       // Badges no header
       _showBadge('badgeVeiculo', true);
       _setText('badgeVeiculoNum', summary.veiculo || '—');
@@ -1005,13 +1019,14 @@
       });
 
       // Cards de resumo
-      ['sumKm', 'sumTempo', 'sumMaiorParadaDur', 'sumPlanejados', 'sumRealizados', 'sumNaoVisitados'].forEach(function(id) {
+      ['sumKm', 'sumTempo', 'sumMaiorParadaDur', 'sumExcessoParadaDur', 'sumPlanejados', 'sumRealizados', 'sumNaoVisitados'].forEach(function(id) {
         _setText(id, '—');
       });
       _setText('sumMaiorParadaLabel', 'Maior Parada');
+      _setText('sumExcessoParadaLabel', 'Tempo Excedido em Paradas');
 
       // Resets de classe dos cards
-      ['sumRealizados', 'sumNaoVisitados', 'sumMaiorParadaDur'].forEach(function(id) {
+      ['sumRealizados', 'sumNaoVisitados', 'sumMaiorParadaDur', 'sumExcessoParadaDur'].forEach(function(id) {
         var el = document.getElementById(id);
         if (el) el.className = 'sum-value';
       });

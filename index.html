@@ -100,6 +100,13 @@
             onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
             onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
           ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>Esquemas</button>
+          <button
+            id="btnAnaliseMassa"
+            title="Importar PDFs de viagens anteriores para análise histórica por trecho"
+            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
+          ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Análise em Massa</button>
           <span id="badgeVeiculo" class="badge" style="display: none">
             <span id="badgeVeiculoNum">—</span>
           </span>
@@ -256,6 +263,10 @@
           <div class="sum-card" id="sumMaiorParadaCard" title="">
             <div class="sum-value" id="sumMaiorParadaDur">—</div>
             <div class="sum-label" id="sumMaiorParadaLabel">Maior Parada</div>
+          </div>
+          <div class="sum-card" id="sumExcessoParadaCard" title="">
+            <div class="sum-value" id="sumExcessoParadaDur">—</div>
+            <div class="sum-label" id="sumExcessoParadaLabel">Tempo Excedido em Paradas</div>
           </div>
         </div>
       </section>
@@ -571,7 +582,10 @@
     </div>
 
     <!-- Modal: Aviso de alertas pendentes antes de gerar o relatório -->
-    <div class="modal-overlay" id="modalConfirmarPendencias" style="z-index: 1200;">
+    <!-- z-index 1250: precisa ficar acima da tela cheia .report-screen
+         (z-index 1200 — Gerar Relatório/Análise em Massa), senão esse
+         aviso abre invisível atrás dela e trava o fluxo de gerar relatório. -->
+    <div class="modal-overlay" id="modalConfirmarPendencias" style="z-index: 1250;">
       <div class="modal">
         <div class="modal-header">
           <span class="modal-title" style="display:flex;align-items:center;gap:8px;"><span style="font-size:18px;">⚠️</span> Alertas pendentes</span>
@@ -801,5 +815,6 @@
     <?!= include('map') ?> <?!= include('analysis') ?> <?!= include('ui') ?>
     <?!= include('app') ?>
     <?!= include('diagnostico') ?>
+    <?!= include('massa') ?>
   </body>
 </html>

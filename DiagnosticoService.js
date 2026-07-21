@@ -112,10 +112,21 @@ var DiagnosticoService = (() => {
       return c.visitado && c.ponto_realizado && c.horario_comercial;
     });
 
+    // O primeiro ponto do esquema (comparacao[0], preservado na ordem
+    // original — não no subconjunto filtrado) é a origem/partida da linha:
+    // o horário comercial ali é de SAÍDA, não de chegada. Comparar com a
+    // "entrada" (chegada) mistura conceitos e gera um desvio artificial —
+    // ex: chegar 40min "adiantado" a um horário de PARTIDA, quando na
+    // prática o ônibus sai bem próximo do horário certo (o que de fato
+    // importa na origem).
+    const idOrigem = comparacao.length ? comparacao[0].id_ponto : null;
+
     const items = [];
     let prevAtraso = null;
     visitadosComHorario.forEach(function (c) {
-      const realHHMM = _hhmm(c.ponto_realizado.entrada);
+      const ehOrigem = idOrigem != null && String(c.id_ponto) === String(idOrigem);
+      const horarioRefBruto = ehOrigem ? c.ponto_realizado.saida : c.ponto_realizado.entrada;
+      const realHHMM = _hhmm(horarioRefBruto);
       const atraso = _diffMin(realHHMM, c.horario_comercial);
       if (atraso === null) return;
 
@@ -618,6 +629,11 @@ var DiagnosticoService = (() => {
     return { system: system, user: L.join('\n') };
   }
 
-  return { gerarDiagnostico: gerarDiagnostico, explicarDivergenciaComercial: explicarDivergenciaComercial };
+  // buildContext exposto: é a camada 100% determinística (sem chamada de IA)
+  // — reaproveitada pela Análise em Massa pra montar a "Linha do Tempo do
+  // Atraso"/trechos críticos/paradas críticas a partir de um CSV importado,
+  // sem precisar do parecer narrativo (que custa uma chamada à IA por
+  // arquivo — desnecessário pra um import em lote de histórico).
+  return { gerarDiagnostico: gerarDiagnostico, explicarDivergenciaComercial: explicarDivergenciaComercial, buildContext: _buildContext };
 
 })();
