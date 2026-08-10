@@ -71,6 +71,14 @@
 
         <div class="header-right">
           <button
+            id="btnUsuarioAtual"
+            title="Conta usada como 'Analisado por' nos relatórios e ocorrências gerados por aqui"
+            onclick="AppModule.abrirModalUsuario()"
+            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
+            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
+            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
+          >👤 <span id="btnUsuarioAtualNome">Entrar</span></button>
+          <button
             id="btnRelatorio"
             disabled
             style="display:none; padding:5px 14px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
@@ -595,6 +603,54 @@
         <div class="modal-footer">
           <button class="btn btn-ghost" type="button" onclick="AppModule.fecharModalPendencias()">Revisar alertas</button>
           <button class="btn btn-primary" type="button" onclick="AppModule.confirmarGerarComPendencias()">Gerar mesmo assim</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Sua conta (login/logout) -->
+    <!-- Este web app não tem auth própria — login aqui é feito direto
+         contra o Supabase Auth, a mesma base de contas do Gerador de
+         Relatórios Operacionais (ver AppModule._authLogin em app.html).
+         Sem isso, toda ocorrência/relatório saía no mesmo nome fixo
+         (Script Property REPORT_ANALISADO_POR, fallback "LUCAS"). -->
+    <div class="modal-overlay" id="modalUsuario">
+      <div class="modal" style="width:380px;">
+        <div class="modal-header">
+          <span class="modal-title">👤 Sua conta</span>
+          <button class="modal-close" onclick="AppModule.fecharModalUsuario()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+
+        <!-- Estado: logado -->
+        <div id="usuarioLogadoBox" style="display:none">
+          <div class="form-group">
+            <label class="form-label">Logado como</label>
+            <strong style="display:block;font-size:14px;margin-top:2px" id="usuarioLogadoNome">—</strong>
+            <span style="font-size:12px;color:var(--text3)" id="usuarioLogadoEmail">—</span>
+          </div>
+          <p style="font-size:12px;color:var(--text3);margin:0 0 4px">
+            Esse é o nome usado como "Analisado por" nos relatórios e ocorrências gerados por aqui.
+          </p>
+        </div>
+
+        <!-- Estado: deslogado -->
+        <div id="usuarioLoginBox">
+          <div class="form-group">
+            <label class="form-label">E-mail</label>
+            <input type="email" id="usuarioLoginEmail" class="form-input" placeholder="voce@viacaocatedral.com.br" autocomplete="username" onkeydown="if(event.key==='Enter')document.getElementById('usuarioLoginSenha').focus()" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">Senha</label>
+            <input type="password" id="usuarioLoginSenha" class="form-input" placeholder="Sua senha do Gerador de Relatórios" autocomplete="current-password" onkeydown="if(event.key==='Enter')AppModule._authFazerLogin()" />
+          </div>
+          <p style="font-size:12px;color:var(--text3);margin:0">
+            Use a mesma conta do Gerador de Relatórios Operacionais.
+          </p>
+        </div>
+
+        <div class="modal-footer" style="flex-wrap:wrap">
+          <span class="modal-status" id="usuarioStatus"></span>
+          <button class="btn btn-ghost" id="usuarioBtnSecundario" onclick="AppModule.fecharModalUsuario()">Cancelar</button>
+          <button class="btn btn-primary" id="usuarioBtnPrimario" onclick="AppModule._authFazerLogin()">Entrar</button>
         </div>
       </div>
     </div>

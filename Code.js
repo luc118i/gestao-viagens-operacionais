@@ -226,6 +226,250 @@ function gerarPdfsEsquemas(items) {
 }
 
 /**
+ * Gera o xlsx do horário do esquema no formato visual padrão KANDANGO:
+ * cabeçalho navy (linhas 2–5) com KPIs no painel lateral direito (cols F/G),
+ * tabela com faixas zebradas branco/azul-claro e rodapé informativo.
+ *
+ * Layout idêntico ao modelo exportado pelo sistema (arquivo de referência):
+ *   L2      : valores grandes de distância (F) e tempo em movimento (G)
+ *   L3      : A3:E3 → título da rota | F3 rótulo "DISTÂNCIA" | G3 "TEMPO EM MOVIMENTO"
+ *   L4      : A4:B4 → horário + sentido | F4 valor paradas | G4 valor total
+ *   L5      : A5:B5 → código | F5 rótulo "PARADAS" | G5 "TEMPO TOTAL"
+ *   L6      : spacer
+ *   L8      : header da tabela (B=Cidade, C=Chegada, D=Parada, E=Saída,
+ *             F=Tempo até aqui, G=Dif.)
+ *   L9..n   : linhas de dados alternando branco / #E8F0FE
+ *   Rodapé  : geradoEm · tipo · velocidade · fonte  +  assinatura
+ *
+ * @param {Object} d  payload montado no cliente (_montarDadosExportacaoExcel):
+ *   { titulo, subtitulo, meta:[string], kpis:[{valor,label}],
+ *     colunas:[{key,label}], linhas:[{cidade, preDep?, valores:{}}],
+ *     rodape:{geradoEm, info?}, filename }
+ * @returns {{ok:boolean, filename?:string, b64?:string, erro?:string}}
+ */
+function gerarExcelEsquemaXlsx(d) {
+  var ss = null;
+  try {
+    if (!d || !d.linhas || !d.linhas.length) throw new Error('Sem dados para exportar.');
+
+    // ── Paleta ──────────────────────────────────────────────────────────
+    var C_NAVY     = '#1F4E79';   // fundo do cabeçalho + cor dos valores KPI
+    var C_BLUE_HDR = '#5B95F9';   // fundo do header da tabela
+    var C_BLUE_EVN = '#E8F0FE';   // linhas pares da tabela
+    var C_WHITE    = '#FFFFFF';
+    var C_GRAY     = '#5A6070';   // rótulos e rodapé
+    var C_SUBTITLE = '#CFE0F5';   // texto de subtítulo (horário + sentido)
+    var C_CODE     = '#B9CEE8';   // texto do código do esquema
+
+    ss = SpreadsheetApp.create('tmp_xlsx_' + Utilities.getUuid());
+    var sh = ss.getSheets()[0];
+    sh.setName('Horário');
+    sh.setHiddenGridlines(true);
+
+    // ── Colunas dinâmicas — respeita exatamente o que veio selecionado do
+    // modal (d.colunas), na ordem escolhida. "Cidade" sempre vem primeiro. ──
+    var colunas = d.colunas || [];
+    var numDataCols = 1 + colunas.length;             // cidade + selecionadas
+    var dataStartCol = 2;                              // B
+    var dataEndCol   = dataStartCol + numDataCols - 1; // última coluna de dado
+    // KPI (distância/tempo/paradas/total) ocupa as duas últimas colunas da
+    // tabela, como no layout original — se a tabela for muito estreita
+    // (poucas colunas selecionadas), garante um mínimo de 2 colunas (C,D)
+    // pra abrigar os KPIs sem sobrepor o spacer/cidade.
+    var kpiCol1 = Math.max(dataStartCol + 1, dataEndCol - 1);
+    var kpiCol2 = kpiCol1 + 1;
+    var lastContentCol = Math.max(dataEndCol, kpiCol2);
+    var borderCol       = lastContentCol + 1;
+    var titleEndCol      = Math.max(dataStartCol, kpiCol1 - 1);
+
+    var COL_WIDTH = {
+      chegada: 75, chegadaHora: 75, saida: 65, saidaHora: 65,
+      parada: 68, desl: 165, comercial: 90, dif: 130
+    };
+
+    // ── Larguras de coluna (px) ──────────────────────────────────────────
+    sh.setColumnWidth(1,  90);   // A: área de merge / spacer lateral
+    sh.setColumnWidth(2, 280);   // B: cidade
+    colunas.forEach(function(col, i) {
+      sh.setColumnWidth(dataStartCol + 1 + i, COL_WIDTH[col.key] || 90);
+    });
+    sh.setColumnWidth(kpiCol1, 165);   // KPI distância (165 px para caber "DISTÂNCIA")
+    sh.setColumnWidth(kpiCol2, 250);   // KPI tempo em movimento
+    sh.setColumnWidth(borderCol, 15);  // borda direita
+
+    // ── Alturas de linha (px) ────────────────────────────────────────────
+    sh.setRowHeight(1, 12);    // spacer topo
+    sh.setRowHeight(2, 22);    // linha KPI valores — distância/tempo mov.
+    sh.setRowHeight(3, 22);    // linha título + rótulos KPI linha 1
+    sh.setRowHeight(4, 22);    // linha subtítulo + KPI paradas/total
+    sh.setRowHeight(5, 22);    // linha código + rótulos KPI linha 2
+    sh.setRowHeight(6, 12);    // spacer entre cabeçalho e tabela
+
+    // ── Extração dos KPIs ────────────────────────────────────────────────
+    // Ordem esperada: [0]=Distância, [1]=Tempo em mov., [2]=Paradas, [3]=Total
+    var kpis = d.kpis || [];
+    function kpiVal(i) { return kpis[i] ? String(kpis[i].valor || '') : ''; }
+    function kpiLbl(i) { return kpis[i] ? String(kpis[i].label || '').toUpperCase() : ''; }
+
+    // ── LINHA 2 — valores grandes: distância e tempo em movimento ────────
+    sh.getRange(2, kpiCol1)
+      .setValue(kpiVal(0)).setFontSize(15).setFontWeight('bold')
+      .setFontColor(C_NAVY).setBackground(C_WHITE).setFontFamily('Inter')
+      .setVerticalAlignment('middle');
+    sh.getRange(2, kpiCol2)
+      .setValue(kpiVal(1)).setFontSize(15).setFontWeight('bold')
+      .setFontColor(C_NAVY).setBackground(C_WHITE).setFontFamily('Inter')
+      .setVerticalAlignment('middle');
+
+    // ── LINHA 3 — título da rota + rótulos KPI ────────────────────────────
+    sh.getRange(3, 1, 1, titleEndCol).merge()
+      .setValue(d.titulo || '')
+      .setFontSize(16).setFontWeight('bold').setFontColor(C_WHITE)
+      .setBackground(C_NAVY).setHorizontalAlignment('center')
+      .setVerticalAlignment('middle').setFontFamily('Inter');
+    sh.getRange(3, kpiCol1)
+      .setValue(kpiLbl(0) || 'DISTÂNCIA')
+      .setFontSize(8).setFontWeight('bold').setFontColor(C_GRAY)
+      .setBackground(C_WHITE).setFontFamily('Inter').setVerticalAlignment('middle');
+    sh.getRange(3, kpiCol2)
+      .setValue(kpiLbl(1) || 'TEMPO EM MOVIMENTO')
+      .setFontSize(8).setFontWeight('bold').setFontColor(C_GRAY)
+      .setBackground(C_WHITE).setFontFamily('Inter').setVerticalAlignment('middle');
+
+    // ── LINHA 4 — subtítulo (A:B) + valores KPI paradas/total ────────────
+    sh.getRange('A4:B4').merge()
+      .setValue(d.subtitulo || '')
+      .setFontSize(11).setFontColor(C_SUBTITLE)
+      .setBackground(C_NAVY).setHorizontalAlignment('center')
+      .setVerticalAlignment('middle').setFontFamily('Inter');
+    if (kpiCol1 > 3) sh.getRange(4, 3, 1, kpiCol1 - 3).setBackground(C_NAVY);   // continuação do fundo navy
+    sh.getRange(4, kpiCol1)
+      .setValue(kpiVal(2)).setFontSize(15).setFontWeight('bold')
+      .setFontColor(C_NAVY).setBackground(C_WHITE).setFontFamily('Inter')
+      .setVerticalAlignment('middle');
+    sh.getRange(4, kpiCol2)
+      .setValue(kpiVal(3)).setFontSize(15).setFontWeight('bold')
+      .setFontColor(C_NAVY).setBackground(C_WHITE).setFontFamily('Inter')
+      .setVerticalAlignment('middle');
+
+    // ── LINHA 5 — código (A:B) + rótulos KPI ──────────────────────────────
+    var metaTxt = (d.meta && d.meta.length) ? String(d.meta[0] || '') : '';
+    sh.getRange('A5:B5').merge()
+      .setValue(metaTxt)
+      .setFontSize(9).setFontColor(C_CODE)
+      .setBackground(C_NAVY).setHorizontalAlignment('center')
+      .setVerticalAlignment('middle').setFontFamily('Inter');
+    if (kpiCol1 > 3) sh.getRange(5, 3, 1, kpiCol1 - 3).setBackground(C_NAVY);   // continuação do fundo navy
+    sh.getRange(5, kpiCol1)
+      .setValue(kpiLbl(2) || 'PARADAS')
+      .setFontSize(8).setFontWeight('bold').setFontColor(C_GRAY)
+      .setBackground(C_WHITE).setFontFamily('Inter').setVerticalAlignment('middle');
+    sh.getRange(5, kpiCol2)
+      .setValue(kpiLbl(3) || 'TEMPO TOTAL')
+      .setFontSize(8).setFontWeight('bold').setFontColor(C_GRAY)
+      .setBackground(C_WHITE).setFontFamily('Inter').setVerticalAlignment('middle');
+
+    // ── LINHA 8 — header da tabela ─────────────────────────────────────────
+    // Cidade(B) + uma coluna por item selecionado em d.colunas, na ordem/label
+    // que vieram do modal (chegada/parada/saída/comercial/desl/dif e as
+    // colunas extras do formato "Ambos").
+    var hdrs = ['Cidade'].concat(colunas.map(function(col) { return col.label; }));
+    sh.setRowHeight(8, 20);
+    sh.getRange(8, dataStartCol, 1, numDataCols)
+      .setValues([hdrs])
+      .setBackground(C_BLUE_HDR).setFontSize(10).setFontFamily('Inter')
+      .setVerticalAlignment('middle').setFontWeight('normal');
+    sh.getRange(8, dataStartCol).setFontWeight('bold');
+    if (numDataCols > 1) sh.getRange(8, dataStartCol + 1, 1, numDataCols - 1).setHorizontalAlignment('center');
+
+    // ── LINHAS DE DADOS (a partir da linha 9) ─────────────────────────────
+    var FIRST_DATA     = 9;
+    var filteredLinhas = (d.linhas || []).filter(function(l) { return !l.preDep; });
+    var lastDataRow    = FIRST_DATA + filteredLinhas.length - 1;
+
+    if (filteredLinhas.length) {
+      var dataMatrix = filteredLinhas.map(function(linha) {
+        var v = linha.valores || {};
+        var row = [String(linha.cidade || '')];
+        colunas.forEach(function(col) {
+          row.push(String(v[col.key] !== undefined ? v[col.key] : '—'));
+        });
+        return row;
+      });
+
+      sh.setRowHeights(FIRST_DATA, filteredLinhas.length, 20);
+      sh.getRange(FIRST_DATA, dataStartCol, filteredLinhas.length, numDataCols)
+        .setValues(dataMatrix).setFontSize(10).setFontFamily('Inter')
+        .setVerticalAlignment('middle').setWrap(false);
+
+      // Cidade em negrito; demais colunas centralizadas
+      sh.getRange(FIRST_DATA, dataStartCol, filteredLinhas.length, 1).setFontWeight('bold');
+      if (numDataCols > 1) {
+        sh.getRange(FIRST_DATA, dataStartCol + 1, filteredLinhas.length, numDataCols - 1).setHorizontalAlignment('center');
+      }
+
+      // Faixas zebradas: setBackgrounds() em chamada única (loop individual
+      // pode ser descartado pelo GAS ao exportar; matriz garante atomicidade).
+      // ímpar (i=0,2,4…) → branco · par (i=1,3,5…) → #E8F0FE
+      var bgMatrix = [];
+      for (var ri = 0; ri < filteredLinhas.length; ri++) {
+        var rowColor = (ri % 2 === 0) ? C_WHITE : C_BLUE_EVN;
+        var bgRow = [];
+        for (var ci = 0; ci < numDataCols; ci++) bgRow.push(rowColor);
+        bgMatrix.push(bgRow);
+      }
+      sh.getRange(FIRST_DATA, dataStartCol, filteredLinhas.length, numDataCols).setBackgrounds(bgMatrix);
+
+      // Merge coluna A: engloba linha 8 (header) + todas as linhas de dados
+      sh.getRange(8, 1, filteredLinhas.length + 1, 1).merge().setBackground(C_WHITE);
+    }
+
+    // ── RODAPÉ ──────────────────────────────────────────────────────────
+    var footerSpace = lastDataRow + 1;
+    var footerRow1  = lastDataRow + 2;
+    var footerRow2  = lastDataRow + 3;
+    sh.setRowHeight(footerSpace, 20);
+    sh.setRowHeight(footerRow1, 19);
+    sh.setRowHeight(footerRow2, 19);
+
+    var geradoEm    = (d.rodape && d.rodape.geradoEm) ? d.rodape.geradoEm : '';
+    var infoTecnica = (d.rodape && d.rodape.info)     ? d.rodape.info     : '';
+    var rodapeLn1   = 'Gerado em: ' + geradoEm + (infoTecnica ? '   ·   ' + infoTecnica : '');
+    var rodapeLn2   = 'Sistema Gestão de Esquemas · KANDANGO TRANSPORTE E TURISMO LTDA';
+    var footerSpan  = lastContentCol - dataStartCol + 1;
+
+    sh.getRange(footerRow1, dataStartCol, 1, footerSpan).merge()
+      .setValue(rodapeLn1).setFontSize(9).setFontColor(C_GRAY).setFontFamily('Inter');
+    sh.getRange(footerRow2, dataStartCol, 1, footerSpan).merge()
+      .setValue(rodapeLn2).setFontSize(9).setFontColor(C_GRAY).setFontFamily('Inter');
+
+    SpreadsheetApp.flush();
+
+    // ── Exporta como .xlsx e descarta a planilha temporária ──────────────
+    var token = ScriptApp.getOAuthToken();
+    var url   = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format=xlsx';
+    var resp  = UrlFetchApp.fetch(url, {
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true
+    });
+    if (resp.getResponseCode() !== 200)
+      throw new Error('Falha ao exportar (HTTP ' + resp.getResponseCode() + ')');
+
+    var b64      = Utilities.base64Encode(resp.getBlob().getBytes());
+    var filename = String(d.filename || 'horario').replace(/[\\/:*?"<>|]/g, '-');
+    if (!/\.xlsx$/i.test(filename)) filename += '.xlsx';
+
+    return { ok: true, filename: filename, b64: b64 };
+
+  } catch (e) {
+    Logger.log('[gerarExcelEsquemaXlsx] ' + (e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  } finally {
+    if (ss) { try { DriveApp.getFileById(ss.getId()).setTrashed(true); } catch (eT) {} }
+  }
+}
+
+/**
  * Substitui toda a sequência de pontos de um esquema na aba ESQUEMA_PONTOS.
  * Apaga as linhas existentes do esquema e reinsere com ORDEM 1,2,3...
  * @param {string} idEsquema
@@ -1271,6 +1515,82 @@ function atualizarDistanciaCache(a, b, km) {
     return { ok: true };
   } catch (e) {
     Logger.log('[atualizarDistanciaCache] ' + (e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Sobrescreve em lote o km (e tipo_via) de vários pares na aba DISTANCIAS —
+ * cria os pares que não existirem. Usado pelo botão "Reiniciar tempo de
+ * deslocamento" do Gestão de Esquemas, que recalcula todos os trechos de um
+ * esquema de uma vez via OSRM e substitui o cache salvo.
+ * @param {Array<{a:string,b:string,km:number,tipoVia?:string}>} pairKms
+ * @returns {{ok:boolean, atualizados?:number, erro?:string}}
+ */
+function atualizarDistanciasCacheEmLote(pairKms) {
+  try {
+    if (!pairKms || !pairKms.length) return { ok: false, erro: 'Nada para atualizar.' };
+    var ss    = SpreadsheetApp.getActiveSpreadsheet();
+    var sheet = ss.getSheetByName('DISTANCIAS');
+    if (!sheet) {
+      sheet = ss.insertSheet('DISTANCIAS');
+      sheet.getRange(1, 1, 1, 4).setValues([['codigo_ponto_A', 'codigo_ponto_B', 'km', 'tipo_via']]);
+    }
+
+    // Garante que a coluna tipo_via existe e descobre sua posição
+    var lastCol = sheet.getLastColumn();
+    var tvCol = -1;
+    if (lastCol >= 1) {
+      var headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+      for (var j = 0; j < headers.length; j++) {
+        if (String(headers[j]).trim().toLowerCase() === 'tipo_via') { tvCol = j + 1; break; }
+      }
+    }
+    if (tvCol === -1) {
+      tvCol = lastCol + 1;
+      sheet.getRange(1, tvCol).setValue('tipo_via');
+    }
+
+    var lastRow = sheet.getLastRow();
+    var existingMap = {}; // key -> rowIdx (0-based, sem header)
+    if (lastRow >= 2) {
+      var data = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      data.forEach(function(row, idx) {
+        existingMap[String(row[0]).trim() + ':' + String(row[1]).trim()] = idx;
+      });
+    }
+
+    var novasLinhas = [], novasVias = [], count = 0;
+    pairKms.forEach(function(pair) {
+      if (!pair.a || !pair.b) return;
+      var km = parseFloat(pair.km);
+      if (!(km > 0)) return;
+      var kmArred = Math.round(km * 100) / 100;
+      var norm    = _normPair_(pair.a, pair.b);
+      var key     = norm[0] + ':' + norm[1];
+      var via     = pair.tipoVia || 'BR';
+
+      if (existingMap[key] !== undefined && existingMap[key] !== -1) {
+        var row = existingMap[key] + 2;
+        sheet.getRange(row, 3).setValue(kmArred);
+        sheet.getRange(row, tvCol).setValue(via);
+      } else if (existingMap[key] === undefined) {
+        novasLinhas.push([norm[0], norm[1], kmArred]);
+        novasVias.push([via]);
+        existingMap[key] = -1; // evita duplicata no mesmo lote (linha ainda não escrita)
+      }
+      count++;
+    });
+
+    if (novasLinhas.length) {
+      var startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, novasLinhas.length, 3).setValues(novasLinhas);
+      sheet.getRange(startRow, tvCol, novasVias.length, 1).setValues(novasVias);
+    }
+
+    return { ok: true, atualizados: count };
+  } catch (e) {
+    Logger.log('[atualizarDistanciasCacheEmLote] ' + (e.message || e));
     return { ok: false, erro: String(e.message || e) };
   }
 }

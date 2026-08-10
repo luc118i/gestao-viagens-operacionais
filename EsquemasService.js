@@ -7,6 +7,7 @@
 var EsquemasService = (() => {
 
   var CACHE_KEY_ESQUEMAS = 'esquemas_ativos';
+  var CACHE_KEY_PONTOS = 'esquema_pontos_todos';
   var CACHE_TTL = 300; // 5 minutos
 
   // ============================================================
@@ -49,7 +50,7 @@ var EsquemasService = (() => {
    */
   function getPontosDoEsquema(idEsquema) {
     if (!idEsquema) return [];
-    var todos = _lerEsquemaPontos();
+    var todos = _getEsquemaPontosCached();
     var idStr = String(idEsquema).trim();
     var filtrados = todos.filter(function(p) {
       return String(p.id_esquema).trim() === idStr;
@@ -68,7 +69,7 @@ var EsquemasService = (() => {
    * @returns {Object<string,{partida:Object, fim:Object}>}
    */
   function getTerminaisPorEsquema() {
-    var todos = _lerEsquemaPontos();
+    var todos = _getEsquemaPontosCached();
     var byEsq = {};
     todos.forEach(function(p) {
       var id = String(p.id_esquema).trim();
@@ -116,7 +117,7 @@ var EsquemasService = (() => {
    * @returns {Object<string, Array>}
    */
   function getPontosTodosEsquemas() {
-    var todos = _lerEsquemaPontos();
+    var todos = _getEsquemaPontosCached();
     var by = {};
     todos.forEach(function(p) {
       var id = String(p.id_esquema).trim();
@@ -142,6 +143,11 @@ var EsquemasService = (() => {
     try {
       var cache = CacheService.getScriptCache();
       cache.remove(CACHE_KEY_ESQUEMAS);
+      var count = cache.get(CACHE_KEY_PONTOS + '_n');
+      if (count) {
+        cache.removeAll(_chunkKeys(Number(count)));
+        cache.remove(CACHE_KEY_PONTOS + '_n');
+      }
     } catch (e) {
       // Silencioso
     }
@@ -234,6 +240,64 @@ var EsquemasService = (() => {
     }
 
     return esquemas;
+  }
+
+  var CACHE_CHUNK_SIZE = 90000; // margem sob o limite de 100KB por item do CacheService
+
+  /**
+   * Igual a getEsquemas(): serve _lerEsquemaPontos() com cache (TTL 300s).
+   * ESQUEMA_PONTOS é a aba mais pesada (todos os pontos de todos os
+   * esquemas) e era relida do zero em toda chamada de getLinhas/getRoteiro,
+   * o que deixava a API "Ver esquema" lenta (6-12s) mesmo sem estar caída —
+   * o front então estourava o timeout de 15s e mostrava "falha de conexão".
+   *
+   * O JSON completo passa fácil do limite de 100KB por item do CacheService
+   * (é bem maior que os ~50KB só dos nomes que o getLinhas devolve), então
+   * um cache.put() direto falhava sempre e nunca acelerava nada. Por isso
+   * o payload é dividido em pedaços (chunks) armazenados sob chaves
+   * numeradas, com uma chave-manifesto guardando quantos pedaços existem.
+   */
+  function _getEsquemaPontosCached() {
+    try {
+      var cache = CacheService.getScriptCache();
+      var count = cache.get(CACHE_KEY_PONTOS + '_n');
+      if (count) {
+        var parts = cache.getAll(_chunkKeys(Number(count)));
+        var chunks = [];
+        for (var i = 0; i < Number(count); i++) {
+          var key = CACHE_KEY_PONTOS + '_' + i;
+          if (!Object.prototype.hasOwnProperty.call(parts, key)) { chunks = null; break; } // cache parcialmente expirado
+          chunks.push(parts[key]);
+        }
+        if (chunks) return JSON.parse(chunks.join(''));
+      }
+    } catch (e) {
+      // Cache indisponível/corrompido — segue sem cache
+    }
+
+    var pontos = _lerEsquemaPontos();
+
+    try {
+      var json = JSON.stringify(pontos);
+      var chunkCount = Math.ceil(json.length / CACHE_CHUNK_SIZE) || 1;
+      var toStore = {};
+      for (var c = 0; c < chunkCount; c++) {
+        toStore[CACHE_KEY_PONTOS + '_' + c] = json.substr(c * CACHE_CHUNK_SIZE, CACHE_CHUNK_SIZE);
+      }
+      var cache2 = CacheService.getScriptCache();
+      cache2.putAll(toStore, CACHE_TTL);
+      cache2.put(CACHE_KEY_PONTOS + '_n', String(chunkCount), CACHE_TTL);
+    } catch (e) {
+      // Falha ao gravar cache — não é crítico, só perde o ganho de velocidade
+    }
+
+    return pontos;
+  }
+
+  function _chunkKeys(count) {
+    var keys = [];
+    for (var i = 0; i < count; i++) keys.push(CACHE_KEY_PONTOS + '_' + i);
+    return keys;
   }
 
   /**

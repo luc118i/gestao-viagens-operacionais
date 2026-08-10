@@ -38,12 +38,234 @@
     }
 
     // ============================================================
+    //  AUTENTICAÇÃO — mesma conta do Gerador de Relatórios Operacionais
+    // ============================================================
+    // Este web app não tem backend de auth próprio (executeAs:
+    // USER_DEPLOYING / access: ANYONE_ANONYMOUS — ver appsscript.json),
+    // então Session.getActiveUser() do Apps Script não dá pra confiar
+    // pra saber quem está gerando o relatório. As ocorrências
+    // (ANALISE_OP, DESCUMP_OP_PARADA_FORA, EXCESSO_PERMANENCIA) sempre
+    // saíam no mesmo nome fixo (Script Property REPORT_ANALISADO_POR,
+    // fallback "LUCAS" — ver ReportService.js). Em vez disso, login
+    // aqui é feito direto contra o Supabase Auth (GoTrue) do projeto
+    // usado pelo Gerador de Relatórios — mesma URL/anon key já
+    // embutidas no bundle daquele app (a anon key é pública por
+    // design; só a senha de cada conta autentica de verdade). O nome
+    // resolvido (tabela "profiles") vai em params.analisadoPor pra
+    // cada chamada a gerarRelatorio/enviarParadasFora/enviarExcessoPermanencia,
+    // e o servidor (ReportService.js) passa a preferir esse valor ao
+    // invés do fallback fixo.
+    const SUPABASE_URL = "https://rolcprjrwxmdibzajvri.supabase.co";
+    const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJvbGNwcmpyd3htZGliemFqdnJpIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzAyODY0ODIsImV4cCI6MjA4NTg2MjQ4Mn0.VSoKSDQOQHXR6bWHzxetfRwF50KG4I22K1hdcBpDP68";
+    const AUTH_STORAGE_KEY = "ao_auth_sessao"; // { access_token, refresh_token, expires_at, email, nome }
+
+    let _authSession = null;
+
+    function _authCarregarSessao() {
+      try {
+        var raw = localStorage.getItem(AUTH_STORAGE_KEY);
+        _authSession = raw ? JSON.parse(raw) : null;
+      } catch (e) {
+        _authSession = null;
+      }
+      return _authSession;
+    }
+
+    function _authSalvarSessao(sessao) {
+      _authSession = sessao;
+      try {
+        if (sessao) localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(sessao));
+        else localStorage.removeItem(AUTH_STORAGE_KEY);
+      } catch (e) {
+        // localStorage indisponível (modo privado, etc.) — segue sem persistir
+      }
+      _atualizarBotaoUsuarioAtual();
+    }
+
+    function _authLogado() {
+      return !!(_authSession && _authSession.access_token);
+    }
+
+    // Nome usado em params.analisadoPor — null se ninguém autenticado
+    // ainda (bloqueia a geração, ver guards em _gerarComCaptura etc.).
+    function _obterUsuarioAtual() {
+      return (_authSession && (_authSession.nome || _authSession.email)) || null;
+    }
+
+    // Busca o nome de exibição na tabela "profiles" — mesma regra do
+    // AuthContext.tsx do Gerador de Relatórios: profiles.nome, com
+    // fallback pro display_name/metadata ou pro que vier antes do @
+    // no e-mail.
+    function _authBuscarNomePerfil(userId, accessToken) {
+      return fetch(SUPABASE_URL + "/rest/v1/profiles?id=eq." + userId + "&select=nome", {
+        headers: { apikey: SUPABASE_ANON_KEY, Authorization: "Bearer " + accessToken },
+      })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (rows) { return (rows && rows[0] && String(rows[0].nome || "").trim()) || ""; })
+        .catch(function () { return ""; });
+    }
+
+    function _authMontarSessaoDoToken(tokenJson) {
+      var user = tokenJson.user || {};
+      var meta = user.user_metadata || {};
+      var fallback = meta.nome || meta.display_name || meta.full_name || meta.name ||
+        (user.email || "").split("@")[0] || "Analista";
+
+      return _authBuscarNomePerfil(user.id, tokenJson.access_token).then(function (nomePerfil) {
+        return {
+          access_token: tokenJson.access_token,
+          refresh_token: tokenJson.refresh_token,
+          expires_at: tokenJson.expires_at, // epoch em segundos, já vem pronto da API
+          email: user.email || "",
+          nome: nomePerfil || fallback,
+        };
+      });
+    }
+
+    function _authLogin(email, senha) {
+      return fetch(SUPABASE_URL + "/auth/v1/token?grant_type=password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email: email.trim(), password: senha }),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, json: j }; }); })
+        .then(function (res) {
+          if (!res.ok) {
+            throw new Error((res.json && (res.json.error_description || res.json.msg)) || "E-mail ou senha inválidos.");
+          }
+          return _authMontarSessaoDoToken(res.json);
+        })
+        .then(function (sessao) {
+          _authSalvarSessao(sessao);
+          return sessao;
+        });
+    }
+
+    function _authLogout() {
+      _authSalvarSessao(null);
+    }
+
+    // Renova o access_token com o refresh_token quando ele estiver perto
+    // de expirar (ou já venceu) — evita pedir senha de novo a cada ~1h
+    // só pra gerar um relatório. Se o refresh falhar, desloga e deixa o
+    // guard em _gerarComCaptura pedir login de novo.
+    function _authGarantirTokenValido() {
+      if (!_authSession) return Promise.resolve(null);
+      var expiraEmMs = (_authSession.expires_at || 0) * 1000;
+      var folgaMs = 60 * 1000;
+      if (expiraEmMs - Date.now() > folgaMs) return Promise.resolve(_authSession);
+
+      return fetch(SUPABASE_URL + "/auth/v1/token?grant_type=refresh_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SUPABASE_ANON_KEY },
+        body: JSON.stringify({ refresh_token: _authSession.refresh_token }),
+      })
+        .then(function (r) { return r.json().then(function (j) { return { ok: r.ok, json: j }; }); })
+        .then(function (res) {
+          if (!res.ok) { _authSalvarSessao(null); return null; }
+          return _authMontarSessaoDoToken(res.json).then(function (sessao) {
+            _authSalvarSessao(sessao);
+            return sessao;
+          });
+        })
+        .catch(function () { return _authSession; });
+    }
+
+    // ── Modal "Sua conta" (navbar) — UI de login/logout ─────────────
+    function _atualizarBotaoUsuarioAtual() {
+      var el = document.getElementById("btnUsuarioAtualNome");
+      if (!el) return;
+      el.textContent = _authLogado() ? (_authSession.nome || _authSession.email) : "Entrar";
+    }
+
+    function _renderModalUsuario() {
+      var logado = _authLogado();
+      var boxLogado = document.getElementById("usuarioLogadoBox");
+      var boxLogin = document.getElementById("usuarioLoginBox");
+      if (boxLogado) boxLogado.style.display = logado ? "" : "none";
+      if (boxLogin) boxLogin.style.display = logado ? "none" : "";
+
+      var btnPrimario = document.getElementById("usuarioBtnPrimario");
+      var btnSecundario = document.getElementById("usuarioBtnSecundario");
+      if (!btnPrimario || !btnSecundario) return;
+
+      if (logado) {
+        document.getElementById("usuarioLogadoNome").textContent = _authSession.nome || "—";
+        document.getElementById("usuarioLogadoEmail").textContent = _authSession.email || "—";
+        btnPrimario.textContent = "Sair";
+        btnPrimario.onclick = _authFazerLogout;
+        btnSecundario.textContent = "Fechar";
+      } else {
+        btnPrimario.textContent = "Entrar";
+        btnPrimario.onclick = _authFazerLogin;
+        btnSecundario.textContent = "Cancelar";
+      }
+    }
+
+    function abrirModalUsuario() {
+      var status = document.getElementById("usuarioStatus");
+      if (status) status.textContent = "";
+      _renderModalUsuario();
+      var overlay = document.getElementById("modalUsuario");
+      if (overlay) overlay.classList.add("open");
+      if (!_authLogado()) {
+        var emailEl = document.getElementById("usuarioLoginEmail");
+        if (emailEl) emailEl.focus();
+      }
+    }
+
+    function fecharModalUsuario() {
+      var overlay = document.getElementById("modalUsuario");
+      if (overlay) overlay.classList.remove("open");
+    }
+
+    function _authFazerLogin() {
+      var email = document.getElementById("usuarioLoginEmail").value.trim();
+      var senha = document.getElementById("usuarioLoginSenha").value;
+      var status = document.getElementById("usuarioStatus");
+      var btn = document.getElementById("usuarioBtnPrimario");
+
+      if (!email || !senha) {
+        status.textContent = "Informe e-mail e senha.";
+        status.className = "modal-status err";
+        return;
+      }
+
+      btn.disabled = true;
+      status.textContent = "Entrando...";
+      status.className = "modal-status";
+
+      _authLogin(email, senha)
+        .then(function () {
+          status.textContent = "";
+          document.getElementById("usuarioLoginSenha").value = "";
+          _renderModalUsuario();
+          btn.disabled = false;
+        })
+        .catch(function (err) {
+          status.textContent = err.message || "Erro ao entrar.";
+          status.className = "modal-status err";
+          btn.disabled = false;
+        });
+    }
+
+    function _authFazerLogout() {
+      _authLogout();
+      _renderModalUsuario();
+    }
+
+    // ============================================================
     //  INICIALIZAÇÃO
     // ============================================================
 
     function init() {
       // Mapa inicializado sob demanda (clique em "Visualizar Mapa")
       _mapsReady = false;
+
+      // Sessão de login (conta do Gerador de Relatórios) — ver bloco
+      // de autenticação acima.
+      _authCarregarSessao();
+      _atualizarBotaoUsuarioAtual();
 
       // Módulos de UI
       UIModule.initUpload(_onFileLoaded);
@@ -2408,6 +2630,11 @@
      * Lança enviarParadasFora em background e gerencia o card de progresso.
      */
     function _launchParadasFora(params) {
+      // Redundante quando chamado após _gerarComCaptura (que já garante
+      // login), mas necessário quando chamado direto por
+      // criarParadaIrregularInline — ver guard lá.
+      if (!params.analisadoPor) params.analisadoPor = _obterUsuarioAtual();
+
       var onDone = params._onDone || null;
 
       // Conta previamente quantas paradas fora existem para exibir no card
@@ -3409,28 +3636,43 @@
      * e então chama google.script.run.gerarRelatorio.
      */
     function _gerarComCaptura(params, successFn, failureFn) {
-      // Calcula o intervalo de seq para que o servidor filtre o enrichedTrip corretamente.
-      // O mapa do PDF é gerado server-side via Google Maps Static API (mais confiável que html2canvas).
-      var tipo = params.tipo;
-      var seqA = null, seqB = null;
-
-      if (tipo === 'MOTORISTA' && params.motorista) {
-        seqA = _seqPorPonto(params.motorista.ponto_inicio);
-        seqB = _seqPorPonto(params.motorista.ponto_fim);
-      } else if (tipo === 'TRECHO' && params.idPontoA && params.idPontoB) {
-        seqA = _seqPorPonto(params.idPontoA);
-        seqB = _seqPorPonto(params.idPontoB);
+      // Exige login (conta do Gerador de Relatórios) antes de criar a
+      // ocorrência — sem isso ela saía sempre no nome fixo do Script
+      // Property REPORT_ANALISADO_POR (ver ReportService.js).
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        if (failureFn) failureFn(new Error('Entre com sua conta (botão 👤 no topo) antes de gerar o relatório.'));
+        return;
       }
+      // Garante um access_token fresco (renova via refresh_token se
+      // tiver vencido) antes de disparar — assim params.analisadoPor
+      // sai sempre com o nome de quem está de fato logado.
+      _authGarantirTokenValido().then(function () {
+        params.analisadoPor = _obterUsuarioAtual();
 
-      if (seqA !== null && seqB !== null) {
-        params.seqInicio = Math.min(seqA, seqB);
-        params.seqFim    = Math.max(seqA, seqB);
-      }
+        // Calcula o intervalo de seq para que o servidor filtre o enrichedTrip corretamente.
+        // O mapa do PDF é gerado server-side via Google Maps Static API (mais confiável que html2canvas).
+        var tipo = params.tipo;
+        var seqA = null, seqB = null;
 
-      google.script.run
-        .withSuccessHandler(successFn)
-        .withFailureHandler(failureFn)
-        .gerarRelatorio(params);
+        if (tipo === 'MOTORISTA' && params.motorista) {
+          seqA = _seqPorPonto(params.motorista.ponto_inicio);
+          seqB = _seqPorPonto(params.motorista.ponto_fim);
+        } else if (tipo === 'TRECHO' && params.idPontoA && params.idPontoB) {
+          seqA = _seqPorPonto(params.idPontoA);
+          seqB = _seqPorPonto(params.idPontoB);
+        }
+
+        if (seqA !== null && seqB !== null) {
+          params.seqInicio = Math.min(seqA, seqB);
+          params.seqFim    = Math.max(seqA, seqB);
+        }
+
+        google.script.run
+          .withSuccessHandler(successFn)
+          .withFailureHandler(failureFn)
+          .gerarRelatorio(params);
+      });
     }
 
     function _buildPdfFilename(tipo, motorista, formato) {
@@ -3770,6 +4012,11 @@
      * Chamado pelo botão inline nos cards de alerta PARADA_PROIBIDA.
      */
     function criarParadaIrregularInline(tagEl, seq) {
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        UIModule.showToast('Entre com sua conta (botão 👤 no topo) antes de gerar ocorrências.', 'error', 5000);
+        return;
+      }
       if (_vinculos.length === 0) {
         var btnVincular = document.getElementById('btnVincularMotorista');
         if (btnVincular) btnVincular.click();
@@ -3835,6 +4082,11 @@
      * Botão inline nos cards do grupo "Paradas Prolongadas".
      */
     function criarExcessoPermanenciaInline(btn, seq) {
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        UIModule.showToast('Entre com sua conta (botão 👤 no topo) antes de gerar ocorrências.', 'error', 5000);
+        return;
+      }
       if (_vinculos.length === 0) {
         var btnVincular = document.getElementById('btnVincularMotorista');
         if (btnVincular) btnVincular.click();
@@ -3883,6 +4135,7 @@
           sentido:       esqObj ? (esqObj.sentido   || '') : '',
           summary:       _analysis ? (_analysis.summary || {}) : {},
           seqAlvo:       seqNum,
+          analisadoPor:  _obterUsuarioAtual(),
         });
     }
 
@@ -3975,6 +4228,9 @@
       _novaAnalise: _onLimpar,
       _setModo,
       abrirMapa,
+      abrirModalUsuario: abrirModalUsuario,
+      fecharModalUsuario: fecharModalUsuario,
+      _authFazerLogin: _authFazerLogin,
     };
   })();
 

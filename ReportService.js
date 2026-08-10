@@ -633,9 +633,13 @@ var ReportService = (() => {
 
     return {
       typeCode: typeCode,
-      // Analista responsável pela apuração — ocorrências geradas por este
-      // sistema vão para "LUCAS" (configurável via Script Property).
-      analisadoPor: props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
+      // Analista responsável pela apuração — vem do login (Supabase, conta
+      // do Gerador de Relatórios) feito no app.html/index.html client-side;
+      // params.analisadoPor chega preenchido a partir de lá. Só cai pro
+      // Script Property/"LUCAS" se por algum motivo vier vazio (ex.: chamada
+      // direta via API sem passar por esse client).
+      analisadoPor: (params.analisadoPor && String(params.analisadoPor).trim()) ||
+        props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
       eventDate: tripDate || today,
       tripDate: tripDate || today,
       startTime: startTime || "00:00",
@@ -1786,7 +1790,10 @@ var ReportService = (() => {
 
       var occPayload = {
         typeCode:      "DESCUMP_OP_PARADA_FORA",
-        analisadoPor:  props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
+        // Vem do login (Supabase) feito no client — ver comentário em
+        // _buildOccurrencePayload.
+        analisadoPor:  (params.analisadoPor && String(params.analisadoPor).trim()) ||
+          props.getProperty("REPORT_ANALISADO_POR") || "LUCAS",
         eventDate:     dateStr,
         tripDate:      dateStr,
         startTime:     startTime,
@@ -1951,7 +1958,10 @@ var ReportService = (() => {
     var vehicleNumber = String(summary.veiculo || "—").trim();
     var esquemaHtml   = _buildEsquemaHtml(esquemaPontos, ctx.matchedLineName, ctx.matchedTripTime);
     var hasMot        = !!(motorista.nome || motorista.matricula);
-    var analisadoPor  = props.getProperty("REPORT_ANALISADO_POR") || "LUCAS";
+    // Vem do login (Supabase) feito no client — ver comentário em
+    // _buildOccurrencePayload.
+    var analisadoPor  = (params.analisadoPor && String(params.analisadoPor).trim()) ||
+      props.getProperty("REPORT_ANALISADO_POR") || "LUCAS";
 
     var results = [];
     alvos.forEach(function (pf) {

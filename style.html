@@ -1883,6 +1883,17 @@
     flex: 1;
   }
 
+  /* Mensagem de status inline em modais (ex.: erro de login) */
+  .modal-status {
+    font-size: 11px;
+    color: var(--text3);
+    flex: 0 0 100%;
+    margin-bottom: 4px;
+  }
+  .modal-status.err {
+    color: var(--vermelho);
+  }
+
   /* ============================================================
      TELA "GERAR RELATÓRIO" (full-screen, substitui o modal)
      ============================================================ */

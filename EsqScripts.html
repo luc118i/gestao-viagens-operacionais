@@ -28,9 +28,10 @@ var _pendingSelectIdx = null;
 var _activeHorRow    = null;
 var _pdfCols     = { chegada:true, parada:true, saida:true, desl:true, comercial:true, dif:true };
 var _pdfMode     = 'normal';
+var _pdfFileType = 'pdf';   // 'pdf' | 'excel'
 var _pdfTitle    = '';
 var _pdfSubtitle = '';
-var _pdfPersonConfig = { formato: 'hhmm', pontos: null }; // pontos: null = todos; { idPonto: bool } = seleção manual
+var _pdfPersonConfig = { formato: 'hhmm', pontos: null }; // formato: hhmm | min | ambos; pontos: null = todos; { idPonto: bool } = seleção manual
 var _osrmLegs        = undefined;
 var _osrmSeqKey      = '';
 var _osrmGeometry    = null;
@@ -194,7 +195,14 @@ function _ms(m) {
   return ('0' + h).slice(-2) + ':' + ('0' + mm).slice(-2);
 }
 
-// Diferença entre horário comercial e chegada calculada.
+// Minuto de referência do DIF: usa a saída (chegada + tempo de parada) quando
+// disponível, senão cai pra chegada (último ponto / sem parada, saída = chegada).
+function _difRefMin(p) {
+  return p.saidaMin !== null ? p.saidaMin : p.chegadaMin;
+}
+
+// Diferença entre horário comercial e o minuto calculado (saída, ou chegada
+// quando não há saída — ver _difRefMin).
 // Usa _comercialAbsMap quando disponível para rotas multi-dia.
 function _diffMin(comVal, chegadaMin, idPonto) {
   if (idPonto !== undefined && _comercialAbsMap[idPonto] !== undefined) {
@@ -228,7 +236,14 @@ function _recomputeComercialBase(c) {
     if (!comVal) continue;
     var clock = _p(comVal);
     if (absMin === null) {
-      absMin = clock;
+      // Âncora o primeiro ponto no MESMO dia de p.chegadaMin — não no relógio
+      // cru (0-1440). Sem isso, se o cálculo já tiver avançado dias até aqui
+      // (ex.: esquema longo, ponto de partida bem antes), o mapa perde a
+      // contagem de dias e o diff final fica errado por múltiplos de 24h.
+      var dayBase = Math.floor(p.chegadaMin / 1440) * 1440;
+      absMin = dayBase + clock;
+      if      (absMin < p.chegadaMin - 720) absMin += 1440; // comercial é do dia seguinte
+      else if (absMin > p.chegadaMin + 720) absMin -= 1440; // comercial é do dia anterior
       _comercialBase = { comMin: clock, calcMin: p.chegadaMin };
     } else {
       var delta = clock - prevClock;
@@ -266,7 +281,7 @@ function _seqCoordsKey() {
     .join('|');
 }
 
-function _fetchOsrmDistances(callback) {
+function _fetchOsrmDistances(callback, force) {
   var pts = _seq.filter(function(p){ return p.lat && p.lng; });
   if (pts.length < 2) { callback(null, null, null); return; }
 
@@ -381,7 +396,9 @@ function _fetchOsrmDistances(callback) {
         // Se algum trecho tem desvio de ajuste de rota salvo, precisa chamar o
         // OSRM mesmo com cache cheio, pra buscar a geometria real do desvio.
         var temDesvio = pairs.some(function(p){ return _rotaViaCoords(p.a, p.b).length > 0; });
-        if (allHit && !temDesvio) {
+        // force=true ignora o atalho do cache e busca a geometria real mesmo
+        // com todas as distâncias já em cache (usado pelo botão "Ver traçado real").
+        if (!force && allHit && !temDesvio) {
           _osrmStatus = 'cache';
           callback(legsFromCache(cached), null, null);
         } else {
@@ -485,6 +502,7 @@ function toggleView(v) {
   var mapPh  = document.getElementById('mapPh');
   var mapLeg = document.getElementById('mapLegend');
   var mapTgl = document.getElementById('mapModeToggle');
+  var mapTrc = document.getElementById('mapTraceBtn');
   var horPan = document.getElementById('horPanel');
   var btnM   = document.getElementById('btnViewMapa');
   var btnH   = document.getElementById('btnViewHorario');
@@ -494,6 +512,7 @@ function toggleView(v) {
     mapPh.style.display  = 'none';
     mapLeg.classList.remove('show');
     mapTgl.style.display = 'none';
+    if (mapTrc) mapTrc.style.display = 'none';
     horPan.style.display = 'flex';
     btnM.classList.remove('active'); btnH.classList.add('active');
     renderHorario();
@@ -568,7 +587,7 @@ function _calcHorario(osrmLegs) {
     var isStart = (i === startIdx);
     var isLast  = (i === _seq.length - 1);
 
-    var dist = 0, distReal = 0, tv = 0, distSource = 'none', timeSource = 'none', pisoKm = false;
+    var dist = 0, distReal = 0, tv = 0, distSource = 'none', timeSource = 'none', pisoKm = false, timeFixed = false;
     if (!preDep && !isStart) {
       var prev = _seq[i - 1];
       var legViaType = _legVia[prev.idPonto];
@@ -587,6 +606,7 @@ function _calcHorario(osrmLegs) {
         // de forçar sempre o mesmo tempo fixo.
         if (adj.min > 0) {
           tv = Math.round(adj.min);
+          timeFixed = true; // tempo digitado manualmente — independe do km/velocidade exibidos
         } else if (dist > 0) {
           pisoKm = dist < MIN_LEG_KM;
           dist = Math.max(dist, MIN_LEG_KM);
@@ -640,7 +660,8 @@ function _calcHorario(osrmLegs) {
       hasCoords:  !!(p.lat && p.lng),
       distSource: distSource,
       timeSource: timeSource,
-      pisoKm:     pisoKm
+      pisoKm:     pisoKm,
+      timeFixed:  timeFixed
     });
   });
 
@@ -709,13 +730,17 @@ function renderHorario() {
 // ============================================================
 
 /**
- * Ponto de apoio ANTT = qualquer ponto da sequência SEM horário comercial definido.
- * Independe de tipo ou nome — o critério único é a ausência de saída comercial.
+ * Ponto de apoio ANTT = ponto sem horário comercial definido (parada que não é
+ * linha regular de passageiros) OU ponto com alimentação/abastecimento marcado
+ * — mesmo que tenha horário comercial, ele oferece a estrutura de apoio (comer,
+ * abastecer) que a regra da ANTT exige, então zera a contagem de km sem apoio.
  */
 function _isApoioAntt(idx) {
   var p = _seq[idx];
   if (!p) return false;
-  return !_comercialTimes[p.idPonto];
+  if (!_comercialTimes[p.idPonto]) return true;
+  var flags = _tiposParada[p.idPonto];
+  return !!(flags && (flags.alimentacao || flags.abastecimento));
 }
 
 /** Ponto de Troca de Motorista ANTT = ponto marcado com a tag "troca" no Operação. */
@@ -1365,16 +1390,24 @@ function _drawAnttOnMap() {
   var stretchStart = startIdx;
   var accumDist   = 0;
   var hasWarnErr  = false;
+  var coordRank   = _buildCoordRank();
 
   function _flushStretch(endIdx) {
     var d = Math.round(accumDist);
     if (d <= 0) return; // sem distância (OSRM não respondeu ainda)
     var type = d > ANTT_MAX_KM ? 'error' : d > ANTT_WARN_KM ? 'warn' : 'ok';
     if (type !== 'ok') hasWarnErr = true;
-    var coords = [];
-    for (var j = stretchStart; j <= endIdx; j++) {
-      var sp = _seq[j];
-      if (sp && sp.lat && sp.lng) coords.push([+sp.lat, +sp.lng]);
+    // Segue o traçado real (curva da via) quando a geometria OSRM já chegou —
+    // senão a faixa ANTT fica em linha reta por baixo da rota curva, e as
+    // duas aparecem "conflitando" visualmente (mesmo problema já resolvido
+    // no overlay do Modo Comercial).
+    var coords = _realGeomBetween(stretchStart, endIdx, coordRank);
+    if (!coords) {
+      coords = [];
+      for (var j = stretchStart; j <= endIdx; j++) {
+        var sp = _seq[j];
+        if (sp && sp.lat && sp.lng) coords.push([+sp.lat, +sp.lng]);
+      }
     }
     if (coords.length < 2) return;
     var fromNome = (_seq[stretchStart] || {}).nomePonto || '?';
@@ -1781,16 +1814,21 @@ function _anttBadgeHtml(idx) {
   var a = _anttMap[idx];
   if (!a) return '';
   var badgeIco = a.type === 'error' ? ico('alert-triangle', 11) : a.type === 'warn' ? ico('zap', 11) : ico('info', 11);
+  // Label sempre mostra o limite (não só no warn) e escreve "sem apoio" por
+  // extenso — a abreviação "s/" sozinha não deixava claro o que está errado.
   var lbl = a.type === 'error'
-    ? badgeIco + ' ' + a.dist + 'km s/ apoio'
+    ? badgeIco + ' ' + a.dist + 'km sem apoio (máx. ' + ANTT_MAX_KM + ')'
     : a.type === 'warn'
-    ? badgeIco + ' ' + a.dist + 'km (lim. ' + ANTT_MAX_KM + ')'
-    : badgeIco + ' ' + a.dist + 'km (apoio próximo)';
+    ? badgeIco + ' ' + a.dist + 'km sem apoio (lim. ' + ANTT_MAX_KM + ')'
+    : badgeIco + ' apoios a ' + a.dist + 'km um do outro';
+  // Tooltip explica a regra e como resolver, não só o número.
   var tip = a.type === 'error'
-    ? a.dist + 'km desde ' + a.fromNome + ' — excede o limite ANTT de ' + ANTT_MAX_KM + 'km entre pontos de apoio'
+    ? 'Excede o limite ANTT: ' + a.dist + 'km rodados desde ' + a.fromNome + ' sem passar por um ponto de apoio (o máximo permitido é ' + ANTT_MAX_KM + 'km). '
+      + 'Ponto de apoio = parada sem horário comercial, ou marcada com alimentação/abastecimento. '
+      + 'Adicione um ponto de apoio neste trecho, ou marque alimentação/abastecimento em algum dos pontos existentes.'
     : a.type === 'warn'
-    ? a.dist + 'km desde ' + a.fromNome + ' — próximo ao limite ANTT (' + ANTT_MAX_KM + 'km)'
-    : 'Apenas ' + a.dist + 'km desde ' + a.fromNome + ' — pontos de apoio muito próximos';
+    ? a.dist + 'km rodados desde ' + a.fromNome + ' sem passar por um ponto de apoio — perto do limite ANTT de ' + ANTT_MAX_KM + 'km. Fique de olho: sem um apoio logo à frente, o próximo trecho pode ultrapassar o limite.'
+    : 'Apenas ' + a.dist + 'km entre este ponto de apoio e ' + a.fromNome + ' — mais próximos do que precisaria (sem problema pra ANTT, só um aviso informativo).';
   return ' <span class="antt-badge antt-' + a.type + '" title="' + esc(tip) + '">' + lbl + '</span>';
 }
 
@@ -1957,7 +1995,7 @@ function _renderHorarioWith(osrmLegs) {
               + 'onkeydown="if(event.key===\'Enter\'){event.preventDefault();_confirmComercial(' + i + ',this,true)}'
               + 'else if(event.key===\'Escape\'){this.value=\'\';unhighlightRow(' + i + ')}" />';
     }
-    var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
+    var deltaCell = p.chegadaMin !== null ? _deltaCellHtml(comVal, _difRefMin(p), _seq[i].idPonto, i) : '—';
 
     return '<tr id="horRow' + i + '"' + cls + ' onclick="selectHorRow(' + i + ')">'
       + cidadeCell
@@ -2163,8 +2201,14 @@ function _buildLegViaCell(i, c) {
   var distStr  = next.dist > 0
     ? (isApprox ? '~' : '') + next.dist.toFixed(1) + ' km'
     : '';
-  var approxMark = isApprox
+  // Tempo fixo (ajuste manual em minutos) não é "aproximado" — é digitado de
+  // propósito e ignora o km/velocidade ao lado, então usa um marcador próprio
+  // (cadeado) em vez do "~" de aproximação, pra não parecer inconsistente.
+  var approxMark = (isApprox && !next.timeFixed)
     ? '<span style="color:#bbb;font-size:9px;" title="Sem dados de rota — tempo mínimo aplicado"> ~</span>'
+    : '';
+  var fixedMark = next.timeFixed
+    ? '<span class="hor-via-fixed" title="Tempo fixo definido manualmente em Ajuste de rota — não é calculado a partir do km/velocidade ao lado.">' + ico('lock', 9) + '</span>'
     : '';
 
   // Recalcular: refaz a consulta de rota só deste trecho (ignorando o cache
@@ -2173,7 +2217,7 @@ function _buildLegViaCell(i, c) {
     ? '<button type="button" class="hor-via-recalc-btn" onclick="event.stopPropagation();_recalcularTrechoKm(' + i + ')" title="Recalcular esta distância (confere contra o cache salvo)">' + ico('refresh', 9) + '</button>'
     : '';
 
-  var tvHtml = '<span class="hor-via-time">' + _hhmm(next.tv) + approxMark + '</span>'
+  var tvHtml = '<span class="hor-via-time">' + _hhmm(next.tv) + approxMark + fixedMark + '</span>'
     + (distStr ? '<span class="hor-via-dist">' + distStr + recalcBtn + '</span>' : '');
 
   var idPt   = _seq[i].idPonto;
@@ -2300,6 +2344,192 @@ function _confirmarAtualizarKm(idA, idB, kmNovo) {
       toast('Erro ao atualizar: ' + (e.message || e), 'error');
     })
     .atualizarDistanciaCache(idA, idB, kmNovo);
+}
+
+// ── Recalcular TODOS os trechos do esquema (reinicia tempo de deslocamento) ──
+// Diferente do recálculo por trecho (que compara e pede confirmação um a um),
+// este busca a rota atualizada no OSRM para toda a sequência do esquema numa
+// única consulta e sobrescreve direto o cache salvo em DISTANCIAS — os
+// tempos de deslocamento exibidos são derivados de km/velocidade, então
+// atualizar o km já "reinicia" o tempo de cada trecho.
+function recalcularTodosTrechos() {
+  if (!_sel) { toast('Selecione um esquema primeiro.', 'error'); return; }
+  var pts = _seq.filter(function(p){ return p.lat && p.lng; });
+  if (pts.length < 2) { toast('Esquema sem pontos suficientes com coordenadas.', 'error'); return; }
+  var nTrechos = pts.length - 1;
+
+  appConfirm({
+    titulo: 'Reiniciar tempo de deslocamento',
+    mensagem: 'Isso busca o traçado atualizado no motor de rota (OSRM) para os ' + nTrechos + ' trecho(s) deste esquema e sobrescreve as distâncias salvas em cache (aba DISTANCIAS).\n\nTrechos com ajuste de rota manual não são alterados. Pode levar alguns segundos. Deseja continuar?',
+    okLabel: 'Recalcular', okLoadingLabel: 'Buscando traçado…',
+    onOk: function() { _executarRecalculoTodosTrechos(pts); }
+  });
+}
+
+function _executarRecalculoTodosTrechos(pts) {
+  var coordParts = [(+pts[0].lng).toFixed(6) + ',' + (+pts[0].lat).toFixed(6)];
+  var segCounts = [];
+  for (var i = 0; i < pts.length - 1; i++) {
+    var vias = _rotaViaCoords(pts[i].idPonto, pts[i+1].idPonto);
+    vias.forEach(function(v) { coordParts.push((+v.lng).toFixed(6) + ',' + (+v.lat).toFixed(6)); });
+    coordParts.push((+pts[i+1].lng).toFixed(6) + ',' + (+pts[i+1].lat).toFixed(6));
+    segCounts.push(1 + vias.length);
+  }
+  var coords = coordParts.join(';');
+  var url = 'https://router.project-osrm.org/route/v1/driving/' + coords
+          + '?overview=false&steps=false&annotations=false&continue_straight=false';
+
+  fetch(url)
+    .then(function(r) { return r.ok ? r.json() : Promise.reject('http'); })
+    .then(function(data) {
+      if (!data || data.code !== 'Ok' || !data.routes || !data.routes[0]) return Promise.reject('no-route');
+
+      var rawLegs = data.routes[0].legs, legs = [], idx = 0;
+      segCounts.forEach(function(cnt) {
+        var distM = 0;
+        for (var k = 0; k < cnt; k++) { var l = rawLegs[idx + k]; if (l) distM += l.distance; }
+        idx += cnt;
+        legs.push(Math.round(distM / 100) / 10);
+      });
+
+      var pares = [];
+      legs.forEach(function(km, i) {
+        // Trecho com desvio de ajuste de rota: a distância aqui é do desvio, não
+        // do par direto — não sobrescreve o cache geral de distâncias.
+        if (segCounts[i] > 1 || !(km > 0)) return;
+        var via = _legVia[pts[i].idPonto] || 'BR';
+        if (via === 'Pers') via = 'BR'; // personalizado é específico do esquema, nunca vai pro cache global
+        pares.push({ a: pts[i].idPonto, b: pts[i+1].idPonto, km: km, tipoVia: via });
+      });
+
+      if (!pares.length) { appConfirmClose(); toast('Nenhum trecho pôde ser recalculado (todos têm ajuste de rota manual).', 'error'); return; }
+
+      google.script.run
+        .withSuccessHandler(function(res) {
+          appConfirmClose();
+          if (!res || !res.ok) { toast('Erro ao atualizar cache: ' + (res && res.erro || 'falha desconhecida'), 'error'); return; }
+          toast('Tempo de deslocamento reiniciado — ' + res.atualizados + ' trecho(s) atualizado(s).', 'success', 4000);
+          _osrmSeqKey = ''; _osrmLegs = undefined; _osrmGeometry = null; _osrmLegGeoms = null;
+          if (_view === 'horario') renderHorario(); else updateMap();
+        })
+        .withFailureHandler(function(e) { appConfirmClose(); toast('Erro ao atualizar cache: ' + (e.message || e), 'error'); })
+        .atualizarDistanciasCacheEmLote(pares);
+    })
+    .catch(function() { appConfirmClose(); toast('Rota indisponível no momento — tente de novo em instantes.', 'error'); });
+}
+
+// ============================================================
+//  Calcula o tempo entre pontos com base no horário comercial: entre cada
+//  par de "âncoras" (pontos com horário comercial conhecido — incluindo a
+//  partida), busca a velocidade que faz o horário calculado bater EXATAMENTE
+//  o horário comercial (Dif. = 0). Usa o próprio motor de cálculo do app
+//  (_calcHorario) como referência a cada tentativa — em vez de reimplementar
+//  a fórmula à mão — pra não divergir de nenhuma regra especial (piso de km/
+//  tempo mínimo, ajuste de rota, etc.). Aplica a velocidade via trecho "Pers".
+// ============================================================
+function simularVelocidadeComercial() {
+  if (!_sel || !_seq.length) { toast('Selecione um esquema primeiro.', 'error'); return; }
+
+  var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c0 = _calcHorario(osrmLegs);
+  _recomputeComercialBase(c0);   // garante _comercialAbsMap sincronizado com c0
+
+  var startIdx = Math.min(_horStartIdx, c0.pontos.length - 1);
+
+  // Trechos ajustáveis: têm distância e não estão travados por ajuste manual
+  // de rota (tempo fixo). Calculado uma vez a partir do estado atual — essa
+  // condição não muda durante a busca.
+  var tunable = c0.pontos.map(function(p, i) { return i > startIdx && !p.timeFixed && p.dist > 0; });
+
+  // Âncoras: partida (sempre) + todo ponto com horário comercial conhecido,
+  // em minuto absoluto (ciente de virada de dia — mesmo valor do badge Dif.).
+  var anchorIdx = [];
+  for (var i = startIdx + 1; i < c0.pontos.length; i++) {
+    if (_comercialAbsMap[_seq[i].idPonto] !== undefined) anchorIdx.push(i);
+  }
+  if (!anchorIdx.length) { toast('Nenhum ponto com horário comercial cadastrado para calcular.', 'error'); return; }
+
+  var erroAntes = 0;
+  anchorIdx.forEach(function(i) {
+    if (c0.pontos[i].chegadaMin !== null) erroAntes += Math.abs(c0.pontos[i].chegadaMin - _comercialAbsMap[_seq[i].idPonto]);
+  });
+
+  // Faz a busca sobre uma CÓPIA de trabalho de _legVia/_legVelPers (trocando
+  // a referência global temporariamente) — assim cada tentativa usa o motor
+  // real (_calcHorario), mas nada é aplicado de verdade até o usuário
+  // confirmar. Se cancelar, os globais originais voltam intactos.
+  var legViaOrig = _legVia, legVelOrig = _legVelPers;
+  var work = { via: Object.assign({}, _legVia), vel: Object.assign({}, _legVelPers) };
+  _legVia = work.via; _legVelPers = work.vel;
+
+  var prevIdx = startIdx, nAplicados = 0, nImpossivel = 0;
+  anchorIdx.forEach(function(bIdx) {
+    var segIdx = [];
+    for (var k = prevIdx + 1; k <= bIdx; k++) if (tunable[k]) segIdx.push(k);
+    prevIdx = bIdx;
+    if (!segIdx.length) return;   // nada ajustável nesse trecho — fica como está
+
+    var target = _comercialAbsMap[_seq[bIdx].idPonto];
+    function chegadaCom(v) {
+      segIdx.forEach(function(k) {
+        var key = _seq[k - 1].idPonto;
+        work.via[key] = 'Pers'; work.vel[key] = v;
+      });
+      return _calcHorario(osrmLegs).pontos[bIdx].chegadaMin;
+    }
+
+    var lo = 10, hi = 150;
+    var chLo = chegadaCom(lo), chHi = chegadaCom(hi);   // chLo = mais tarde possível, chHi = mais cedo possível
+    var v;
+    if (target >= chLo)      { v = lo; nImpossivel++; }   // nem no mínimo dá pra atrasar o suficiente
+    else if (target <= chHi) { v = hi; nImpossivel++; }   // nem no máximo dá pra chegar a tempo
+    else {
+      for (var iter = 0; iter < 40; iter++) {
+        v = (lo + hi) / 2;
+        if (chegadaCom(v) > target) lo = v; else hi = v;   // ainda atrasado → precisa de mais velocidade
+      }
+      v = (lo + hi) / 2;
+      nAplicados++;
+    }
+    segIdx.forEach(function(k) {
+      var key = _seq[k - 1].idPonto;
+      work.via[key] = 'Pers'; work.vel[key] = Math.round(v * 10) / 10;
+    });
+  });
+
+  var cFinal = _calcHorario(osrmLegs);
+  var erroDepois = 0;
+  anchorIdx.forEach(function(i) {
+    if (cFinal.pontos[i].chegadaMin !== null) erroDepois += Math.abs(cFinal.pontos[i].chegadaMin - _comercialAbsMap[_seq[i].idPonto]);
+  });
+
+  // Restaura os globais reais — nada foi aplicado ainda, só simulado.
+  _legVia = legViaOrig; _legVelPers = legVelOrig;
+
+  if (!nAplicados && !nImpossivel) { toast('Não foi possível calcular: nenhum trecho ajustável entre pontos com horário comercial.', 'error'); return; }
+
+  var avisoImpossivel = nImpossivel
+    ? '\n\n' + nImpossivel + ' trecho(s) exigiriam velocidade fora da faixa plausível (10–150 km/h) — ficam com a diferença que der.'
+    : '';
+
+  appConfirm({
+    titulo: 'Calcular tempo pelo horário comercial',
+    mensagem: 'Cada trecho recebe a velocidade necessária pra bater exatamente o horário comercial (' + (nAplicados + nImpossivel) + ' trecho(s) ajustado(s) como "Pers").\n\n'
+      + 'Erro total (soma das diferenças nos pontos com comercial): ' + _dur(erroAntes) + ' → ' + _dur(erroDepois) + '.'
+      + avisoImpossivel + '\n\nDeseja aplicar?',
+    okLabel: 'Aplicar', okLoadingLabel: 'Aplicando…',
+    onOk: function() { _aplicarVelocidadeSimulada(work, erroAntes, erroDepois, nAplicados + nImpossivel); }
+  });
+}
+
+function _aplicarVelocidadeSimulada(work, erroAntes, erroDepois, nAplicados) {
+  _legVia = work.via;
+  _legVelPers = work.vel;
+  _persistLegVia();
+  _markDirty();
+  _partialUpdateSchedule();
+  appConfirmClose();
+  toast('Horário recalculado pelo comercial em ' + nAplicados + ' trecho(s). Erro total: ' + _dur(erroAntes) + ' → ' + _dur(erroDepois) + '.', 'success', 6000);
 }
 
 function setLegVia(i, type, evt) {
@@ -2527,7 +2757,7 @@ function _partialUpdateComercial() {
     var deltaEl = document.getElementById('horDelta' + i);
     if (!deltaEl) continue;
     var comVal = _comercialTimes[_seq[i].idPonto] || '';
-    deltaEl.innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
+    deltaEl.innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, _difRefMin(p), _seq[i].idPonto, i) : '—';
   }
 
   for (var i = 0; i < c.pontos.length; i++) {
@@ -2649,7 +2879,7 @@ function _partialUpdateSchedule() {
     tds[4].innerHTML = _buildLegViaCell(i, c);
 
     var comVal = _comercialTimes[_seq[i].idPonto] || '';
-    tds[6].innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, p.chegadaMin, _seq[i].idPonto, i) : '—';
+    tds[6].innerHTML = p.chegadaMin !== null ? _deltaCellHtml(comVal, _difRefMin(p), _seq[i].idPonto, i) : '—';
   }
 
   for (var i = 0; i < c.pontos.length; i++) {
@@ -2697,6 +2927,15 @@ function onStopTimeChange(idx, val) {
 // ============================================================
 //  Modal de configuração do PDF
 // ============================================================
+/** Botão de rádio do formato de horário (HH:MM / Minutos / Ambos) — reusado no modal do PDF/Excel. */
+/** Gera um "pill" de rádio premium (usado em Tipo de arquivo / Modo / Formato). */
+function _xdlgRadioHtml(cfg) {
+  return '<label id="' + cfg.idBase + 'Label" onclick="' + cfg.onclick + '" class="xdlg-option' + (cfg.checked ? ' active' : '') + '">'
+    + '<input type="radio" name="' + cfg.name + '" id="' + cfg.idBase + '" value="' + cfg.value + '"' + (cfg.checked ? ' checked' : '') + '>'
+    + '<span class="xdlg-option-label">' + cfg.label + '</span>'
+    + '</label>';
+}
+
 function abrirModalPdf() {
   if (!_sel || !_seq.length) { toast('Adicione pontos ao esquema antes de gerar o PDF.', 'error'); return; }
   var ex = document.getElementById('pdfModalOverlay');
@@ -2718,88 +2957,101 @@ function abrirModalPdf() {
   var disabledKeys = { comercial:true, dif:true };
   var checks = colDefs.map(function(c) {
     var isDisabled = comDisabled && disabledKeys[c.key];
-    return '<label id="pdfColLabel_' + c.key + '" style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;font-size:12px;'
-      + (isDisabled ? 'opacity:0.4;pointer-events:none;' : '') + '">'
-      + '<input type="checkbox" id="pdfCol_' + c.key + '"'
-      + (_pdfCols[c.key] ? ' checked' : '')
-      + ' style="width:14px;height:14px;accent-color:#f47920;cursor:pointer;">'
-      + c.label + '</label>';
-  }).join('');
-
-  // Seção "Personalizado": formato de horário + lista de pontos
-  var personPontosHtml = _seq.map(function(p, i) {
-    var sel = !_pdfPersonConfig.pontos || _pdfPersonConfig.pontos[p.idPonto] !== false;
-    return '<label style="display:flex;align-items:center;gap:7px;padding:3px 0;font-size:12px;cursor:pointer;">'
-      + '<input type="checkbox" class="pdf-person-ponto" data-idx="' + i + '" data-id="' + esc(p.idPonto) + '"'
-      + (sel ? ' checked' : '') + ' style="width:13px;height:13px;accent-color:#f47920;cursor:pointer;" onchange="_pdfPersonSyncAll()">'
-      + esc(p.nomePonto)
+    return '<label id="pdfColLabel_' + c.key + '" class="xdlg-check' + (isDisabled ? ' disabled' : '') + '">'
+      + '<input type="checkbox" id="pdfCol_' + c.key + '"' + (_pdfCols[c.key] ? ' checked' : '') + '>'
+      + '<span class="xdlg-check-label">' + c.label + '</span>'
       + '</label>';
   }).join('');
-  var personSection =
-    '<div id="pdfPersonConfig" style="' + (isPersonMode ? '' : 'display:none;') + 'margin-top:14px;padding-top:14px;border-top:1px solid #f0f2f8;">'
-    + '<div style="margin-bottom:12px;">'
-      + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Formato de horário</div>'
-      + '<div style="display:flex;gap:8px;">'
-        + '<label id="pdfPersonFmtHhmmLabel" onclick="pdfPersonFormatoSelect(\'hhmm\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato !== 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato !== 'min' ? '#fff8f0' : '#fff') + ';">'
-          + '<input type="radio" name="pdfPersonFormato" id="pdfPersonFmtHhmm" value="hhmm"' + (_pdfPersonConfig.formato !== 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> HH:MM'
-        + '</label>'
-        + '<label id="pdfPersonFmtMinLabel" onclick="pdfPersonFormatoSelect(\'min\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfPersonConfig.formato === 'min' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfPersonConfig.formato === 'min' ? '#fff8f0' : '#fff') + ';">'
-          + '<input type="radio" name="pdfPersonFormato" id="pdfPersonFmtMin" value="min"' + (_pdfPersonConfig.formato === 'min' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Minutos'
-        + '</label>'
-      + '</div>'
-    + '</div>'
-    + '<div>'
-      + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">'
-        + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;">Pontos</div>'
-        + '<label style="display:flex;align-items:center;gap:5px;font-size:11px;color:#5a6070;cursor:pointer;">'
-          + '<input type="checkbox" id="pdfPersonSelectAll" style="accent-color:#f47920;cursor:pointer;" onchange="pdfPersonToggleAll(this)" checked> Todos'
-        + '</label>'
-      + '</div>'
-      + '<div style="max-height:190px;overflow-y:auto;border:1px solid #d4d8e8;border-radius:6px;padding:6px 10px;">'
-        + personPontosHtml
-      + '</div>'
-    + '</div>'
-    + '</div>';
 
-  var modal =
-    '<div id="pdfModalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;">'
-    + '<div style="background:#fff;border-radius:12px;width:440px;max-width:94vw;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
-      + '<div style="background:#1a1d23;padding:18px 22px;display:flex;align-items:center;justify-content:space-between;">'
-        + '<div style="font-size:14px;font-weight:800;color:#fff;">Exportar PDF</div>'
-        + '<button onclick="fecharModalPdf()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;line-height:1;padding:4px;display:flex;align-items:center;">' + ico('x',16) + '</button>'
+  // Seção "Personalizado": formato de horário + lista de pontos (com busca e contador)
+  var totalPontos = _seq.length, selectedCount = 0;
+  var personPontosHtml = _seq.map(function(p, i) {
+    var sel = !_pdfPersonConfig.pontos || _pdfPersonConfig.pontos[p.idPonto] !== false;
+    if (sel) selectedCount++;
+    return '<label class="xdlg-point-row" data-search="' + esc(String(p.nomePonto || '').toLowerCase()) + '">'
+      + '<input type="checkbox" class="pdf-person-ponto" data-idx="' + i + '" data-id="' + esc(p.idPonto) + '"'
+      + (sel ? ' checked' : '') + ' onchange="_pdfPersonSyncAll()">'
+      + '<span class="xdlg-point-name">' + esc(p.nomePonto) + '</span>'
+      + '</label>';
+  }).join('');
+  var counterTxt = selectedCount + ' de ' + totalPontos + ' ponto' + (totalPontos === 1 ? '' : 's') + ' selecionado' + (selectedCount === 1 ? '' : 's');
+  var fmtAtivo = _pdfPersonConfig.formato || 'hhmm';
+  var personDisplay = isPersonMode ? '' : 'display:none;';
+
+  var personSection =
+    '<div class="xdlg-pdf-person-section xdlg-section" style="' + personDisplay + '">'
+      + '<div class="xdlg-section-title">Formato de horário</div>'
+      + '<div class="xdlg-options" style="grid-template-columns:repeat(3,1fr);max-width:420px;">'
+        + _xdlgRadioHtml({ idBase:'pdfPersonFmthhmm',  name:'pdfPersonFormato', value:'hhmm',  label:'HH:MM',   checked:(fmtAtivo !== 'min' && fmtAtivo !== 'ambos'), onclick:"pdfPersonFormatoSelect('hhmm')" })
+        + _xdlgRadioHtml({ idBase:'pdfPersonFmtmin',   name:'pdfPersonFormato', value:'min',   label:'Minutos', checked:(fmtAtivo === 'min'),   onclick:"pdfPersonFormatoSelect('min')" })
+        + _xdlgRadioHtml({ idBase:'pdfPersonFmtambos', name:'pdfPersonFormato', value:'ambos', label:'Ambos',   checked:(fmtAtivo === 'ambos'), onclick:"pdfPersonFormatoSelect('ambos')" })
       + '</div>'
-      + '<div style="padding:20px 22px;">'
-        + '<div style="margin-bottom:12px;">'
-          + '<label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:4px;">Título</label>'
-          + '<input id="pdfTitleInput" type="text" value="' + esc(title) + '" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d4d8e8;border-radius:6px;font-size:12px;font-family:inherit;">'
-        + '</div>'
-        + '<div style="margin-bottom:16px;">'
-          + '<label style="display:block;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:4px;">Subtítulo <span style="font-weight:400;text-transform:none;">(opcional)</span></label>'
-          + '<input id="pdfSubtitleInput" type="text" value="' + esc(subtitle) + '" placeholder="Ex: SUGESTÃO DE MUDANÇA" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #d4d8e8;border-radius:6px;font-size:12px;font-family:inherit;">'
-        + '</div>'
-        + '<div style="margin-bottom:16px;">'
-          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Modo</div>'
-          + '<div style="display:flex;gap:8px;">'
-            + '<label id="pdfModeNormalLabel" onclick="pdfModeSelect(\'normal\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'normal' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'normal' ? '#fff8f0' : '#fff') + ';">'
-              + '<input type="radio" name="pdfMode" id="pdfModeNormal" value="normal"' + (_pdfMode === 'normal' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Normal'
-            + '</label>'
-            + '<label id="pdfModeComercialLabel" onclick="pdfModeSelect(\'comercial\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'comercial' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'comercial' ? '#fff8f0' : '#fff') + ';">'
-              + '<input type="radio" name="pdfMode" id="pdfModeComercial" value="comercial"' + (_pdfMode === 'comercial' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Hor. Comercial'
-            + '</label>'
-            + '<label id="pdfModePersonalizadoLabel" onclick="pdfModeSelect(\'personalizado\')" style="flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:7px 10px;border:1px solid ' + (_pdfMode === 'personalizado' ? '#f47920' : '#d4d8e8') + ';border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;background:' + (_pdfMode === 'personalizado' ? '#fff8f0' : '#fff') + ';">'
-              + '<input type="radio" name="pdfMode" id="pdfModePersonalizado" value="personalizado"' + (_pdfMode === 'personalizado' ? ' checked' : '') + ' style="accent-color:#f47920;cursor:pointer;"> Personalizado'
-            + '</label>'
+      + '<div id="pdfPersonFmtAmbosHint" class="xdlg-section-hint" style="' + (fmtAtivo === 'ambos' ? '' : 'display:none;') + '">Chegada/Saída em minutos, com uma coluna extra ao lado mostrando o horário (HH:MM).</div>'
+    + '</div>'
+    + '<div class="xdlg-pdf-person-section xdlg-section" style="' + personDisplay + '">'
+      + '<div class="xdlg-section-title">Pontos incluídos</div>'
+      + '<div class="xdlg-points-card">'
+        + '<div class="xdlg-points-toolbar">'
+          + '<div class="xdlg-points-search">' + ico('search', 14) + '<input type="text" id="pdfPersonSearch" placeholder="Buscar ponto…" oninput="_pdfPersonFilterPontos(this.value)"></div>'
+          + '<div class="xdlg-points-toolbar-row">'
+            + '<label class="xdlg-points-selectall"><input type="checkbox" id="pdfPersonSelectAll" onchange="pdfPersonToggleAll(this)" checked> Selecionar todos</label>'
+            + '<span class="xdlg-points-counter" id="pdfPersonCounter">' + counterTxt + '</span>'
           + '</div>'
         + '</div>'
-        + '<div>'
-          + '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#7a8299;margin-bottom:8px;">Colunas</div>'
-          + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 12px;">' + checks + '</div>'
+        + '<div class="xdlg-points-list" id="pdfPersonList">'
+          + personPontosHtml
+          + '<div class="xdlg-points-empty" id="pdfPersonEmpty" style="display:none;">Nenhum ponto encontrado.</div>'
+        + '</div>'
+      + '</div>'
+    + '</div>';
+
+  var headerSub = [esc(_sel.nome_linha || ''), _sel.sentido ? esc(_sel.sentido) : '']
+    .filter(Boolean).join(' &middot; ');
+
+  var modal =
+    '<div id="pdfModalOverlay" class="xdlg-overlay">'
+    + '<div class="xdlg-card">'
+      + '<div class="xdlg-header">'
+        + '<div><div class="xdlg-header-title">Exportar horário</div>'
+        + (headerSub ? '<div class="xdlg-header-sub">' + headerSub + '</div>' : '') + '</div>'
+        + '<button class="xdlg-close" onclick="fecharModalPdf()" title="Fechar">' + ico('x',18) + '</button>'
+      + '</div>'
+      + '<div class="xdlg-body">'
+        + '<div class="xdlg-section">'
+          + '<div class="xdlg-section-title">Tipo de arquivo</div>'
+          + '<div class="xdlg-options" style="grid-template-columns:repeat(2,1fr);max-width:340px;">'
+            + _xdlgRadioHtml({ idBase:'pdfFileTypePdf',   name:'pdfFileType', value:'pdf',   label:'PDF',   checked:(_pdfFileType !== 'excel'), onclick:"pdfFileTypeSelect('pdf')" })
+            + _xdlgRadioHtml({ idBase:'pdfFileTypeExcel', name:'pdfFileType', value:'excel', label:'Excel', checked:(_pdfFileType === 'excel'), onclick:"pdfFileTypeSelect('excel')" })
+          + '</div>'
+        + '</div>'
+        + '<div class="xdlg-section">'
+          + '<div class="xdlg-section-title">Informações da exportação</div>'
+          + '<div class="xdlg-field">'
+            + '<label class="xdlg-label" for="pdfTitleInput">Título</label>'
+            + '<input id="pdfTitleInput" type="text" class="xdlg-input xdlg-input-lg" value="' + esc(title) + '" placeholder="Título do horário">'
+          + '</div>'
+          + '<div class="xdlg-field">'
+            + '<label class="xdlg-label" for="pdfSubtitleInput">Subtítulo <span class="xdlg-label-opt">(opcional)</span></label>'
+            + '<input id="pdfSubtitleInput" type="text" class="xdlg-input xdlg-input-secondary" value="' + esc(subtitle) + '" placeholder="Ex: Sugestão de mudança">'
+          + '</div>'
+        + '</div>'
+        + '<div class="xdlg-section">'
+          + '<div class="xdlg-section-title">Modo</div>'
+          + '<div class="xdlg-options">'
+            + _xdlgRadioHtml({ idBase:'pdfModeNormal',        name:'pdfMode', value:'normal',        label:'Normal',         checked:(_pdfMode !== 'comercial' && _pdfMode !== 'personalizado'), onclick:"pdfModeSelect('normal')" })
+            + _xdlgRadioHtml({ idBase:'pdfModeComercial',     name:'pdfMode', value:'comercial',     label:'Hor. Comercial', checked:(_pdfMode === 'comercial'),     onclick:"pdfModeSelect('comercial')" })
+            + _xdlgRadioHtml({ idBase:'pdfModePersonalizado', name:'pdfMode', value:'personalizado', label:'Personalizado',  checked:(_pdfMode === 'personalizado'), onclick:"pdfModeSelect('personalizado')" })
+          + '</div>'
+        + '</div>'
+        + '<div class="xdlg-section">'
+          + '<div class="xdlg-section-title">Colunas</div>'
+          + '<div class="xdlg-checks">' + checks + '</div>'
         + '</div>'
         + personSection
       + '</div>'
-      + '<div style="padding:14px 22px;border-top:1px solid #f0f2f8;display:flex;gap:8px;justify-content:flex-end;">'
-        + '<button onclick="fecharModalPdf()" style="padding:8px 16px;border:1px solid #d4d8e8;border-radius:6px;background:#fff;font-size:12px;cursor:pointer;color:#5a6070;">Cancelar</button>'
-        + '<button onclick="gerarPdfComOpcoes()" style="padding:8px 20px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">' + ico('arrow-down',13) + ' Gerar PDF</button>'
+      + '<div class="xdlg-footer">'
+        + '<button class="xdlg-btn xdlg-btn-secondary" onclick="fecharModalPdf()">Cancelar</button>'
+        + '<button id="pdfGerarBtn" class="xdlg-btn xdlg-btn-primary" onclick="gerarPdfComOpcoes()">' + ico('arrow-down',15) + '<span id="pdfGerarBtnLabel">' + (_pdfFileType === 'excel' ? 'Exportar Excel' : 'Exportar PDF') + '</span></button>'
       + '</div>'
     + '</div></div>';
 
@@ -2807,70 +3059,123 @@ function abrirModalPdf() {
   document.getElementById('pdfModalOverlay').addEventListener('click', function(e) {
     if (e.target === this) fecharModalPdf();
   });
-  setTimeout(function() { var t = document.getElementById('pdfTitleInput'); if (t) { t.focus(); t.select(); } }, 50);
+  document.addEventListener('keydown', _pdfModalEscHandler);
+  setTimeout(function() { var t = document.getElementById('pdfTitleInput'); if (t) { t.focus(); t.select(); } }, 60);
 }
+
+function _pdfModalEscHandler(e) { if (e.key === 'Escape') fecharModalPdf(); }
 
 function fecharModalPdf() {
   var m = document.getElementById('pdfModalOverlay');
   if (m) m.remove();
+  document.removeEventListener('keydown', _pdfModalEscHandler);
 }
 
 function pdfModeSelect(mode) {
-  var nLbl = document.getElementById('pdfModeNormalLabel');
-  var cLbl = document.getElementById('pdfModeComercialLabel');
-  var pLbl = document.getElementById('pdfModePersonalizadoLabel');
-  var nRad = document.getElementById('pdfModeNormal');
-  var cRad = document.getElementById('pdfModeComercial');
-  var pRad = document.getElementById('pdfModePersonalizado');
   var isCom  = (mode === 'comercial');
   var isPers = (mode === 'personalizado');
-  if (nLbl) { nLbl.style.borderColor = (!isCom && !isPers) ? '#f47920' : '#d4d8e8'; nLbl.style.background = (!isCom && !isPers) ? '#fff8f0' : '#fff'; }
-  if (cLbl) { cLbl.style.borderColor = isCom  ? '#f47920' : '#d4d8e8'; cLbl.style.background = isCom  ? '#fff8f0' : '#fff'; }
-  if (pLbl) { pLbl.style.borderColor = isPers ? '#f47920' : '#d4d8e8'; pLbl.style.background = isPers ? '#fff8f0' : '#fff'; }
-  if (nRad) nRad.checked = (!isCom && !isPers);
-  if (cRad) cRad.checked = isCom;
-  if (pRad) pRad.checked = isPers;
+  var estados = { pdfModeNormal: (!isCom && !isPers), pdfModeComercial: isCom, pdfModePersonalizado: isPers };
+  Object.keys(estados).forEach(function(id) {
+    var lbl = document.getElementById(id + 'Label');
+    var rad = document.getElementById(id);
+    if (lbl) lbl.classList.toggle('active', estados[id]);
+    if (rad) rad.checked = estados[id];
+  });
   // Colunas comercial/dif: desabilitadas somente no modo comercial
   ['comercial','dif'].forEach(function(k) {
     var lbl = document.getElementById('pdfColLabel_' + k);
-    if (lbl) { lbl.style.opacity = isCom ? '0.4' : ''; lbl.style.pointerEvents = isCom ? 'none' : ''; }
+    if (lbl) lbl.classList.toggle('disabled', isCom);
   });
-  // Seção personalizado: mostra/oculta
-  var sec = document.getElementById('pdfPersonConfig');
-  if (sec) sec.style.display = isPers ? '' : 'none';
+  // Seções personalizado (Formato de horário + Pontos incluídos): mostra/oculta
+  document.querySelectorAll('.xdlg-pdf-person-section').forEach(function(el) {
+    el.style.display = isPers ? '' : 'none';
+  });
 }
 
 function pdfPersonFormatoSelect(fmt) {
   _pdfPersonConfig.formato = fmt;
-  var hLbl = document.getElementById('pdfPersonFmtHhmmLabel');
-  var mLbl = document.getElementById('pdfPersonFmtMinLabel');
-  var hRad = document.getElementById('pdfPersonFmtHhmm');
-  var mRad = document.getElementById('pdfPersonFmtMin');
-  var isMin = (fmt === 'min');
-  if (hLbl) { hLbl.style.borderColor = isMin ? '#d4d8e8' : '#f47920'; hLbl.style.background = isMin ? '#fff' : '#fff8f0'; }
-  if (mLbl) { mLbl.style.borderColor = isMin ? '#f47920' : '#d4d8e8'; mLbl.style.background = isMin ? '#fff8f0' : '#fff'; }
-  if (hRad) hRad.checked = !isMin;
-  if (mRad) mRad.checked =  isMin;
+  ['hhmm', 'min', 'ambos'].forEach(function(val) {
+    var lbl = document.getElementById('pdfPersonFmt' + val + 'Label');
+    var rad = document.getElementById('pdfPersonFmt' + val);
+    var active = (val === fmt);
+    if (lbl) lbl.classList.toggle('active', active);
+    if (rad) rad.checked = active;
+  });
+  var hint = document.getElementById('pdfPersonFmtAmbosHint');
+  if (hint) hint.style.display = (fmt === 'ambos') ? '' : 'none';
 }
 
+function pdfFileTypeSelect(type) {
+  _pdfFileType = type;
+  var isExcel = (type === 'excel');
+  var pLbl = document.getElementById('pdfFileTypePdfLabel');
+  var eLbl = document.getElementById('pdfFileTypeExcelLabel');
+  var pRad = document.getElementById('pdfFileTypePdf');
+  var eRad = document.getElementById('pdfFileTypeExcel');
+  if (pLbl) pLbl.classList.toggle('active', !isExcel);
+  if (eLbl) eLbl.classList.toggle('active', isExcel);
+  if (pRad) pRad.checked = !isExcel;
+  if (eRad) eRad.checked =  isExcel;
+  var lbl = document.getElementById('pdfGerarBtnLabel');
+  if (lbl) lbl.textContent = isExcel ? 'Exportar Excel' : 'Exportar PDF';
+}
+
+// Respeita o filtro de busca ativo: "Selecionar todos" só afeta as linhas visíveis.
 function pdfPersonToggleAll(cb) {
-  document.querySelectorAll('.pdf-person-ponto').forEach(function(el) { el.checked = cb.checked; });
+  document.querySelectorAll('.pdf-person-ponto').forEach(function(el) {
+    var row = el.closest('.xdlg-point-row');
+    if (row && row.classList.contains('hidden')) return;
+    el.checked = cb.checked;
+  });
+  _pdfPersonSyncAll();
 }
 
 function _pdfPersonSyncAll() {
-  var all  = document.querySelectorAll('.pdf-person-ponto');
-  var allC = Array.from(all).every(function(el) { return el.checked; });
-  var sa   = document.getElementById('pdfPersonSelectAll');
-  if (sa) sa.checked = allC;
+  var all = Array.from(document.querySelectorAll('.pdf-person-ponto'));
+  var totalChecked = all.filter(function(el) { return el.checked; }).length;
+  var counter = document.getElementById('pdfPersonCounter');
+  if (counter) {
+    counter.textContent = totalChecked + ' de ' + all.length + ' ponto' + (all.length === 1 ? '' : 's')
+      + ' selecionado' + (totalChecked === 1 ? '' : 's');
+  }
+  // "Selecionar todos" reflete o estado apenas das linhas visíveis (respeitando a busca)
+  var visiveis = all.filter(function(el) {
+    var row = el.closest('.xdlg-point-row');
+    return row && !row.classList.contains('hidden');
+  });
+  var sa = document.getElementById('pdfPersonSelectAll');
+  if (sa) sa.checked = visiveis.length > 0 && visiveis.every(function(el) { return el.checked; });
+}
+
+// Filtra a lista de pontos pelo nome (busca simples, sem acento/caixa não normalizados).
+function _pdfPersonFilterPontos(q) {
+  var query = String(q || '').trim().toLowerCase();
+  var rows  = document.querySelectorAll('#pdfPersonList .xdlg-point-row');
+  var anyVisible = false;
+  rows.forEach(function(row) {
+    var match = !query || (row.dataset.search || '').indexOf(query) !== -1;
+    row.classList.toggle('hidden', !match);
+    if (match) anyVisible = true;
+  });
+  var empty = document.getElementById('pdfPersonEmpty');
+  if (empty) empty.style.display = anyVisible ? 'none' : '';
 }
 
 function gerarPdfComOpcoes() {
+  var fileEl = document.querySelector('input[name="pdfFileType"]:checked');
+  var isExcel = fileEl && fileEl.value === 'excel';
+  var btn = document.getElementById('pdfGerarBtn');
+  if (btn) {
+    btn.classList.add('loading');
+    btn.innerHTML = '<span class="xdlg-spin"></span><span>' + (isExcel ? 'Gerando Excel…' : 'Gerando PDF…') + '</span>';
+  }
   ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
     var el = document.getElementById('pdfCol_' + k);
     if (el) _pdfCols[k] = el.checked;
   });
   var mEl = document.querySelector('input[name="pdfMode"]:checked');
   _pdfMode = mEl ? mEl.value : 'normal';
+  _pdfFileType = isExcel ? 'excel' : 'pdf';
   var tEl = document.getElementById('pdfTitleInput');
   var sEl = document.getElementById('pdfSubtitleInput');
   _pdfTitle    = tEl ? tEl.value.trim() : '';
@@ -2886,8 +3191,17 @@ function gerarPdfComOpcoes() {
     _pdfPersonConfig.pontos = pontos;
   }
   _savePdfPrefs();
-  fecharModalPdf();
-  imprimirHorario();
+  if (_pdfFileType === 'excel') {
+    // Round-trip ao servidor (planilha real) — o próprio gerarExcelComOpcoes
+    // fecha o modal quando a resposta chegar, mantendo o spinner visível até lá.
+    gerarExcelComOpcoes();
+    return;
+  }
+  // PDF é local/instantâneo — só um pequeno atraso pro spinner ficar perceptível.
+  setTimeout(function() {
+    fecharModalPdf();
+    imprimirHorario();
+  }, 180);
 }
 
 // ============================================================
@@ -2919,25 +3233,50 @@ function imprimirHorario(returnHtml, forServer) {
   function comR(s){ if(!s) return s; var p=s.split(':'); return p.length<2 ? s : ms(r5(+p[0]*60+(+p[1]||0))); }
 
   var pdfMode = _pdfMode || 'normal';
-  // Formato adaptável: modo personalizado com "min" → tempo decorrido desde o ponto de partida
-  var _useMin = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'min');
+  // Formato adaptável (modo personalizado): "min" → chegada/saída em tempo
+  // decorrido desde a partida; "ambos" → idem, mais uma coluna extra ao lado
+  // com o horário (HH:MM) para referência.
+  var _useMin    = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'min');
+  var _useAmbos  = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'ambos');
+  var _useElapsed = _useMin || _useAmbos;
   // Base = minuto de saída do ponto de partida (o ponto "startIdx")
   var _baseMin = (function() {
     var sp = c.pontos[startIdx];
     if (!sp) return 0;
     return sp.saidaMin !== null ? sp.saidaMin : (sp.chegadaMin !== null ? sp.chegadaMin : 0);
   })();
-  function timeFmt(m){ return _useMin ? String(r5(Math.max(0, Math.round((m || 0) - _baseMin)))) : msR(m); }
+  function timeFmtMin(m){ return String(r5(Math.max(0, Math.round((m || 0) - _baseMin)))); }
+  function timeFmt(m){ return _useElapsed ? timeFmtMin(m) : msR(m); }
   function durFmt(m){  return _useMin ? String(r5(Math.round(m || 0))) : hhmm(m); }
+  // "Comercial" também respeita o formato elapsed (min/ambos) — antes ficava
+  // sempre em HH:MM mesmo com "Minutos"/"Ambos" selecionado. Usa
+  // _comercialAbsMap (minuto absoluto, ciente de virada de dia) em vez de
+  // _p(s) puro — senão o elapsed "reseta" toda vez que o relógio comercial
+  // passa da meia-noite, dando 0/valores baixos incorretos em esquemas
+  // multi-dia.
+  function comTimeFmt(s, idPonto){
+    if (!_useElapsed) return comR(s);
+    var abs = (idPonto !== undefined && _comercialAbsMap[idPonto] !== undefined) ? _comercialAbsMap[idPonto] : _p(s);
+    return timeFmtMin(abs);
+  }
 
   var activeCols = [{ key:'cidade', label:'Cidade', align:'left' }];
-  if (cols.chegada) activeCols.push({ key:'chegada', label:'Chegada', align:'center' });
+  if (cols.chegada) {
+    activeCols.push({ key:'chegada', label: _useAmbos ? 'Chegada (min)' : 'Chegada', align:'center' });
+    if (_useAmbos) activeCols.push({ key:'chegadaHora', label:'Chegada (h)', align:'center' });
+  }
   if (cols.parada)  activeCols.push({ key:'parada',  label:'Parada',  align:'center' });
-  if (cols.saida)   activeCols.push({ key:'saida',   label:'Saída',   align:'center' });
+  if (cols.saida) {
+    activeCols.push({ key:'saida', label: _useAmbos ? 'Saída (min)' : 'Saída', align:'center' });
+    if (_useAmbos) activeCols.push({ key:'saidaHora', label:'Saída (h)', align:'center' });
+  }
   if (cols.desl) activeCols.push({ key:'desl', label:'Desl.', align:'left' });
   if (pdfMode !== 'comercial') {
-    if (cols.comercial) activeCols.push({ key:'comercial', label:'Comercial', align:'center' });
-    if (cols.dif)       activeCols.push({ key:'dif',       label:'Dif.',      align:'center' });
+    if (cols.comercial) {
+      activeCols.push({ key:'comercial', label: _useAmbos ? 'Comercial (min)' : 'Comercial', align:'center' });
+      if (_useAmbos) activeCols.push({ key:'comercialHora', label:'Comercial (h)', align:'center' });
+    }
+    if (cols.dif) activeCols.push({ key:'dif', label:'Dif.', align:'center' });
   }
 
   var thead = activeCols.map(function(col) {
@@ -3004,11 +3343,27 @@ function imprimirHorario(returnHtml, forServer) {
       cells.chegada = isStart
         ? '<span style="color:#bbb;">—</span>'
         : '<strong>' + (p.chegadaMin === null ? '—' : timeFmt(p.chegadaMin)) + '</strong>';
+      if (_useAmbos) {
+        cells.chegadaHora = isStart
+          ? '<span style="color:#bbb;">—</span>'
+          : '<strong>' + (p.chegadaMin === null ? '—' : msR(p.chegadaMin)) + '</strong>';
+      }
       cells.parada  = (!isStart && !isLast && p.saidaMin !== null) ? durFmt(p.tp) : '—';
       cells.saida   = p.saidaMin !== null
         ? '<strong>' + timeFmt(p.saidaMin) + '</strong>'
         : (p.chegadaMin !== null ? '<strong style="color:#f47920;">' + (forServer ? '&#9733;' : ico('star',11)) + ' ' + timeFmt(p.chegadaMin) + '</strong>' : '—');
+      if (_useAmbos) {
+        var saidaHoraBase = p.saidaMin !== null ? p.saidaMin : p.chegadaMin;
+        cells.saidaHora = saidaHoraBase === null
+          ? '—'
+          : (p.saidaMin !== null
+              ? '<strong>' + msR(saidaHoraBase) + '</strong>'
+              : '<strong style="color:#f47920;">' + (forServer ? '&#9733;' : ico('star',11)) + ' ' + msR(saidaHoraBase) + '</strong>');
+      }
 
+      // Só oculta em "Minutos" puro (chegada/saída viram tempo decorrido, sem
+      // referência de horário — o desl. por trecho ficaria descontextualizado).
+      // Em "Ambos" a coluna extra de hora já dá esse contexto, então mostra normal.
       if (isStart || !p.hasCoords || _useMin) {
         cells.desl = '—';
       } else {
@@ -3018,12 +3373,17 @@ function imprimirHorario(returnHtml, forServer) {
       }
 
       cells.comercial = comVal
-        ? '<strong style="color:#1565c0;">' + pe(comR(comVal)) + '</strong>'
+        ? '<strong style="color:#1565c0;">' + pe(comTimeFmt(comVal, _seq[i].idPonto)) + '</strong>'
         : '<span style="color:#ccc;">—</span>';
+      if (_useAmbos) {
+        cells.comercialHora = comVal
+          ? '<strong style="color:#1565c0;">' + pe(comR(comVal)) + '</strong>'
+          : '<span style="color:#ccc;">—</span>';
+      }
 
       cells.dif = '—';
       if (comVal && p.chegadaMin !== null) {
-        var d2 = _diffMin(comVal, p.chegadaMin, _seq[i].idPonto), a2 = Math.abs(d2);
+        var d2 = _diffMin(comVal, _difRefMin(p), _seq[i].idPonto), a2 = Math.abs(d2);
         var c2 = d2 > 2 ? '#22c97a' : d2 < -2 ? '#e53935' : '#f47920';
         var s2 = d2 > 2 ? '+' : d2 < -2 ? '−' : '≈';
         cells.dif = '<strong style="color:' + c2 + ';">' + s2 + (a2 > 1 ? hhmm(a2) : '') + '</strong>';
@@ -3201,6 +3561,201 @@ function imprimirHorario(returnHtml, forServer) {
 }
 
 // ============================================================
+//  Exporta o horário como planilha Excel — relatório corporativo real
+// ============================================================
+// Diferente do PDF (impresso localmente), o Excel é gerado no servidor como
+// uma Google Sheet de verdade (formatada, com freeze pane, autofiltro e
+// faixas zebradas nativas) e devolvida como .xlsx — só assim dá pra ter
+// esses recursos nativos do Excel. Ver gerarExcelEsquemaXlsx em Code.js.
+
+/** Monta o payload estruturado (sem HTML) para o relatório Excel do servidor. */
+function _montarDadosExportacaoExcel() {
+  var osrmLegs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
+  var c        = _calcHorario(osrmLegs);
+  _recomputeComercialBase(c);
+  var partida  = document.getElementById('horHoraPartida').value || '00:00';
+  var vel      = document.getElementById('horVelMedia').value || '85';
+  var tipoVia  = '';
+  document.querySelectorAll('.hor-preset-btn').forEach(function(b){ if (b.classList.contains('active')) tipoVia = b.textContent; });
+  var fonteDist = _osrmStatus === 'ok' ? 'Traçado real (OSM)' : _osrmStatus === 'cache' ? 'Cache de distâncias' : 'Mín. 30 min (sem rota)';
+  var startIdx  = Math.min(_horStartIdx, c.pontos.length - 1);
+  var cols      = _pdfCols;
+
+  function hhmm(m){ m=Math.round(m||0); var h=Math.floor(m/60),mm=m%60; return ('0'+h).slice(-2)+':'+('0'+mm).slice(-2); }
+  function hFmt(m){ m=Math.round(m||0); return Math.floor(m/60) + 'h' + ('0'+(m%60)).slice(-2); } // "12h14", como nos KPIs
+  function ms(m){ m=Math.round(m); return ('0'+Math.floor(m/60)%24).slice(-2)+':'+('0'+(m%60)).slice(-2); }
+  function r5(m){ return Math.round(m / 5) * 5; }
+  function msR(m){ return ms(r5(m)); }
+  function comR(s){ if(!s) return s; var p=s.split(':'); return p.length<2 ? s : ms(r5(+p[0]*60+(+p[1]||0))); }
+
+  var pdfMode    = _pdfMode || 'normal';
+  var useMin     = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'min');
+  var useAmbos   = (pdfMode === 'personalizado' && _pdfPersonConfig.formato === 'ambos');
+  var useElapsed = useMin || useAmbos;
+  var baseMin = (function() {
+    var sp = c.pontos[startIdx];
+    if (!sp) return 0;
+    return sp.saidaMin !== null ? sp.saidaMin : (sp.chegadaMin !== null ? sp.chegadaMin : 0);
+  })();
+  function timeFmtMin(m){ return String(r5(Math.max(0, Math.round((m || 0) - baseMin)))); }
+  function timeFmt(m){ return useElapsed ? timeFmtMin(m) : msR(m); }
+  function durFmt(m){  return useMin ? String(r5(Math.round(m || 0))) : hhmm(m); }
+  // "Horário Comercial" também respeita o formato elapsed (min/ambos) — antes
+  // ficava sempre em HH:MM mesmo com "Minutos"/"Ambos" selecionado. Usa
+  // _comercialAbsMap (minuto absoluto, ciente de virada de dia) em vez de
+  // _p(s) puro — senão o elapsed "reseta" toda vez que o relógio comercial
+  // passa da meia-noite, dando 0/valores baixos incorretos em esquemas
+  // multi-dia.
+  function comTimeFmt(s, idPonto){
+    if (!useElapsed) return comR(s);
+    var abs = (idPonto !== undefined && _comercialAbsMap[idPonto] !== undefined) ? _comercialAbsMap[idPonto] : _p(s);
+    return timeFmtMin(abs);
+  }
+
+  // "Chegada"/"Saída"/"Comercial" só viram "Tempo acumulado"/"Horário" quando
+  // o formato é elapsed (min/ambos) — em HH:MM puro os nomes originais já são
+  // exatos. Sempre leva o sufixo "(chegada)"/"(saída)"/"(comercial)": mesmo com
+  // só uma das colunas selecionada, o nome genérico sozinho não deixa claro a
+  // que ele se refere.
+  function tempoLabel(w) { return 'Tempo acumulado (' + w + ')'; }
+  function horaLabel(w)  { return 'Horário ('         + w + ')'; }
+
+  var colunas = [];
+  if (cols.chegada) {
+    colunas.push({ key:'chegada', label: useElapsed ? tempoLabel('chegada') : 'Chegada' });
+    if (useAmbos) colunas.push({ key:'chegadaHora', label: horaLabel('chegada') });
+  }
+  if (cols.parada) colunas.push({ key:'parada', label:'Parada' });
+  if (cols.saida) {
+    colunas.push({ key:'saida', label: useElapsed ? tempoLabel('saida') : 'Saída' });
+    if (useAmbos) colunas.push({ key:'saidaHora', label: horaLabel('saida') });
+  }
+  // O valor da linha é o trecho vindo do ponto ANTERIOR até este ("tempo até
+  // aqui"), não até o próximo — nome tem que refletir isso pra não confundir.
+  if (cols.desl) colunas.push({ key:'desl', label:'Tempo até aqui' });
+  if (pdfMode !== 'comercial') {
+    if (cols.comercial) {
+      colunas.push({ key:'comercial', label: useElapsed ? tempoLabel('comercial') : 'Horário Comercial' });
+      if (useAmbos) colunas.push({ key:'comercialHora', label: horaLabel('comercial') });
+    }
+    if (cols.dif) colunas.push({ key:'dif', label:'Dif.' });
+  }
+
+  var linhas = [];
+  c.pontos.forEach(function(p, i) {
+    var isStart = (i === startIdx);
+    var isLast  = (i === c.pontos.length - 1);
+    if (pdfMode === 'personalizado' && _pdfPersonConfig.pontos) {
+      if (_pdfPersonConfig.pontos[_seq[i].idPonto] === false) return;
+    }
+    var cidadeTxt = p.nomePonto;
+    if (p.preDep) { linhas.push({ cidade: cidadeTxt, preDep: true }); return; }
+
+    var comVal  = _comercialTimes[_seq[i].idPonto] || '';
+    var valores = {};
+
+    if (pdfMode === 'comercial') {
+      valores.chegada = isStart ? '—' : (comVal ? comR(comVal) : '—');
+      valores.parada  = (!isStart && !isLast && p.tp) ? hhmm(p.tp) : '—';
+      valores.saida   = isStart ? (comVal ? comR(comVal) : '—')
+                       : isLast ? '—'
+                       : comVal ? msR(_p(comVal) + (p.tp || 0)) : '—';
+      valores.desl = '—';
+    } else {
+      valores.chegada = isStart ? '—' : (p.chegadaMin === null ? '—' : timeFmt(p.chegadaMin));
+      if (useAmbos) valores.chegadaHora = isStart ? '—' : (p.chegadaMin === null ? '—' : msR(p.chegadaMin));
+
+      valores.parada = (!isStart && !isLast && p.saidaMin !== null) ? durFmt(p.tp) : '—';
+      valores.saida  = p.saidaMin !== null
+        ? timeFmt(p.saidaMin)
+        : (p.chegadaMin !== null ? timeFmt(p.chegadaMin) : '—');
+      if (useAmbos) {
+        var saidaHoraBase = p.saidaMin !== null ? p.saidaMin : p.chegadaMin;
+        valores.saidaHora = saidaHoraBase === null ? '—' : msR(saidaHoraBase);
+      }
+
+      if (isStart || !p.hasCoords || useMin) {
+        valores.desl = '—';
+      } else {
+        valores.desl = hhmm(p.tv) + ' · ' + p.dist.toFixed(1).replace('.', ',') + ' km' + (p.distSource !== 'osrm' ? ' ~' : '');
+      }
+
+      valores.comercial = comVal ? comTimeFmt(comVal, _seq[i].idPonto) : '—';
+      if (useAmbos) valores.comercialHora = comVal ? comR(comVal) : '—';
+
+      valores.dif = '—';
+      if (comVal && p.chegadaMin !== null) {
+        var d2 = _diffMin(comVal, _difRefMin(p), _seq[i].idPonto), a2 = Math.abs(d2);
+        // Badge em vez de só cor de fonte: 🟢 dentro do horário · 🟡 pequena diferença · 🔴 grande atraso.
+        var badge = d2 > 2 ? '🟢' : d2 < -2 ? '🔴' : '🟡';
+        var sinal = d2 > 2 ? '+' : d2 < -2 ? '−' : '≈';
+        valores.dif = badge + ' ' + sinal + (a2 > 1 ? hhmm(a2) : '');
+      }
+    }
+    linhas.push({ cidade: cidadeTxt, valores: valores });
+  });
+
+  var tituloRota = String(_sel.nome_linha || '').replace(/\s+-\s+/, ' → ');
+  var subtitulo  = [_horaTitulo(_sel.horario), _sel.sentido ? 'Viagem de ' + _sentidoTitulo(_sel.sentido) : '']
+    .filter(Boolean).join(' • ');
+  // Só o Código fica em destaque no cabeçalho — Tipo/Velocidade/Fonte da
+  // distância são informação de apoio, então vão junto da data de geração no rodapé.
+  var meta = [
+    'Código: ' + (_codLinhaTxt(_sel) || '—')
+  ];
+  var infoTecnica = 'Tipo: ' + (tipoVia || 'BR') + '   ·   Velocidade média: ' + vel + ' km/h'
+    + '   ·   Fonte da distância: ' + fonteDist;
+  var kpis = [
+    { valor: (c.distTotal || 0).toFixed(1).replace('.', ',') + ' km', label: 'Distância' },
+    { valor: hFmt(c.tvTotal),  label: 'Tempo em movimento' },
+    { valor: hFmt(c.tpTotal),  label: 'Paradas' },
+    { valor: hFmt(c.totalMin), label: 'Tempo total' }
+  ];
+  var geradoEm = new Date().toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
+
+  return {
+    titulo: tituloRota, subtitulo: subtitulo, meta: meta, kpis: kpis,
+    colunas: colunas, linhas: linhas, rodape: { geradoEm: geradoEm, info: infoTecnica },
+    filename: _pdfTitle || _tituloPadraoEsquema(_sel)
+  };
+}
+
+function gerarExcelComOpcoes() {
+  if (!_sel || !_seq.length) return;
+  var payload;
+  try { payload = _montarDadosExportacaoExcel(); }
+  catch (e) { fecharModalPdf(); toast('Erro ao preparar dados: ' + (e.message || e), 'error'); return; }
+
+  google.script.run
+    .withSuccessHandler(function(res) {
+      fecharModalPdf();
+      if (!res || !res.ok) { toast('Erro ao gerar Excel: ' + (res && res.erro || 'falha desconhecida'), 'error'); return; }
+      _downloadBase64(res.b64, res.filename, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      toast('Planilha gerada.', 'success', 2500);
+    })
+    .withFailureHandler(function(e) {
+      fecharModalPdf();
+      toast('Erro ao gerar Excel: ' + (e.message || e), 'error');
+    })
+    .gerarExcelEsquemaXlsx(payload);
+}
+
+/** Baixa um arquivo a partir de conteúdo base64 (o .xlsx devolvido pelo servidor). */
+function _downloadBase64(b64, filename, mime) {
+  var bin = atob(b64);
+  var arr = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  var blob = new Blob([arr], { type: mime });
+  var url  = URL.createObjectURL(blob);
+  var a    = document.createElement('a');
+  a.href = url; a.download = String(filename || 'horario.xlsx').replace(/[\\/:*?"<>|]/g, '-'); a.style.display = 'none';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function() { URL.revokeObjectURL(url); }, 2000);
+}
+
+// ============================================================
 //  Back button
 // ============================================================
 (function() {
@@ -3359,7 +3914,11 @@ window.onload = function() {
 //  Map
 // ============================================================
 function initMap() {
-  _map = L.map('map', { zoomControl: true }).setView([-14.235, -51.9253], 4);
+  // zoomControl fica embaixo à esquerda — no topo à esquerda ele sobrepõe o
+  // toggle ANTT/Comercial (.map-mode-toggle), que é um modo de visualização
+  // importante e precisa ficar sempre clicável.
+  _map = L.map('map', { zoomControl: false }).setView([-14.235, -51.9253], 4);
+  L.control.zoom({ position: 'bottomleft' }).addTo(_map);
   L.tileLayer(
     'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
     { attribution: '&copy; Esri', maxZoom: 19, crossOrigin: true }
@@ -3390,6 +3949,7 @@ function updateMap() {
     document.getElementById('mapPh').style.display = '';
     document.getElementById('mapLegend').classList.remove('show');
     document.getElementById('mapModeToggle').style.display = 'none';
+    var btnNone = document.getElementById('mapTraceBtn'); if (btnNone) btnNone.style.display = 'none';
     return;
   }
 
@@ -3405,6 +3965,9 @@ function updateMap() {
   var lls = pts.map(function(p) { return [+p.lat, +p.lng]; });
 
   var mapSeqKey = _seqCoordsKey();
+  // Estado do botão "Ver traçado real": já ativo se a geometria em memória
+  // já é a desta sequência exata; senão volta ao estado padrão (linha reta).
+  _resetMapTraceBtn(_osrmGeometry && _osrmSeqKey === mapSeqKey);
   setTimeout(function() {
     _map.invalidateSize();
 
@@ -3474,6 +4037,47 @@ function updateMap() {
 
     _map.fitBounds(lls, { padding: [44, 44], maxZoom: 13 });
   }, 80);
+}
+
+// ── Botão "Ver traçado real" (mapa) ───────────────────────────
+// Por padrão o mapa liga os pontos com linha reta quando as distâncias já
+// estão em cache — evita chamar a API de traçado (OSRM) de novo só pra
+// desenhar a curva. Este botão busca a geometria real sob demanda, quando o
+// usuário realmente precisa ver o traçado seguindo a via.
+function _resetMapTraceBtn(jaTemTracado) {
+  var btn = document.getElementById('mapTraceBtn');
+  if (!btn) return;
+  btn.style.display = 'flex';
+  btn.classList.remove('loading');
+  btn.classList.toggle('active', !!jaTemTracado);
+  btn.innerHTML = jaTemTracado
+    ? ico('check', 12) + ' Traçado real'
+    : ico('map', 12) + ' Ver traçado real';
+}
+
+function _verTracadoReal() {
+  if (!_map || !_poly || !_seq.length) return;
+  var btn = document.getElementById('mapTraceBtn');
+  if (btn && btn.classList.contains('active')) return; // já é o traçado real desta sequência
+  if (btn) { btn.classList.add('loading'); btn.innerHTML = ico('refresh', 12) + ' Buscando traçado…'; }
+
+  _fetchOsrmDistances(function(legs, geom, legGeoms) {
+    if (!geom) {
+      _resetMapTraceBtn(false);
+      toast('Traçado indisponível no momento — tente de novo em instantes.', 'error');
+      return;
+    }
+    _osrmLegs     = legs;
+    _osrmGeometry = geom;
+    _osrmLegGeoms = legGeoms;
+    _osrmSeqKey   = _seqCoordsKey();
+    if (_poly) _poly.setLatLngs(geom);
+    if (_mapMode === 'comercial') _drawComercialOnMap(); else _drawAnttOnMap();
+    if (_poly) _poly.bringToFront();
+    _drawLegHoverOnMap();
+    _resetMapTraceBtn(true);
+    toast('Traçado real carregado.', 'success', 2500);
+  }, true);
 }
 
 // ============================================================
@@ -4804,6 +5408,8 @@ function _loadPdfPrefs() {
     if (c) _pdfCols = c;
     var m = localStorage.getItem('vc_pdfMode');
     if (m) _pdfMode = m;
+    var ft = localStorage.getItem('vc_pdfFileType');
+    if (ft === 'pdf' || ft === 'excel') _pdfFileType = ft;
     var pc = JSON.parse(localStorage.getItem('vc_pdfPersonConfig') || 'null');
     if (pc && pc.formato) _pdfPersonConfig.formato = pc.formato;
     // pontos (seleção) é específico do esquema — não restauramos entre sessões
@@ -4813,6 +5419,7 @@ function _savePdfPrefs() {
   try {
     localStorage.setItem('vc_pdfCols', JSON.stringify(_pdfCols));
     localStorage.setItem('vc_pdfMode', _pdfMode);
+    localStorage.setItem('vc_pdfFileType', _pdfFileType);
     localStorage.setItem('vc_pdfPersonConfig', JSON.stringify({ formato: _pdfPersonConfig.formato }));
   } catch (e) {}
 }

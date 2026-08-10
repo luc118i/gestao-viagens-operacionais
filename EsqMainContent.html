@@ -46,8 +46,10 @@
 
     <!-- Footer -->
     <div class="hor-footer">
+      <button class="btn btn-ghost btn-sm" onclick="recalcularTodosTrechos()" title="Busca o traçado atualizado no motor de rota (OSRM) para todos os trechos deste esquema e sobrescreve o cache de distâncias." style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg> Reiniciar Tempo de Deslocamento</button>
+      <button class="btn btn-ghost btn-sm" onclick="simularVelocidadeComercial()" title="Calcula, trecho a trecho, a velocidade que faz o horário calculado bater exatamente o horário comercial (Dif. = 0), e aplica nos trechos ajustáveis." style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="0.5" fill="currentColor"/></svg> Simular Velocidade</button>
       <button class="btn btn-ghost btn-sm" id="btnIaDivergencia" onclick="analisarDivergenciaComercial()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/><circle cx="12" cy="12" r="3"/></svg> Analisar com IA</button>
-      <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Baixar PDF</button>
+      <button class="btn btn-dark btn-sm" onclick="abrirModalPdf()" style="display:inline-flex;align-items:center;gap:5px;"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><line x1="12" y1="5" x2="12" y2="19"/><polyline points="19 12 12 19 5 12"/></svg> Exportar</button>
     </div>
   </div><!-- /hor-panel -->
 
@@ -60,6 +62,9 @@
     <button type="button" class="map-mode-btn active" data-mode="antt"      onclick="setMapMode('antt')"      title="Limites de km sem apoio (regras ANTT)">ANTT</button>
     <button type="button" class="map-mode-btn"        data-mode="comercial" onclick="setMapMode('comercial')" title="Consistência do trecho frente ao horário comercial">Comercial</button>
   </div>
+  <button type="button" class="map-trace-btn" id="mapTraceBtn" onclick="_verTracadoReal()"
+    title="Por padrão o mapa liga os pontos em linha reta pra economizar chamadas à API de traçado. Clique pra buscar e mostrar a rota real seguindo a via.">
+  </button>
   <div class="map-legend" id="mapLegend">
     <div class="leg-item"><div class="leg-dot" style="background:#22c97a;"></div> Início</div>
     <div class="leg-item"><div class="leg-dot" style="background:#e05050;"></div> Fim</div>
