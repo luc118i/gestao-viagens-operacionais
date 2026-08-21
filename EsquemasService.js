@@ -331,7 +331,8 @@ var EsquemasService = (() => {
       tipo_trecho:       ['tipo_trecho', 'via', 'tipo_via', 'trecho'],
       troca_motorista:   ['troca_motorista', 'troca', 'motorista', 'troca_de_motorista'],
       abastecimento:     ['abastecimento', 'combustivel', 'abastece'],
-      alimentacao:       ['alimentacao', 'refeicao', 'comida']
+      alimentacao:       ['alimentacao', 'refeicao', 'comida'],
+      limpeza:           ['limpeza', 'limpeza_veiculo']
     });
 
     var pontos = [];
@@ -356,7 +357,8 @@ var EsquemasService = (() => {
         tipo_trecho:       colMap.tipo_trecho  !== undefined ? (_getCell(row, colMap.tipo_trecho)  || '') : '',
         troca_motorista:   colMap.troca_motorista !== undefined ? _isMarcado(row[colMap.troca_motorista]) : false,
         abastecimento:     colMap.abastecimento   !== undefined ? _isMarcado(row[colMap.abastecimento])   : false,
-        alimentacao:       colMap.alimentacao     !== undefined ? _isMarcado(row[colMap.alimentacao])     : false
+        alimentacao:       colMap.alimentacao     !== undefined ? _isMarcado(row[colMap.alimentacao])     : false,
+        limpeza:           colMap.limpeza         !== undefined ? _isMarcado(row[colMap.limpeza])         : false
       });
     }
 

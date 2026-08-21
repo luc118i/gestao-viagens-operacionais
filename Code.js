@@ -138,7 +138,7 @@ function getPontosEsquemaParaFormulario(idEsquema) {
       return {
         idPonto: p.id_ponto, nomePonto: p.nome_ponto, tipo: p.tipo || '',
         horarioComercial: p.horario_comercial || '', tempoLocal: p.tempo_local || '', tipoTrecho: p.tipo_trecho || '',
-        troca: !!p.troca_motorista, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao
+        troca: !!p.troca_motorista, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao, limpeza: !!p.limpeza
       };
     });
     // Para trechos sem tipo definido, busca o tipo_via salvo em DISTANCIAS
@@ -482,19 +482,21 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
     if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
 
-    // Garante cabeçalhos das colunas F a K
+    // Garante cabeçalhos das colunas F a L
     var h6  = String(sheet.getLastColumn() >= 6  ? sheet.getRange(1, 6).getValue()  : '').trim();
     var h7  = String(sheet.getLastColumn() >= 7  ? sheet.getRange(1, 7).getValue()  : '').trim();
     var h8  = String(sheet.getLastColumn() >= 8  ? sheet.getRange(1, 8).getValue()  : '').trim();
     var h9  = String(sheet.getLastColumn() >= 9  ? sheet.getRange(1, 9).getValue()  : '').trim();
     var h10 = String(sheet.getLastColumn() >= 10 ? sheet.getRange(1, 10).getValue() : '').trim();
     var h11 = String(sheet.getLastColumn() >= 11 ? sheet.getRange(1, 11).getValue() : '').trim();
+    var h12 = String(sheet.getLastColumn() >= 12 ? sheet.getRange(1, 12).getValue() : '').trim();
     if (h6 !== 'horario_comercial') sheet.getRange(1, 6).setValue('horario_comercial');
     if (h7 !== 'tempo_local')       sheet.getRange(1, 7).setValue('tempo_local');
     if (h8 !== 'tipo_trecho')       sheet.getRange(1, 8).setValue('tipo_trecho');
     if (h9 !== 'troca_motorista')   sheet.getRange(1, 9).setValue('troca_motorista');
     if (h10 !== 'abastecimento')    sheet.getRange(1, 10).setValue('abastecimento');
     if (h11 !== 'alimentacao')      sheet.getRange(1, 11).setValue('alimentacao');
+    if (h12 !== 'limpeza')          sheet.getRange(1, 12).setValue('limpeza');
 
     var idStr = String(idEsquema).trim();
     var lastRow = sheet.getLastRow();
@@ -514,7 +516,7 @@ function salvarSequenciaPontos(idEsquema, pontos) {
       sheet.appendRow([
         idEsquema, idx + 1, p.idPonto, p.nomePonto, p.tipo || '', p.horarioComercial || '',
         p.tempoLocal !== '' ? p.tempoLocal : '', p.tipoTrecho || '',
-        p.troca ? 'x' : '', p.abastecimento ? 'x' : '', p.alimentacao ? 'x' : ''
+        p.troca ? 'x' : '', p.abastecimento ? 'x' : '', p.alimentacao ? 'x' : '', p.limpeza ? 'x' : ''
       ]);
     });
 

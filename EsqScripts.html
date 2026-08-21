@@ -131,7 +131,7 @@ var STOP_PADRAO_MIN = 30;  // padrão para pontos fora da aba TEMPO_PERMANENCIA
 
 // Minutos extras quando o ponto acumula operação além de Embarque/Desemb.
 // (que já está embutido no tempo-base de TEMPO_PERMANENCIA/padrão).
-var TIPO_PARADA_BONUS_MIN = { alimentacao: 30, troca: 15, abastecimento: 15 };
+var TIPO_PARADA_BONUS_MIN = { alimentacao: 30, troca: 15, abastecimento: 15, limpeza: 30 };
 
 function _tiposParadaBonusMin(idPonto) {
   var flags = _tiposParada[idPonto];
@@ -2046,14 +2046,15 @@ function _renderHorarioWith(osrmLegs) {
 }
 
 // ============================================================
-//  Operação no ponto — Troca de motorista / Abastecimento / Alimentação
+//  Operação no ponto — Troca de motorista / Abastecimento / Alimentação / Limpeza
 //  Embarque/Desemb. é implícito (qualquer ponto com horário comercial);
-//  só estas 3 tags são marcadas manualmente aqui.
+//  só estas 4 tags são marcadas manualmente aqui.
 // ============================================================
 var _TIPO_PARADA_DEFS = [
   { key: 'troca',         icon: 'user-swap', color: '#2563EB', label: 'Troca de motorista' },
   { key: 'abastecimento', icon: 'fuel',     color: '#16A34A', label: 'Abastecimento' },
-  { key: 'alimentacao',   icon: 'utensils', color: '#CA8A04', label: 'Alimentação' }
+  { key: 'alimentacao',   icon: 'utensils', color: '#CA8A04', label: 'Alimentação' },
+  { key: 'limpeza',       icon: 'sparkles', color: '#9333EA', label: 'Limpeza' }
 ];
 
 function _tiposParadaBtnsHtml(i) {
@@ -4509,7 +4510,7 @@ function carregarPontos(idEsq) {
       });
       _tiposParada = {};
       pontos.forEach(function(p) {
-        _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao };
+        _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao, limpeza: !!p.limpeza };
       });
       // tempo_local não é mais usado como fallback: parada vem da aba e, fora
       // dela, do padrão fixo de 30 min. _customStopTimes só guarda edições da sessão.
@@ -7057,7 +7058,7 @@ function _setupEsqStateLote(e, pts) {
   _comercialTimes = {};
   pts.forEach(function(p) { var t = _normalizeHHMM(p.horarioComercial); if (t) _comercialTimes[p.idPonto] = t; });
   _tiposParada = {};
-  pts.forEach(function(p) { _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao }; });
+  pts.forEach(function(p) { _tiposParada[p.idPonto] = { troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao, limpeza: !!p.limpeza }; });
   _customStopTimes = {};  // tempo_local não é mais fallback (aba → 30 min fixo)
   _legVia = {}; _legVelPers = {};
   pts.forEach(function(p) { _setLegViaRaw(p.idPonto, p.tipoTrecho); });
@@ -7777,7 +7778,7 @@ function salvarSeq() {
         // direto sem duplicar a regra.
         tempoLocal: _getStopTime(idx, p.tipo),
         tipoTrecho: _legViaSerialized(p.idPonto),
-        troca: !!flags.troca, abastecimento: !!flags.abastecimento, alimentacao: !!flags.alimentacao
+        troca: !!flags.troca, abastecimento: !!flags.abastecimento, alimentacao: !!flags.alimentacao, limpeza: !!flags.limpeza
       };
     }));
 }

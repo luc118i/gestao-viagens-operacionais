@@ -117,9 +117,9 @@ var RoteiroApi = (function () {
 
   /**
    * Tags de operação do ponto: Embarque/Desemb. é implícito (qualquer ponto
-   * com horário comercial); Troca/Abastecimento/Alimentação vêm das colunas
-   * booleanas marcadas manualmente no Gestão de Esquemas. null = sem tag
-   * nenhuma (o front cai na heurística por nome).
+   * com horário comercial); Troca/Abastecimento/Alimentação/Limpeza vêm das
+   * colunas booleanas marcadas manualmente no Gestão de Esquemas. null = sem
+   * tag nenhuma (o front cai na heurística por nome).
    */
   function _tiposParada(p) {
     var tags = [];
@@ -127,6 +127,7 @@ var RoteiroApi = (function () {
     if (p.troca_motorista) tags.push('Troca de Motorista');
     if (p.abastecimento) tags.push('Abastecimento');
     if (p.alimentacao) tags.push('Alimentação');
+    if (p.limpeza) tags.push('Limpeza');
     return tags.length ? tags : null;
   }
 
