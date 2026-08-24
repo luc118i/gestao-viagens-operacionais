@@ -26,7 +26,7 @@ var _comercialAbsMap = {};
 var _lastCalc        = null;
 var _pendingSelectIdx = null;
 var _activeHorRow    = null;
-var _pdfCols     = { chegada:true, parada:true, saida:true, desl:true, comercial:true, dif:true };
+var _pdfCols     = { operacao:true, chegada:true, parada:true, saida:true, desl:true, comercial:true, dif:true };
 var _pdfMode     = 'normal';
 var _pdfFileType = 'pdf';   // 'pdf' | 'excel'
 var _pdfTitle    = '';
@@ -1976,7 +1976,6 @@ function _renderHorarioWith(osrmLegs) {
 
     var cidadeCell = '<td style="font-weight:600;">'
       + esc(p.nomePonto)
-      + (isStart ? ' <span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 4px;">' + ico('send',9) + '</span>' : '')
       + _anttBadgeHtml(i)
       + _anttTrocaBadgeHtml(i)
       + _tiposParadaCellHtml(i)
@@ -2056,6 +2055,15 @@ var _TIPO_PARADA_DEFS = [
   { key: 'alimentacao',   icon: 'utensils', color: '#CA8A04', label: 'Alimentação' },
   { key: 'limpeza',       icon: 'sparkles', color: '#9333EA', label: 'Limpeza' }
 ];
+
+/** Rótulo textual das tags de operação marcadas num ponto (para PDF/Excel) — ex.: "Troca de motorista, Abastecimento". Vazio ('—') quando nenhuma está marcada. */
+function _tiposParadaLabel(idPonto) {
+  var flags = _tiposParada[idPonto];
+  if (!flags) return '—';
+  var labels = _TIPO_PARADA_DEFS.filter(function(def) { return !!flags[def.key]; })
+                                 .map(function(def) { return def.label; });
+  return labels.length ? labels.join(', ') : '—';
+}
 
 function _tiposParadaBtnsHtml(i) {
   var idPonto = _seq[i].idPonto;
@@ -2946,6 +2954,7 @@ function abrirModalPdf() {
   var subtitle = _pdfSubtitle || '';
 
   var colDefs = [
+    { key:'operacao',  label:'Operação'           },
     { key:'chegada',   label:'Chegada'           },
     { key:'parada',    label:'Parada'             },
     { key:'saida',     label:'Saída'              },
@@ -3170,7 +3179,7 @@ function gerarPdfComOpcoes() {
     btn.classList.add('loading');
     btn.innerHTML = '<span class="xdlg-spin"></span><span>' + (isExcel ? 'Gerando Excel…' : 'Gerando PDF…') + '</span>';
   }
-  ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
+  ['operacao','chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
     var el = document.getElementById('pdfCol_' + k);
     if (el) _pdfCols[k] = el.checked;
   });
@@ -3262,6 +3271,7 @@ function imprimirHorario(returnHtml, forServer) {
   }
 
   var activeCols = [{ key:'cidade', label:'Cidade', align:'left' }];
+  if (cols.operacao) activeCols.push({ key:'operacao', label:'Operação', align:'left' });
   if (cols.chegada) {
     activeCols.push({ key:'chegada', label: _useAmbos ? 'Chegada (min)' : 'Chegada', align:'center' });
     if (_useAmbos) activeCols.push({ key:'chegadaHora', label:'Chegada (h)', align:'center' });
@@ -3317,6 +3327,7 @@ function imprimirHorario(returnHtml, forServer) {
 
     cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>'
       + (isStart ? ' ' + startBadge : '');
+    cells.operacao = pe(_tiposParadaLabel(_seq[i].idPonto));
 
     if (pdfMode === 'comercial') {
       cells.chegada = isStart
@@ -3411,7 +3422,7 @@ function imprimirHorario(returnHtml, forServer) {
     // estreitas e a Cidade fica com o restante, para nomes longos caberem em 1
     // linha (evita linhas altas e baixas alternadas). Garante também que a tabela
     // nunca exceda a página (o conversor do Google cortava colunas ao transbordar).
-    var colW     = { chegada: 13, parada: 11, saida: 13, comercial: 13, dif: 11, desl: 18 };
+    var colW     = { operacao: 20, chegada: 13, parada: 11, saida: 13, comercial: 13, dif: 11, desl: 18 };
     var usadas   = activeCols.slice(1).reduce(function(s, col) { return s + (colW[col.key] || 14); }, 0);
     var firstW   = Math.max(28, 100 - usadas);
     var colgroup = '<colgroup><col style="width:' + firstW + '%;">'
@@ -3622,6 +3633,7 @@ function _montarDadosExportacaoExcel() {
   function horaLabel(w)  { return 'Horário ('         + w + ')'; }
 
   var colunas = [];
+  if (cols.operacao) colunas.push({ key:'operacao', label:'Operação' });
   if (cols.chegada) {
     colunas.push({ key:'chegada', label: useElapsed ? tempoLabel('chegada') : 'Chegada' });
     if (useAmbos) colunas.push({ key:'chegadaHora', label: horaLabel('chegada') });
@@ -3654,6 +3666,7 @@ function _montarDadosExportacaoExcel() {
 
     var comVal  = _comercialTimes[_seq[i].idPonto] || '';
     var valores = {};
+    valores.operacao = _tiposParadaLabel(_seq[i].idPonto);
 
     if (pdfMode === 'comercial') {
       valores.chegada = isStart ? '—' : (comVal ? comR(comVal) : '—');
@@ -5432,6 +5445,7 @@ function abrirModalPdfLote(lista) {
   var n = _pdfLoteList.length;
 
   var colDefs = [
+    { key:'operacao',  label:'Operação'           },
     { key:'chegada',   label:'Chegada'            },
     { key:'parada',    label:'Parada'             },
     { key:'saida',     label:'Saída'              },
@@ -5537,7 +5551,7 @@ function pdfLotePersonFormatoSelect(fmt) {
 }
 
 function gerarPdfsLote() {
-  ['chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
+  ['operacao','chegada','parada','saida','desl','comercial','dif'].forEach(function(k) {
     var el = document.getElementById('pdfLoteCol_' + k);
     if (el) _pdfCols[k] = el.checked;
   });

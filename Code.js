@@ -283,6 +283,7 @@ function gerarExcelEsquemaXlsx(d) {
     var titleEndCol      = Math.max(dataStartCol, kpiCol1 - 1);
 
     var COL_WIDTH = {
+      operacao: 220,
       chegada: 75, chegadaHora: 75, saida: 65, saidaHora: 65,
       parada: 68, desl: 165, comercial: 90, dif: 130
     };
@@ -402,11 +403,18 @@ function gerarExcelEsquemaXlsx(d) {
         .setValues(dataMatrix).setFontSize(10).setFontFamily('Inter')
         .setVerticalAlignment('middle').setWrap(false);
 
-      // Cidade em negrito; demais colunas centralizadas
+      // Cidade em negrito; demais colunas centralizadas — exceto Operação, que
+      // é texto em lista (ex.: "Troca de motorista, Abastecimento") e fica
+      // ilegível centralizado.
       sh.getRange(FIRST_DATA, dataStartCol, filteredLinhas.length, 1).setFontWeight('bold');
       if (numDataCols > 1) {
         sh.getRange(FIRST_DATA, dataStartCol + 1, filteredLinhas.length, numDataCols - 1).setHorizontalAlignment('center');
       }
+      colunas.forEach(function(col, i) {
+        if (col.key === 'operacao') {
+          sh.getRange(FIRST_DATA, dataStartCol + 1 + i, filteredLinhas.length, 1).setHorizontalAlignment('left');
+        }
+      });
 
       // Faixas zebradas: setBackgrounds() em chamada única (loop individual
       // pode ser descartado pelo GAS ao exportar; matriz garante atomicidade).
