@@ -3294,12 +3294,6 @@ function imprimirHorario(returnHtml, forServer) {
     return '<th bgcolor="#f0f2f8" style="text-align:' + col.align + ';">' + col.label + '</th>';
   }).join('');
 
-  // Badge de partida: o conversor de PDF do servidor não renderiza SVG inline,
-  // então no modo forServer usamos um símbolo de texto no lugar do ícone.
-  var startBadge = forServer
-    ? '<span style="background:#f47920;color:#fff;border-radius:3px;padding:0 5px;margin-left:4px;font-size:9px;font-weight:700;">&#9658;</span>'
-    : '<span style="display:inline-flex;align-items:center;background:#f47920;color:#fff;border-radius:3px;padding:1px 5px;margin-left:3px;">' + ico('send',9) + '</span>';
-
   var tbody = '';
   var accumTv = 0, accumDist = 0, accumAllOsrm = true;
   c.pontos.forEach(function(p, i) {
@@ -3325,8 +3319,7 @@ function imprimirHorario(returnHtml, forServer) {
     if (pdfMode === 'comercial' && !comVal) return;
     var cells  = {};
 
-    cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>'
-      + (isStart ? ' ' + startBadge : '');
+    cells.cidade = '<strong>' + pe(p.nomePonto) + '</strong>';
     cells.operacao = pe(_tiposParadaLabel(_seq[i].idPonto));
 
     if (pdfMode === 'comercial') {
