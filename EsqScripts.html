@@ -5418,8 +5418,11 @@ function _updateHomeSelCount() {
 // ============================================================
 function _loadPdfPrefs() {
   try {
+    // Mescla em vez de sobrescrever: prefs salvas antes de uma coluna nova
+    // existir (ex.: "operacao") não têm a chave — sobrescrever faria ela
+    // ficar undefined (oculta) até o usuário limpar o localStorage.
     var c = JSON.parse(localStorage.getItem('vc_pdfCols') || 'null');
-    if (c) _pdfCols = c;
+    if (c) for (var k in c) _pdfCols[k] = c[k];
     var m = localStorage.getItem('vc_pdfMode');
     if (m) _pdfMode = m;
     var ft = localStorage.getItem('vc_pdfFileType');
