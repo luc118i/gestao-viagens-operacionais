@@ -629,11 +629,85 @@ var DiagnosticoService = (() => {
     return { system: system, user: L.join('\n') };
   }
 
+  // ============================================================
+  //  HISTÓRICO DA LINHA (Análise em Massa) — narrativa sobre dado AGREGADO
+  //  de várias viagens já realizadas, não uma viagem só. Diferente de
+  //  gerarDiagnostico (uma viagem) e explicarDivergenciaComercial (esquema
+  //  ainda não rodou): aqui a IA recebe, por local com desvio considerável,
+  //  a classificação determinística já calculada por
+  //  HistoricoHorariosStore._classificarConsistencia (sistemático/pontual/
+  //  instável/único) e escreve o parecer — sem escolher os números, só
+  //  interpretar e recomendar a ação certa por local (mudar horário vs.
+  //  investigar ocorrência). Reusa _callAI.
+  // ============================================================
+
+  /**
+   * @param {{nomeLinha:string, periodo:{dataInicio:string,dataFim:string},
+   *   locais:Array<{nome:string, programado:string, sugestao:string,
+   *   diffMin:number, classificacao:string, qtdAtrasadas:number,
+   *   qtdViagens:number, diasComDesvio:Array<{data:string,real:string,diffMin:number}>}>}} payload
+   * @returns {{ok:true, narrativa:Object, modelo:string}|{ok:false, erro:string}}
+   */
+  function explicarHistoricoLinha(payload) {
+    const prompt = _buildPromptHistoricoLinha(payload || {});
+    return _callAI(prompt);
+  }
+
+  function _buildPromptHistoricoLinha(payload) {
+    const system =
+      'Você é um gerente de operações de uma empresa de transporte rodoviário interestadual no Brasil. ' +
+      'Recebe dados JÁ AGREGADOS de VÁRIAS viagens realizadas (não uma viagem só) de uma linha, comparando ' +
+      'o horário real de chegada em cada ponto com o horário comercial programado. Cada local já vem com uma ' +
+      'CLASSIFICAÇÃO determinística calculada a partir da proporção de viagens atrasadas: "sistematico" (a maioria ' +
+      'das viagens atrasa ali — problema recorrente da linha), "pontual" (só uma viagem, ou uma minoria, destoou — ' +
+      'incidente isolado), "instavel" (metade atrasa, metade não — sem padrão claro ainda) ou "unico" (só há uma ' +
+      'viagem registrada, dado insuficiente). ' +
+      'Sua função é escrever, PARA CADA LOCAL recebido, um parecer curto explicando o que a classificação significa ' +
+      'na prática e qual ação recomendar: local "sistematico" pede ajuste do horário comercial (aproxime da ' +
+      '"sugestão" informada); local "pontual" pede investigar a(s) data(s) específica(s) da ocorrência — NÃO mudar ' +
+      'o horário, já que mudaria a rotina das demais viagens que estão no prazo; local "instavel" pede acompanhar ' +
+      'mais viagens antes de decidir; local "unico" pede aguardar mais dados. ' +
+      'REGRAS: (1) NÃO invente números, locais ou causas — use somente os fatos fornecidos; se for local "pontual", ' +
+      'cite a(s) data(s) exata(s) do desvio, mas NÃO invente o motivo do atraso (trânsito, quebra etc.) — apenas ' +
+      'recomende investigar. (2) Não repita a lista crua; interprete e priorize os locais mais impactantes primeiro. ' +
+      '(3) Português formal, direto, sem emojis. ' +
+      '(4) Responda EXCLUSIVAMENTE com um JSON válido no formato: ' +
+      '{"resumoExecutivo":"string (2-3 frases)","achados":[{"local":"string","classificacao":' +
+      '"sistematico|pontual|instavel|unico","titulo":"string","descricao":"string","recomendacao":"string"}],' +
+      '"parecerFinal":"string"}. Sem texto fora do JSON.';
+
+    const L = [];
+    L.push('LINHA: ' + (payload.nomeLinha || '—'));
+    const periodo = payload.periodo || {};
+    if (periodo.dataInicio || periodo.dataFim) {
+      L.push('PERÍODO ANALISADO: ' + (periodo.dataInicio || 'início') + ' até ' + (periodo.dataFim || 'hoje') + '.');
+    }
+    L.push('LOCAIS COM DESVIO CONSIDERÁVEL (ordenados pela sequência do trajeto):');
+    (payload.locais || []).forEach(function (loc) {
+      L.push('  - ' + loc.nome + ' [classificação: ' + (loc.classificacao || 'n/d') + ', ' +
+             loc.qtdAtrasadas + ' de ' + loc.qtdViagens + ' viagens atrasadas' +
+             (loc.qtdViagens >= 2 ? (', ' + Math.round((loc.qtdAtrasadas / loc.qtdViagens) * 100) + '%') : '') + ']');
+      L.push('    Programado: ' + (loc.programado || 'n/d') + ' | Sugestão (mediana das viagens): ' +
+             (loc.sugestao || 'n/d') + ' | Diferença: ' + _fmtDelta(loc.diffMin));
+      if (loc.diasComDesvio && loc.diasComDesvio.length) {
+        L.push('    Viagens com desvio ≥1h: ' + loc.diasComDesvio.map(function (d) {
+          return d.data + ' (real ' + d.real + ', ' + _fmtDelta(d.diffMin) + ')';
+        }).join('; ') + '.');
+      }
+    });
+    return { system: system, user: L.join('\n') };
+  }
+
   // buildContext exposto: é a camada 100% determinística (sem chamada de IA)
   // — reaproveitada pela Análise em Massa pra montar a "Linha do Tempo do
   // Atraso"/trechos críticos/paradas críticas a partir de um CSV importado,
   // sem precisar do parecer narrativo (que custa uma chamada à IA por
   // arquivo — desnecessário pra um import em lote de histórico).
-  return { gerarDiagnostico: gerarDiagnostico, explicarDivergenciaComercial: explicarDivergenciaComercial, buildContext: _buildContext };
+  return {
+    gerarDiagnostico: gerarDiagnostico,
+    explicarDivergenciaComercial: explicarDivergenciaComercial,
+    explicarHistoricoLinha: explicarHistoricoLinha,
+    buildContext: _buildContext
+  };
 
 })();

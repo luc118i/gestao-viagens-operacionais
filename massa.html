@@ -123,6 +123,10 @@
                 <div style="font-size:11px; color:var(--text3); margin-top:2px;">Real × programado, uma coluna por viagem importada em ordem cronológica. Mostra só locais com desvio considerável (≥1h); ordenados pela sequência do trajeto.</div>
               </div>
               <div style="display:flex; gap:8px; flex-shrink:0;">
+                <button type="button" class="btn btn-ghost" id="massaBtnAnaliseIA" style="white-space:nowrap;">
+                  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>
+                  Análise IA
+                </button>
                 <button type="button" class="btn btn-primary" id="massaBtnSalvarSugestoes" style="white-space:nowrap; display:none;">
                   <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
                   Salvar Sugestões
@@ -134,6 +138,12 @@
               </div>
             </div>
             <div id="massaConfirmarRemoverData" class="massa-confirmar-banner" style="display:none;"></div>
+            <div id="massaNarrativaIAWrap" class="massa-narrativa-ia" style="display:none;">
+              <button type="button" id="massaNarrativaIAFechar" class="massa-narrativa-ia-fechar" title="Fechar análise">
+                <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+              <div id="massaNarrativaIABody"></div>
+            </div>
             <div style="overflow-x:auto; margin-top:8px;">
               <table class="analysis-table" id="massaHorariosTable"></table>
             </div>
@@ -351,6 +361,28 @@
   }
   #massaHorariosTable th:hover .massa-data-remover { opacity: 1; }
   #massaHorariosTable .massa-data-remover:hover { color: #d94040; }
+
+  /* Painel do parecer da IA sobre o Histórico da linha — reaproveita as
+     classes .diag-* já usadas pelo Diagnóstico Inteligente (viagem única)
+     em style.html, só adiciona o wrapper/× de fechar próprios daqui. */
+  .massa-narrativa-ia {
+    position: relative; margin-top: 12px; padding: 16px 40px 16px 18px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  }
+  .massa-narrativa-ia-fechar {
+    position: absolute; top: 10px; right: 10px; border: none; background: none;
+    color: var(--text3); cursor: pointer; padding: 4px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s, color 0.15s;
+  }
+  .massa-narrativa-ia-fechar:hover { background: var(--bg); color: var(--vermelho); }
+  .massa-narrativa-ia-modelo { font-size: 10.5px; color: var(--text3); margin-top: -4px; margin-bottom: 10px; }
+  /* Badges de classificação nos achados — mesma paleta do .diag-badge, só
+     mapeando sistematico/pontual/instavel/unico pros tons já existentes. */
+  .diag-badge--sistematico { background: rgba(217,64,64,0.12); color: var(--vermelho); }
+  .diag-badge--pontual { background: rgba(59,130,246,0.12); color: var(--azul); }
+  .diag-badge--instavel { background: rgba(232,160,32,0.15); color: var(--amarelo); }
+  .diag-badge--unico { background: rgba(138,145,158,0.14); color: var(--text2); }
 
   .massa-confirmar-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1064,6 +1096,11 @@
       _sugestoesPendentes = {};
       _linhaSelecionadaIdx = -1;
       _dataParaConfirmarRemocao = null;
+      // A análise IA antiga é sobre um recorte de dados que pode não valer
+      // mais depois de trocar de linha/período/remover local — esconde pra
+      // não mostrar parecer desatualizado como se fosse do estado atual.
+      const narrativaWrap = document.getElementById('massaNarrativaIAWrap');
+      if (narrativaWrap) narrativaWrap.style.display = 'none';
       const empty = document.getElementById('massaHistoricoEmpty');
       const horariosWrap = document.getElementById('massaHorariosWrap');
       const filtroWrap = document.getElementById('massaHistoricoFiltro');
@@ -1637,6 +1674,91 @@
         );
     }
 
+    // Rótulo/badge por classificação de consistência — mesmo vocabulário do
+    // badge da grade (_renderBadgeConsistencia), reaproveitado aqui pros
+    // achados do parecer da IA.
+    function _classificacaoLabel(c) { return CONSISTENCIA_LABEL[c] || c || '—'; }
+
+    function _renderNarrativaIA(narrativa, modelo) {
+      const n = narrativa || {};
+      const partes = [];
+
+      partes.push('<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="15" height="15" style="color:var(--laranja);"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>' +
+        '<span style="font-size:13px; font-weight:700; color:var(--text);">Análise IA — Histórico da linha</span>' +
+        '<span class="view-tab-badge">IA</span>' +
+        '</div>');
+      if (modelo) partes.push('<div class="massa-narrativa-ia-modelo">Modelo: ' + _esc(modelo) + '</div>');
+
+      if (n.resumoExecutivo) {
+        partes.push('<p class="diag-lead">' + _esc(n.resumoExecutivo) + '</p>');
+      }
+
+      if (n.achados && n.achados.length) {
+        const itens = n.achados.map(function (a) {
+          const cls = a.classificacao || '';
+          return '<div class="diag-causa">' +
+            '<div class="diag-causa-head">' +
+              '<span class="diag-causa-titulo">' + _esc(a.local || '') + (a.titulo ? ' — ' + _esc(a.titulo) : '') + '</span>' +
+              '<span class="diag-badge diag-badge--' + _esc(cls) + '">' + _esc(_classificacaoLabel(cls)) + '</span>' +
+            '</div>' +
+            '<div class="diag-causa-desc">' + _esc(a.descricao || '') + '</div>' +
+            (a.recomendacao ? '<div class="diag-causa-desc" style="margin-top:4px;"><strong>Recomendação:</strong> ' + _esc(a.recomendacao) + '</div>' : '') +
+          '</div>';
+        }).join('');
+        partes.push('<div class="diag-causas" style="margin-top:10px;">' + itens + '</div>');
+      }
+
+      if (n.parecerFinal) {
+        partes.push(
+          '<div class="diag-parecer" style="margin-top:14px;">' +
+            '<div class="diag-parecer-head">Parecer</div>' +
+            '<div class="diag-parecer-body">' + _esc(n.parecerFinal) + '</div>' +
+          '</div>'
+        );
+      }
+
+      document.getElementById('massaNarrativaIABody').innerHTML = partes.join('');
+      document.getElementById('massaNarrativaIAWrap').style.display = 'block';
+    }
+
+    function _gerarNarrativaIA() {
+      const btn = document.getElementById('massaBtnAnaliseIA');
+      if (!_idEsquemaHistorico) {
+        UIModule.showToast('Selecione uma linha para gerar a análise.', 'warning', 4000);
+        return;
+      }
+      if (!_pivotAtual.locais.length) {
+        UIModule.showToast('Nenhum local com desvio considerável pra analisar.', 'warning', 4000);
+        return;
+      }
+
+      const textoOriginal = btn.innerHTML;
+      btn.disabled = true;
+      btn.innerHTML = '<span class="massa-spinner"></span> Analisando...';
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          btn.disabled = false;
+          btn.innerHTML = textoOriginal;
+          if (res && res.ok) {
+            _renderNarrativaIA(res.narrativa, res.modelo);
+          } else {
+            UIModule.showToast((res && res.erro) || 'Erro ao gerar análise.', 'error', 6000);
+          }
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          btn.innerHTML = textoOriginal;
+          UIModule.showToast('Erro ao gerar análise: ' + (err && err.message ? err.message : String(err)), 'error', 6000);
+        })
+        .gerarNarrativaHistoricoLinha(
+          _idEsquemaHistorico,
+          _getInputDataIso(document.getElementById('massaFiltroDataInicio')),
+          _getInputDataIso(document.getElementById('massaFiltroDataFim'))
+        );
+    }
+
     function _switchTab(tab) {
       const tabImportar = document.getElementById('massaTabImportar');
       const tabHistorico = document.getElementById('massaTabHistorico');
@@ -1691,6 +1813,15 @@
 
       const btnGerarPdf = document.getElementById('massaBtnGerarPdf');
       if (btnGerarPdf) btnGerarPdf.addEventListener('click', _gerarPdfSolicitacaoMudanca);
+
+      const btnAnaliseIA = document.getElementById('massaBtnAnaliseIA');
+      if (btnAnaliseIA) btnAnaliseIA.addEventListener('click', _gerarNarrativaIA);
+      const btnFecharNarrativaIA = document.getElementById('massaNarrativaIAFechar');
+      if (btnFecharNarrativaIA) {
+        btnFecharNarrativaIA.addEventListener('click', function () {
+          document.getElementById('massaNarrativaIAWrap').style.display = 'none';
+        });
+      }
 
       const btnSalvarSugestoes = document.getElementById('massaBtnSalvarSugestoes');
       if (btnSalvarSugestoes) btnSalvarSugestoes.addEventListener('click', _salvarSugestoesPendentes);

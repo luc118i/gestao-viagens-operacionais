@@ -3155,6 +3155,82 @@ function gerarPdfSolicitacaoMudanca(idEsquema, dataInicio, dataFim) {
 }
 
 /**
+ * Entrypoint da "Análise IA" na view Histórico da linha: pega o pivot já
+ * calculado (mesmo dado da grade — local, programado, sugestão/mediana,
+ * classificação sistemático/pontual/instável/único de
+ * HistoricoHorariosStore._classificarConsistencia) e pede pra IA escrever
+ * um parecer, local a local, priorizando o que precisa de ação (mudar
+ * horário vs. investigar ocorrência). Sem cache — o pivot muda a cada
+ * import/remoção/edição de sugestão, então cachear por hash teria a mesma
+ * complexidade de recalcular; chamado só sob demanda (botão), não a cada
+ * abertura da tela.
+ *
+ * @param {string} idEsquema
+ * @param {string} [dataInicio]  "YYYY-MM-DD" — mesmo filtro de período aplicado na tela
+ * @param {string} [dataFim]     "YYYY-MM-DD"
+ * @returns {{ok:boolean, narrativa?:Object, modelo?:string, erro?:string}}
+ */
+function gerarNarrativaHistoricoLinha(idEsquema, dataInicio, dataFim) {
+  try {
+    if (!idEsquema) return { ok: false, erro: 'Selecione uma linha antes de gerar a análise.' };
+
+    var pivot = HistoricoHorariosStore.getPivot(idEsquema, dataInicio, dataFim);
+    if (!pivot.locais.length) {
+      return { ok: false, erro: 'Nenhum local com desvio considerável para analisar.' };
+    }
+
+    var esquemas = EsquemasService.getEsquemas() || [];
+    var esq = esquemas.filter(function (e) { return String(e.id_esquema) === String(idEsquema); })[0] || {};
+
+    // "HH:MM" -> minutos desde meia-noite, só pro cálculo local de diferença
+    // por data (mesma lógica de HistoricoHorariosStore, mas não precisa
+    // expor a função interna — é só pra montar o payload da IA aqui).
+    function _hhmmParaMin(hhmm) {
+      var m = String(hhmm || '').match(/(\d{1,2}):(\d{2})/);
+      if (!m) return null;
+      return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    }
+    var LIMIAR_MIN = 60;
+
+    var payload = {
+      nomeLinha: esq.nome_linha || idEsquema,
+      periodo: { dataInicio: dataInicio || '', dataFim: dataFim || '' },
+      locais: pivot.locais.map(function (loc) {
+        var programadoMin = _hhmmParaMin(loc.programado);
+        var diasComDesvio = [];
+        if (programadoMin != null && loc.porData) {
+          (pivot.datas || []).forEach(function (d) {
+            var real = loc.porData[d];
+            var realMin = _hhmmParaMin(real);
+            if (real && realMin != null) {
+              var diff = realMin - programadoMin;
+              if (Math.abs(diff) >= LIMIAR_MIN) diasComDesvio.push({ data: d, real: real, diffMin: diff });
+            }
+          });
+        }
+        return {
+          nome: loc.local,
+          programado: loc.programado || '',
+          sugestao: loc.sugestao || '',
+          diffMin: loc.diffMin != null ? loc.diffMin : null,
+          classificacao: loc.consistencia ? loc.consistencia.classe : null,
+          qtdAtrasadas: loc.consistencia ? loc.consistencia.qtdAtrasadas : 0,
+          qtdViagens: loc.consistencia ? loc.consistencia.qtdViagens : 0,
+          diasComDesvio: diasComDesvio
+        };
+      })
+    };
+
+    var res = DiagnosticoService.explicarHistoricoLinha(payload);
+    if (!res.ok) return { ok: false, erro: res.erro };
+    return { ok: true, narrativa: res.narrativa, modelo: res.modelo };
+  } catch (e) {
+    Logger.log('[gerarNarrativaHistoricoLinha] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
  * Salva a sugestão de horário editada manualmente pelo usuário na grade
  * "Histórico da linha" — sobrescreve o cálculo automático até reimportar
  * os PDFs ou remover o local (excluirLocalHistoricoHorarios).
