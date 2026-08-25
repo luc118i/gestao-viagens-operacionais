@@ -307,6 +307,15 @@
   #massaHorariosTable .massa-badge-consistencia {
     padding: 1px 7px; font-size: 9.5px; margin-top: 3px; cursor: help;
   }
+  /* Destaque de célula individual (coluna de data) que destoou do
+     programado — complementa o badge de consistência mostrando de cara
+     QUAL viagem é o problema, sem precisar abrir a análise isolada. */
+  #massaHorariosTable .massa-cel-desvio-forte {
+    background: rgba(217,64,64,0.14); color: #b4362a; font-weight: 700;
+  }
+  #massaHorariosTable .massa-cel-desvio-leve {
+    background: rgba(232,160,32,0.14); color: #9a6a10; font-weight: 600;
+  }
   /* "Tempo Desl." tem tooltip explicando de qual ponto veio o trecho —
      sublinhado pontilhado dá a dica de que há mais informação no hover. */
   #massaHorariosTable td[title] { cursor: help; border-bottom: 1px dotted var(--text3); }
@@ -1143,9 +1152,10 @@
           '</td>'
         );
         cells.push('<td style="font-weight:700;">' + _esc(loc.programado || '—') + '</td>');
+        const programadoMinRow = _horaParaMinutosClient(loc.programado);
         datas.forEach(function (d) {
           const real = loc.porData ? loc.porData[d] : '';
-          cells.push('<td>' + (real ? _esc(real) : '—') + '</td>');
+          cells.push(_renderCelulaHorarioReal(real, programadoMinRow));
         });
         const corSugestao = loc.diffMin == null ? '' : (Math.abs(loc.diffMin) >= 10 ? 'color:#d94040;' : 'color:#22a96a;');
         const pendente = Object.prototype.hasOwnProperty.call(_sugestoesPendentes, loc.local);
@@ -1412,6 +1422,35 @@
       instavel: 'Metade das viagens atrasou, metade não — sem padrão claro ainda.',
       unico: 'Só há uma viagem registrada pra esse local — aguarde mais dados antes de decidir.'
     };
+    // "+1h29" / "-45min" — mesmo formato do DIF mostrado na análise de
+    // viagem única, pra reconhecimento imediato de quem já usa aquela tela.
+    function _fmtDiffMinClient(diff) {
+      const sinal = diff > 0 ? '+' : (diff < 0 ? '−' : '');
+      const abs = Math.abs(diff);
+      const h = Math.floor(abs / 60), m = abs % 60;
+      return sinal + (h > 0 ? (h + 'h' + String(m).padStart(2, '0')) : (m + 'min'));
+    }
+
+    // Colore a célula de horário real quando ela destoa do programado —
+    // sem isso, depois de ver o badge "Pontual"/"Sistemático" o usuário
+    // ainda tinha que farejar coluna por coluna pra achar qual data é a
+    // culpada. Dois níveis: desvio "forte" (>=60min, mesmo limiar do
+    // badge/filtro de relevância) e "leve" (20-59min, ainda vale o olhar
+    // mas não é o que define sistemático/pontual).
+    function _renderCelulaHorarioReal(real, programadoMin) {
+      if (!real) return '<td>—</td>';
+      const realMin = _horaParaMinutosClient(real);
+      if (realMin == null || programadoMin == null) return '<td>' + _esc(real) + '</td>';
+      const diff = realMin - programadoMin;
+      const abs = Math.abs(diff);
+      let classe = '';
+      if (abs >= LIMIAR_CONSIDERAVEL_MIN_CLIENT) classe = 'massa-cel-desvio-forte';
+      else if (abs >= 20) classe = 'massa-cel-desvio-leve';
+      if (!classe) return '<td>' + _esc(real) + '</td>';
+      const titulo = 'Programado ' + _esc(_minutosParaHoraClient(programadoMin)) + ' · real ' + _esc(real) + ' (' + _fmtDiffMinClient(diff) + ')';
+      return '<td class="' + classe + '" title="' + titulo + '">' + _esc(real) + '</td>';
+    }
+
     function _renderBadgeConsistencia(consistencia) {
       if (!consistencia) return '';
       const cor = CONSISTENCIA_COR[consistencia.classe] || '';
