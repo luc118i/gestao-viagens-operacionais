@@ -6,6 +6,82 @@
 
 var SheetsService = (() => {
 
+  // ============================================================
+  //  CACHE — LOCAIS (mesmo padrão de chunking usado em EsquemasService,
+  //  necessário porque o JSON de getLocaisParaManager/getLocaisSimples passa
+  //  fácil do limite de 100KB por item do CacheService). LOCAIS é lida com a
+  //  mesma frequência que ESQUEMAS/ESQUEMA_PONTOS (todo boot do Gerenciador
+  //  e da sidebar de cadastro de ponto), mas nunca tinha cache — cada
+  //  abertura relia numa leitura completa de 29 colunas.
+  // ============================================================
+  var CACHE_TTL_LOCAIS   = 300; // 5 minutos — mesmo TTL de EsquemasService
+  var CACHE_CHUNK_SIZE   = 90000; // margem sob o limite de 100KB por item do CacheService
+  var CACHE_KEY_LOCAIS_SIMPLES = 'locais_simples';
+  var CACHE_KEY_LOCAIS_MANAGER = 'locais_manager';
+
+  function _chunkKeysLocais(baseKey, count) {
+    var keys = [];
+    for (var i = 0; i < count; i++) keys.push(baseKey + '_' + i);
+    return keys;
+  }
+
+  /** Lê `baseKey` do cache em chunks, ou computa via computeFn() e grava. */
+  function _cachedChunked(baseKey, computeFn) {
+    try {
+      var cache = CacheService.getScriptCache();
+      var count = cache.get(baseKey + '_n');
+      if (count) {
+        var parts = cache.getAll(_chunkKeysLocais(baseKey, Number(count)));
+        var chunks = [];
+        for (var i = 0; i < Number(count); i++) {
+          var key = baseKey + '_' + i;
+          if (!Object.prototype.hasOwnProperty.call(parts, key)) { chunks = null; break; } // expirado parcialmente
+          chunks.push(parts[key]);
+        }
+        if (chunks) return JSON.parse(chunks.join(''));
+      }
+    } catch (e) {
+      // Cache indisponível/corrompido — segue sem cache
+    }
+
+    var result = computeFn();
+
+    try {
+      var json = JSON.stringify(result);
+      var chunkCount = Math.ceil(json.length / CACHE_CHUNK_SIZE) || 1;
+      var toStore = {};
+      for (var c = 0; c < chunkCount; c++) {
+        toStore[baseKey + '_' + c] = json.substr(c * CACHE_CHUNK_SIZE, CACHE_CHUNK_SIZE);
+      }
+      var cache2 = CacheService.getScriptCache();
+      cache2.putAll(toStore, CACHE_TTL_LOCAIS);
+      cache2.put(baseKey + '_n', String(chunkCount), CACHE_TTL_LOCAIS);
+    } catch (e) {
+      // Falha ao gravar cache — não é crítico, só perde o ganho de velocidade
+    }
+
+    return result;
+  }
+
+  /**
+   * Limpa o cache de LOCAIS. Chamado tanto por escritas reais quanto pelo
+   * onEdit() em Code.js quando alguém edita a aba LOCAIS manualmente.
+   */
+  function invalidateLocaisCache() {
+    try {
+      var cache = CacheService.getScriptCache();
+      [CACHE_KEY_LOCAIS_SIMPLES, CACHE_KEY_LOCAIS_MANAGER].forEach(function(baseKey) {
+        var count = cache.get(baseKey + '_n');
+        if (count) {
+          cache.removeAll(_chunkKeysLocais(baseKey, Number(count)));
+          cache.remove(baseKey + '_n');
+        }
+      });
+    } catch (e) {
+      // Silencioso
+    }
+  }
+
   // Índices das colunas na aba LOCAIS (0-based)
   // Ordem: Código, Cód.Emb, Desc.Resumida, Descrição, Unid.Emp, Tipo,
   //        Aj.Hor, Raio, Raio Advert, Vel, Grupo PC, Dist.vel, Cod.ext,
@@ -183,6 +259,10 @@ var SheetsService = (() => {
    * @returns {Array<{codigo: string, descricao: string, tipo: string}>}
    */
   function getLocaisSimples() {
+    return _cachedChunked(CACHE_KEY_LOCAIS_SIMPLES, _lerLocaisSimples);
+  }
+
+  function _lerLocaisSimples() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('LOCAIS');
 
@@ -213,6 +293,10 @@ var SheetsService = (() => {
    * @returns {Array<{codigo, descricao, tipo, lat, lng}>}
    */
   function getLocaisParaManager() {
+    return _cachedChunked(CACHE_KEY_LOCAIS_MANAGER, _lerLocaisParaManager);
+  }
+
+  function _lerLocaisParaManager() {
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const sheet = ss.getSheetByName('LOCAIS');
     if (!sheet) throw new Error('Aba "LOCAIS" não encontrada na planilha.');
@@ -288,5 +372,5 @@ var SheetsService = (() => {
     return false;
   }
 
-  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, getTemposPermanencia, saveMotorista, updateMotoristaIbutton };
+  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, getTemposPermanencia, saveMotorista, updateMotoristaIbutton, invalidateLocaisCache };
 })();

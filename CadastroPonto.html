@@ -386,8 +386,9 @@ mark { background: #ffe082; color: inherit; border-radius: 2px; }
 var _esquemas = [];
 var _locais   = [];
 var _selEsquema = null;
-var _sequencia  = []; // [{idPonto, nomePonto, isNew}]
+var _sequencia  = []; // [{idPonto, nomePonto, tipo, horarioComercial, tempoLocal, tipoTrecho, troca, abastecimento, alimentacao, limpeza, isNew}]
 var _hasChanges = false;
+var _loadedAt   = null; // timestamp do esquema no momento em que os pontos foram carregados (detecção de conflito)
 
 // ── Init ────────────────────────────────────────────────────
 window.onload = function() {
@@ -465,6 +466,62 @@ function renderEsquemas(q) {
   });
 }
 
+// ── Rascunho local (recuperação de conflito) ──────────────────
+// Mesmo mecanismo do Web App: guarda a sequência local antes de cada
+// tentativa de salvar, para não perder a edição se o save bater em conflito
+// (outra sessão alterou esse esquema nesse meio-tempo) ou cair a conexão.
+function _draftKey(idEsquema) { return 'vc_draft_' + idEsquema; }
+
+function _salvarRascunhoLocal() {
+  if (!_selEsquema) return;
+  try {
+    localStorage.setItem(_draftKey(_selEsquema.id_esquema), JSON.stringify({
+      savedAt: new Date().toISOString(), sequencia: _sequencia
+    }));
+  } catch (e) {}
+}
+
+function _limparRascunhoLocal(idEsquema) {
+  try { localStorage.removeItem(_draftKey(idEsquema)); } catch (e) {}
+}
+
+/** Se existir rascunho não aplicado deste esquema (de um save que bateu em
+ * conflito), oferece um botão pra restaurá-lo por cima do que acabou de
+ * carregar do servidor. */
+function _verificarRascunhoPendente(idEsquema) {
+  var raw;
+  try { raw = localStorage.getItem(_draftKey(idEsquema)); } catch (e) { return; }
+  if (!raw) return;
+  var draft;
+  try { draft = JSON.parse(raw); } catch (e) { _limparRascunhoLocal(idEsquema); return; }
+  if (!draft || !Array.isArray(draft.sequencia)) { _limparRascunhoLocal(idEsquema); return; }
+
+  var quando = '';
+  try { quando = new Date(draft.savedAt).toLocaleString('pt-BR'); } catch (e) {}
+  var el = document.getElementById('feedbackEl');
+  el.className = 'feedback info';
+  el.innerHTML = 'Você tem um rascunho não salvo deste esquema' + (quando ? ' (de ' + esc(quando) + ')' : '')
+    + ', de uma tentativa anterior que bateu em conflito. '
+    + '<a href="#" id="btnRestaurarRascunho" style="color:#e8a000;font-weight:700;">Restaurar rascunho</a>'
+    + ' · <a href="#" id="btnDescartarRascunho" style="color:#999;">descartar</a>';
+  document.getElementById('btnRestaurarRascunho').addEventListener('click', function(ev) {
+    ev.preventDefault();
+    _limparRascunhoLocal(idEsquema);
+    _sequencia = draft.sequencia;
+    _hasChanges = true;
+    renderSequencia();
+    preencherInsertAfter();
+    document.getElementById('unsavedPill').style.display = '';
+    document.getElementById('btnSave').disabled = false;
+    setFeedback('Rascunho restaurado — revise e salve de novo.', 'success');
+  });
+  document.getElementById('btnDescartarRascunho').addEventListener('click', function(ev) {
+    ev.preventDefault();
+    _limparRascunhoLocal(idEsquema);
+    setFeedback('', '');
+  });
+}
+
 function selecionarEsquema(e) {
   if (!e) return;
   _selEsquema = e;
@@ -482,9 +539,20 @@ function selecionarEsquema(e) {
 
   setFeedback('Carregando pontos…', 'info');
   google.script.run
-    .withSuccessHandler(function(pontos) {
+    .withSuccessHandler(function(resp) {
+      var pontos = resp.pontos || [];
+      _loadedAt = resp.loadedAt || null;
+      // Preserva TODOS os campos do ponto (não só idPonto/nomePonto/tipo) —
+      // salvarSequenciaPontos faz replace total do esquema, então qualquer
+      // campo descartado aqui é apagado da planilha ao salvar, mesmo em
+      // pontos que ninguém tocou nesta tela.
       _sequencia = pontos.map(function(p) {
-        return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '', isNew: false };
+        return {
+          idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
+          horarioComercial: p.horarioComercial || '', tempoLocal: p.tempoLocal || '', tipoTrecho: p.tipoTrecho || '',
+          troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao, limpeza: !!p.limpeza,
+          isNew: false
+        };
       });
       _hasChanges = false;
       renderSequencia();
@@ -494,6 +562,10 @@ function selecionarEsquema(e) {
       document.getElementById('unsavedPill').style.display = 'none';
       document.getElementById('btnSave').disabled = true;
       setFeedback('', '');
+      // Uma tentativa anterior de salvar ESSE esquema pode ter batido em
+      // conflito — se sobrou rascunho, oferece restaurar por cima do que
+      // acabou de carregar.
+      _verificarRascunhoPendente(e.id_esquema);
     })
     .withFailureHandler(function(err) { setFeedback('Erro: ' + err.message, 'error'); })
     .getPontosEsquemaParaFormulario(e.id_esquema);
@@ -620,6 +692,8 @@ function selecionarPonto(l) {
     idPonto:   l.codigo,
     nomePonto: l.descricao,
     tipo:      l.tipo || '',
+    horarioComercial: '', tempoLocal: '', tipoTrecho: '',
+    troca: false, abastecimento: false, alimentacao: false, limpeza: false,
     isNew: true
   };
   _sequencia.splice(afterIdx + 1, 0, item);
@@ -637,13 +711,20 @@ document.getElementById('btnSave').addEventListener('click', function() {
   var btn = document.getElementById('btnSave');
   btn.disabled = true;
   btn.textContent = 'Salvando…';
+  _salvarRascunhoLocal();
 
   var payload = _sequencia.map(function(p) {
-    return { idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '' };
+    return {
+      idPonto: p.idPonto, nomePonto: p.nomePonto, tipo: p.tipo || '',
+      horarioComercial: p.horarioComercial || '', tempoLocal: p.tempoLocal || '', tipoTrecho: p.tipoTrecho || '',
+      troca: !!p.troca, abastecimento: !!p.abastecimento, alimentacao: !!p.alimentacao, limpeza: !!p.limpeza
+    };
   });
 
   google.script.run
-    .withSuccessHandler(function() {
+    .withSuccessHandler(function(resp) {
+      _loadedAt = (resp && resp.loadedAt) || null;
+      _limparRascunhoLocal(_selEsquema.id_esquema);
       // Mark all as saved (not new)
       _sequencia.forEach(function(p) { p.isNew = false; });
       _hasChanges = false;
@@ -654,11 +735,26 @@ document.getElementById('btnSave').addEventListener('click', function() {
       setFeedback('Sequência salva com sucesso! (' + _sequencia.length + ' pontos)', 'success');
     })
     .withFailureHandler(function(err) {
-      setFeedback('Erro ao salvar: ' + err.message, 'error');
+      var msg = err.message || String(err);
+      if (msg.indexOf('CONFLITO') !== -1) {
+        // O rascunho já foi salvo antes do clique em "Salvar" — não se perde
+        // ao recarregar. "Recarregar" reabre este mesmo esquema, e a checagem
+        // de rascunho pendente no carregamento oferece restaurá-lo.
+        var el = document.getElementById('feedbackEl');
+        el.className = 'feedback error';
+        el.innerHTML = 'Este esquema foi alterado por outra sessão enquanto você editava. Suas alterações ficaram guardadas neste navegador. '
+          + '<a href="#" id="btnRecarregarConflito" style="color:#c62828;font-weight:700;text-decoration:underline;">Recarregar esquema</a>';
+        document.getElementById('btnRecarregarConflito').addEventListener('click', function(ev) {
+          ev.preventDefault();
+          selecionarEsquema(_selEsquema);
+        });
+      } else {
+        setFeedback('Erro ao salvar: ' + msg, 'error');
+      }
       btn.disabled = false;
       btn.textContent = 'Salvar sequência';
     })
-    .salvarSequenciaPontos(_selEsquema.id_esquema, payload);
+    .salvarSequenciaPontos(_selEsquema.id_esquema, payload, _loadedAt);
 });
 
 // ── Reset ────────────────────────────────────────────────────
@@ -666,6 +762,7 @@ function resetForm() {
   _selEsquema = null;
   _sequencia  = [];
   _hasChanges = false;
+  _loadedAt   = null;
   esquemaInput.value = '';
   pontoInput.value   = '';
   document.getElementById('esquemaBadge').style.display = 'none';

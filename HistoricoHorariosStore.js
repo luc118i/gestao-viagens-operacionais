@@ -672,6 +672,20 @@ var HistoricoHorariosStore = (() => {
       const sugestaoMin = temOverride ? _horaParaMinutos(overrides[local]) : sugestaoAutoMin;
       const diffMin = (sugestaoMin != null && programadoMin != null) ? sugestaoMin - programadoMin : null;
 
+      // A sugestão agregada (moda/média) dilui um atraso isolado: uma
+      // viagem com +1h29 num dia, cercada de dias no horário, pode gerar
+      // uma sugestão média ainda perto do programado — diffMin pequeno
+      // escondendo a linha inteira, mesmo com um atraso real e grave
+      // registrado em info.porData. Aqui verificamos data a data: se
+      // alguma viagem isolada já passou do limiar, o local é relevante
+      // independente do que a média diga.
+      let temDesvioIsolado = false;
+      if (programadoMin != null) {
+        temDesvioIsolado = minutos.some(function (min) {
+          return Math.abs(min - programadoMin) >= LIMIAR_CONSIDERAVEL_MIN;
+        });
+      }
+
       const localNorm = _normNome(local);
 
       let tempoDeslocamento = '';
@@ -703,15 +717,18 @@ var HistoricoHorariosStore = (() => {
         sugestao: sugestaoMin != null ? _minutosParaHora(sugestaoMin) : '',
         sugestaoManual: temOverride,
         diffMin: diffMin,
+        temDesvioIsolado: temDesvioIsolado,
         ordem: localNorm in ordemPorNomeNorm ? ordemPorNomeNorm[localNorm] : Infinity
       };
     });
 
     // Uma vez editado manualmente, o local continua na grade mesmo que o
     // valor ajustado fique dentro do limiar — senão editar a sugestão faz
-    // a linha sumir sozinha, sem o usuário pedir pra remover.
+    // a linha sumir sozinha, sem o usuário pedir pra remover. temDesvioIsolado
+    // cobre o caso de um atraso pontual grave que a média/moda dilui.
     const relevantes = locais.filter(function (loc) {
-      return loc.sugestaoManual || (loc.diffMin != null && Math.abs(loc.diffMin) >= LIMIAR_CONSIDERAVEL_MIN);
+      return loc.sugestaoManual || loc.temDesvioIsolado
+        || (loc.diffMin != null && Math.abs(loc.diffMin) >= LIMIAR_CONSIDERAVEL_MIN);
     });
 
     // Ordem do trajeto (posição no esquema); locais sem match no esquema

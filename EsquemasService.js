@@ -175,6 +175,38 @@ var EsquemasService = (() => {
     }
   }
 
+  /**
+   * Versão POR ESQUEMA de markUpdated()/getLastUpdated() — usada para detecção
+   * de conflito otimista ao salvar a sequência de pontos de um esquema
+   * específico. Deliberadamente separada do LAST_UPDATED_PROP global (que
+   * muda a cada escrita em QUALQUER esquema): se usássemos o global aqui,
+   * salvar o esquema A ficaria bloqueado só porque alguém editou o esquema B
+   * enquanto isso — um falso conflito. Por esquema, só dispara quando o MESMO
+   * esquema foi alterado por outra sessão.
+   */
+  function _esquemaUpdatedProp(idEsquema) {
+    return 'LAST_UPDATED_ESQ_' + String(idEsquema).trim();
+  }
+
+  function markEsquemaUpdated(idEsquema) {
+    try {
+      PropertiesService.getScriptProperties().setProperty(
+        _esquemaUpdatedProp(idEsquema), new Date().toISOString()
+      );
+    } catch (e) {
+      // Silencioso
+    }
+  }
+
+  /** Data/hora (ISO 8601) da última escrita real nos pontos deste esquema, ou null. */
+  function getEsquemaLastUpdated(idEsquema) {
+    try {
+      return PropertiesService.getScriptProperties().getProperty(_esquemaUpdatedProp(idEsquema));
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ============================================================
   //  LEITURA DAS ABAS
   // ============================================================
@@ -452,7 +484,9 @@ var EsquemasService = (() => {
     getTerminaisPorEsquema: getTerminaisPorEsquema,
     invalidateCache:        invalidateCache,
     markUpdated:            markUpdated,
-    getLastUpdated:         getLastUpdated
+    getLastUpdated:         getLastUpdated,
+    markEsquemaUpdated:     markEsquemaUpdated,
+    getEsquemaLastUpdated:  getEsquemaLastUpdated
   };
 
 })();

@@ -1577,8 +1577,18 @@ function _drawComercialOnMap() {
 // maior divergência para a IA (Groq) explicar a causa provável e sugerir
 // ajuste, numa única chamada (visão geral, mesmo padrão do Diagnóstico
 // Inteligente do relatório operacional).
-function analisarDivergenciaComercial() {
-  if (!_sel || _seq.length < 2) { toast('Selecione um esquema com pontos para analisar.', 'error'); return; }
+/** Renderiza um estado simples (mensagem centralizada) na aba Horário do modal de análise. */
+function _renderAnaliseHorarioEstado(html) {
+  var b = document.getElementById('analiseBodyHorario');
+  if (b) b.innerHTML = '<div class="an-tab-empty">' + html + '</div>';
+}
+
+function _carregarAnaliseHorario() {
+  if (!_sel || _seq.length < 2) {
+    _analiseHorarioStatus = 'error';
+    _renderAnaliseHorarioEstado('Selecione um esquema com pontos para analisar.');
+    return;
+  }
 
   var legs = Array.isArray(_osrmLegs) ? _osrmLegs : null;
   var c = _calcHorario(legs);
@@ -1626,8 +1636,12 @@ function analisarDivergenciaComercial() {
   }).slice(0, 12);
 
   if (!divergentes.length) {
-    if (!trechos.length) toast('Preencha o horário comercial dos pontos para poder analisar.', 'error');
-    else toast('Nenhuma divergência relevante encontrada — horário comercial e proposta estão alinhados.', 'success');
+    _analiseHorarioStatus = 'done';
+    _renderAnaliseHorarioEstado(
+      !trechos.length
+        ? 'Preencha o horário comercial dos pontos para poder analisar.'
+        : '<span style="color:#1e7d43;">' + ico('check', 14) + ' Nenhuma divergência relevante encontrada — horário comercial e proposta estão alinhados.</span>'
+    );
     return;
   }
 
@@ -1645,28 +1659,33 @@ function analisarDivergenciaComercial() {
     trechos: divergentes
   };
 
-  var btn = document.getElementById('btnIaDivergencia');
-  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
-  loading('Analisando divergências com IA…');
+  _analiseHorarioStatus = 'loading';
+  _renderAnaliseHorarioEstado(
+    '<span class="appc-spin" style="border-color:rgba(0,0,0,.15);border-top-color:#f47920;width:18px;height:18px;display:inline-block;"></span>'
+    + '<div style="margin-top:10px;">Analisando divergências com IA…</div>'
+  );
   google.script.run
     .withSuccessHandler(function(res) {
-      doneLoading();
-      if (btn) { btn.disabled = false; btn.style.opacity = ''; }
-      if (!res || !res.ok) { toast('Erro na análise: ' + (res && res.erro || 'falha desconhecida'), 'error'); return; }
-      _abrirModalIaDivergencia(res.narrativa);
+      if (!res || !res.ok) {
+        _analiseHorarioStatus = 'error';
+        _renderAnaliseHorarioEstado('Erro na análise: ' + esc(res && res.erro || 'falha desconhecida'));
+        return;
+      }
+      _analiseHorarioStatus = 'done';
+      _renderAnaliseDivergencia(res.narrativa);
     })
     .withFailureHandler(function(e) {
-      doneLoading();
-      if (btn) { btn.disabled = false; btn.style.opacity = ''; }
-      toast('Erro na análise: ' + (e.message || e), 'error');
+      _analiseHorarioStatus = 'error';
+      _renderAnaliseHorarioEstado('Erro na análise: ' + esc(e.message || e));
     })
     .explicarDivergenciaComercial(payload);
 }
 
-function _abrirModalIaDivergencia(n) {
+/** Renderiza a narrativa de divergência (causas + sugestões) na aba Horário do modal de análise. */
+function _renderAnaliseDivergencia(n) {
   n = n || {};
-  var ex = document.getElementById('iaDivOverlay');
-  if (ex) ex.remove();
+  var b = document.getElementById('analiseBodyHorario');
+  if (!b) return;
 
   var impactoCor = { alto: '#ef4444', medio: '#f59e0b', baixo: '#22c55e' };
   var causasHtml = (n.causasPrincipais || []).map(function(c) {
@@ -1682,29 +1701,10 @@ function _abrirModalIaDivergencia(n) {
       + '</div>';
   }).join('');
 
-  var modal =
-    '<div id="iaDivOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:9999;display:flex;align-items:center;justify-content:center;">'
-    + '<div style="background:#fff;border-radius:12px;width:540px;max-width:92vw;max-height:84vh;display:flex;flex-direction:column;box-shadow:0 8px 40px rgba(0,0,0,0.25);overflow:hidden;">'
-      + '<div style="background:#1a1d23;padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">'
-        + '<div style="font-size:14px;font-weight:800;color:#fff;display:flex;align-items:center;gap:8px;">' + ico('lightbulb', 15) + ' Análise de divergência — IA</div>'
-        + '<button onclick="_fecharModalIaDivergencia()" style="background:none;border:none;color:#9aa0ad;cursor:pointer;padding:4px;display:flex;">' + ico('x', 15) + '</button>'
-      + '</div>'
-      + '<div style="padding:18px 20px;overflow-y:auto;">'
-        + (n.resumoExecutivo ? '<p style="font-size:13px;color:#1a1d23;font-weight:600;margin:0 0 14px;line-height:1.55;">' + esc(n.resumoExecutivo) + '</p>' : '')
-        + causasHtml
-        + (n.parecerFinal ? '<p style="font-size:12.5px;color:#3a3f52;margin:14px 0 0;line-height:1.55;padding-top:12px;border-top:1px solid #eef0f6;">' + esc(n.parecerFinal) + '</p>' : '')
-      + '</div>'
-      + '<div style="padding:12px 20px 18px;display:flex;justify-content:flex-end;border-top:1px solid #eef0f6;flex-shrink:0;">'
-        + '<button onclick="_fecharModalIaDivergencia()" style="padding:8px 18px;border:none;border-radius:6px;background:#f47920;color:#fff;font-size:12px;font-weight:700;cursor:pointer;">Fechar</button>'
-      + '</div>'
-    + '</div></div>';
-  document.body.insertAdjacentHTML('beforeend', modal);
-  document.getElementById('iaDivOverlay').addEventListener('click', function(e) { if (e.target === this) _fecharModalIaDivergencia(); });
-}
-
-function _fecharModalIaDivergencia() {
-  var m = document.getElementById('iaDivOverlay');
-  if (m) m.remove();
+  b.innerHTML =
+    (n.resumoExecutivo ? '<p style="font-size:13px;color:#1a1d23;font-weight:600;margin:0 0 14px;line-height:1.55;">' + esc(n.resumoExecutivo) + '</p>' : '')
+    + causasHtml
+    + (n.parecerFinal ? '<p style="font-size:12.5px;color:#3a3f52;margin:14px 0 0;line-height:1.55;padding-top:12px;border-top:1px solid #eef0f6;">' + esc(n.parecerFinal) + '</p>' : '');
 }
 
 /** Remove as camadas de hover/click de trecho (tempo+km+vel) do mapa. */
@@ -3842,8 +3842,9 @@ function importarDeEsquema(idEsq) {
   fecharImportModal();
   loading('Importando pontos…');
   google.script.run
-    .withSuccessHandler(function(pontos) {
+    .withSuccessHandler(function(resp) {
       doneLoading();
+      var pontos = (resp && resp.pontos) || [];
       if (!pontos || !pontos.length) {
         toast('O horário de origem não possui pontos cadastrados.', 'error');
         return;
@@ -3889,6 +3890,11 @@ function importarDeEsquema(idEsq) {
 // ============================================================
 window.onload = function() {
   loading('Carregando esquemas e locais…');
+  // Reenvia o último getLastUpdated() visto (localStorage) — se nada mudou
+  // na planilha desde então, o backend serve do cache em vez de forçar
+  // releitura completa de ESQUEMAS/ESQUEMA_PONTOS a cada abertura da tela.
+  var _lastKnown = null;
+  try { _lastKnown = localStorage.getItem('vc_lastUpdated') || null; } catch (e) {}
   google.script.run
     .withSuccessHandler(function(d) {
       _esqs   = d.esquemas || [];
@@ -3896,6 +3902,7 @@ window.onload = function() {
       _temposPermanencia = d.temposPermanencia || {};
       _setRotasAjust(d.rotasAjustadas || []);
       _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
+      try { if (d.lastUpdated) localStorage.setItem('vc_lastUpdated', d.lastUpdated); } catch (e) {}
       doneLoading();
       _loadPdfPrefs();
       initMap();
@@ -3914,7 +3921,7 @@ window.onload = function() {
       doneLoading();
       toast('Erro ao carregar: ' + (e.message || e), 'error');
     })
-    .getDadosManager();
+    .getDadosManager(_lastKnown);
 };
 
 // ============================================================
@@ -4497,8 +4504,13 @@ function salvarEsquema() {
 function carregarPontos(idEsq) {
   loading('Carregando pontos…');
   google.script.run
-    .withSuccessHandler(function(pontos) {
+    .withSuccessHandler(function(resp) {
       doneLoading();
+      var pontos = (resp && resp.pontos) || [];
+      // Guarda o timestamp do esquema visto agora — reenviado no save para
+      // detecção de conflito (recusa sobrescrever se outra sessão alterou
+      // este esquema entre o carregamento e o clique em "Salvar Sequência").
+      if (_sel) _sel._loadedAt = (resp && resp.loadedAt) || null;
       _seq = pontos.map(function(p) {
         var l = _lMap[String(p.idPonto)] || {};
         // Nome exibido = o guardado no esquema (nomePonto); LOCAIS é só fallback.
@@ -4546,31 +4558,34 @@ function carregarPontos(idEsq) {
       var savedView = 'mapa';
       try { savedView = localStorage.getItem('vc_view') || 'mapa'; } catch(e) {}
       toggleView(savedView);
-      // Após carregar velocidades da planilha, atualiza e re-renderiza se necessário
-      var _selSnap = _sel;
-      google.script.run
-        .withSuccessHandler(function(v) {
-          if (!v || _sel !== _selSnap) return;
-          _tipoViaVel = v;
-          // Re-aplica customizações do usuário salvas no localStorage (prioridade sobre backend)
-          try {
-            var _lsCfg = JSON.parse(localStorage.getItem('vc_horcfg_' + _selSnap.id_esquema) || 'null');
-            if (_lsCfg && _lsCfg.viaVel) {
-              Object.keys(_lsCfg.viaVel).forEach(function(k) { _tipoViaVel[k] = _lsCfg.viaVel[k]; });
-            }
-          } catch(e) {}
-          // Atualiza o campo de velocidade para o tipo ativo
-          var via = '';
-          document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
-            if (b.classList.contains('active')) via = b.textContent.trim();
-          });
-          var viaKey = _VIA_LABEL_TO_KEY[via] || via;
-          if (via && _tipoViaVel[viaKey]) {
-            document.getElementById('horVelMedia').value = _tipoViaVel[viaKey];
+      // Velocidades por tipo de via já vêm no mesmo retorno de
+      // getPontosEsquemaParaFormulario (resp.tipoViaVel) — evita o round-trip
+      // extra que antes disparava getTipoViaVelocidades separado a cada
+      // abertura de esquema.
+      if (resp.tipoViaVel) {
+        _tipoViaVel = resp.tipoViaVel;
+        // Re-aplica customizações do usuário salvas no localStorage (prioridade sobre backend)
+        try {
+          var _lsCfg = JSON.parse(localStorage.getItem('vc_horcfg_' + _sel.id_esquema) || 'null');
+          if (_lsCfg && _lsCfg.viaVel) {
+            Object.keys(_lsCfg.viaVel).forEach(function(k) { _tipoViaVel[k] = _lsCfg.viaVel[k]; });
           }
-          if (_view === 'horario') _lastCalc ? _partialUpdateSchedule() : renderHorario();
-        })
-        .getTipoViaVelocidades(_selSnap.id_esquema);
+        } catch(e) {}
+        // Atualiza o campo de velocidade para o tipo ativo
+        var via = '';
+        document.querySelectorAll('.hor-preset-btn').forEach(function(b) {
+          if (b.classList.contains('active')) via = b.textContent.trim();
+        });
+        var viaKey = _VIA_LABEL_TO_KEY[via] || via;
+        if (via && _tipoViaVel[viaKey]) {
+          document.getElementById('horVelMedia').value = _tipoViaVel[viaKey];
+        }
+        if (_view === 'horario') _lastCalc ? _partialUpdateSchedule() : renderHorario();
+      }
+      // Se uma tentativa anterior de salvar esse esquema bateu em conflito,
+      // o rascunho ficou guardado no navegador — oferece restaurá-lo agora
+      // que a versão atual do servidor acabou de carregar.
+      _verificarRascunhoPendente(idEsq);
     })
     .withFailureHandler(function(e) {
       doneLoading();
@@ -6721,8 +6736,14 @@ function appConfirm(opts) {
 function appConfirmClose() { if (window._appConfirmCleanup) { window._appConfirmCleanup(); window._appConfirmCleanup = null; } }
 
 // ── Análise de esquema (regras + IA Groq) ────────────────────
+// Estado da aba "Horário" do modal de análise — carregada sob demanda (só
+// consome a IA se o usuário realmente clicar na aba), e uma vez por abertura
+// do modal ('idle' → 'loading' → 'done'/'error').
+var _analiseHorarioStatus = 'idle';
+
 function abrirAnaliseEsquema() {
   if (!_sel) return;
+  _analiseHorarioStatus = 'idle';
   var ex = document.getElementById('analiseOverlay'); if (ex) ex.remove();
   var titulo = '#' + esc(_sel.id_esquema) + ' — ' + esc(_sel.nome_linha || '')
     + (_codLinhaTxt(_sel) ? ' (' + esc(_codLinhaTxt(_sel)) + ')' : '');
@@ -6737,7 +6758,12 @@ function abrirAnaliseEsquema() {
         + '</div>'
       + '</div>'
       + '<div style="padding:10px 22px 0;font-size:12px;color:#7a8299;flex-shrink:0;font-weight:600;">' + titulo + '</div>'
+      + '<div style="display:flex;padding:12px 22px 0;flex-shrink:0;border-bottom:1px solid #eef0f6;">'
+        + '<button type="button" class="an-tab active" data-tab="estrutura" onclick="_switchAnaliseTab(\'estrutura\')">Estrutura</button>'
+        + '<button type="button" class="an-tab" data-tab="horario" onclick="_switchAnaliseTab(\'horario\')" title="Divergência entre o horário comercial informado e o horário calculado">Horário</button>'
+      + '</div>'
       + '<div id="analiseBody" style="padding:14px 22px;overflow-y:auto;flex:1;"></div>'
+      + '<div id="analiseBodyHorario" style="display:none;padding:14px 22px;overflow-y:auto;flex:1;"></div>'
     + '</div></div>';
   document.body.insertAdjacentHTML('beforeend', modal);
   document.getElementById('analiseOverlay').addEventListener('click', function(e) { if (e.target === this) fecharAnalise(); });
@@ -6750,6 +6776,23 @@ function abrirAnaliseEsquema() {
     .withSuccessHandler(_renderAnalise)
     .withFailureHandler(function(e) { var b = document.getElementById('analiseBody'); if (b) b.innerHTML = '<div class="massa-msg error" style="margin:0;">Erro: ' + esc(e.message || e) + '</div>'; })
     .analisarEsquema(_sel.id_esquema, true);
+}
+
+/** Alterna entre as abas "Estrutura" (regras + IA sobre o cadastro do
+ * esquema) e "Horário" (divergência entre horário comercial e calculado) do
+ * modal de análise. A aba Horário só dispara a chamada de IA na primeira vez
+ * que é aberta.
+ */
+function _switchAnaliseTab(tab) {
+  var overlay = document.getElementById('analiseOverlay'); if (!overlay) return;
+  overlay.querySelectorAll('.an-tab').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+  });
+  var estBody = document.getElementById('analiseBody');
+  var horBody = document.getElementById('analiseBodyHorario');
+  if (estBody) estBody.style.display = tab === 'estrutura' ? '' : 'none';
+  if (horBody) horBody.style.display = tab === 'horario' ? '' : 'none';
+  if (tab === 'horario' && _analiseHorarioStatus === 'idle') _carregarAnaliseHorario();
 }
 
 function fecharAnalise() { var o = document.getElementById('analiseOverlay'); if (o) o.remove(); }
@@ -6930,13 +6973,14 @@ function _recarregarDadosManager(cb) {
       _setRotasAjust(d.rotasAjustadas || []);
       _lMap = {};
       _locais.forEach(function(l) { _lMap[String(l.codigo)] = l; });
+      try { if (d.lastUpdated) localStorage.setItem('vc_lastUpdated', d.lastUpdated); } catch (e) {}
       _homeLocalSel = null; _homeLocalFilter = '';
       doneLoading();
       if (typeof renderHome === 'function') renderHome();
       if (cb) cb();
     })
     .withFailureHandler(function(e) { doneLoading(); toast('Erro ao recarregar: ' + (e.message || e), 'error'); })
-    .getDadosManager();
+    .getDadosManager(); // sem lastKnownUpdate — botão "Recarregar" força releitura de propósito
 }
 
 // Fecha dropdowns de pontos do modal ao clicar fora.
@@ -7676,31 +7720,56 @@ function _aplicarItinerario() {
   toast(novos.length + ' paradas preenchidas. Revise os horários e salve.', 'success', 4000);
 }
 
+/**
+ * Se `local` já estiver na sequência atual, pede confirmação antes de
+ * adicionar de novo — pontos repetidos compartilham a mesma chave (idPonto)
+ * nos mapas de edição (horário comercial, tempo de parada, tipo de via), então
+ * editar uma ocorrência acaba afetando as duas silenciosamente. Bloquear por
+ * padrão evita o cenário sem impedir o caso legítimo (ex.: garagem na partida
+ * e no encerramento), que só exige uma confirmação explícita.
+ * @param {Object} local  { codigo, descricao, ... }
+ * @param {Function} doAdd  chamado direto (sem duplicata) ou após confirmar.
+ */
+function _addPontoChecandoDuplicata(local, doAdd) {
+  var jaExiste = _seq.some(function(p) { return p.idPonto === local.codigo; });
+  if (!jaExiste) { doAdd(); return; }
+  appConfirm({
+    titulo: 'Ponto já está na sequência',
+    mensagem: '"' + (local.descricao || local.codigo) + '" já aparece nesta sequência.\n\nEditar horário comercial, tempo de parada ou tipo de via numa ocorrência afeta as duas, pois compartilham o mesmo código — revise as duas depois de salvar.\n\nAdicionar mesmo assim?',
+    okLabel: 'Adicionar mesmo assim',
+    onOk: function() { appConfirmClose(); doAdd(); }
+  });
+}
+
 function addPonto(local) {
   document.getElementById('ptDrop').classList.remove('open');
   document.getElementById('ptSearch').value = '';
-  var after = _getInsAfter();
-  _seq.splice(after + 1, 0, {
-    idPonto: local.codigo, nomePonto: local.descricao,
-    tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+  _addPontoChecandoDuplicata(local, function() {
+    var after = _getInsAfter();
+    _seq.splice(after + 1, 0, {
+      idPonto: local.codigo, nomePonto: local.descricao,
+      tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+    });
+    _pendingSelectIdx = after + 1;
+    dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+    _setInsAfter(after + 1);
   });
-  _pendingSelectIdx = after + 1;
-  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
-  _setInsAfter(after + 1);
 }
 
 /** Adiciona ponto sempre no final da sequência (usado pelas sugestões ANTT no painel lateral). */
 function addPontoNoFim(local) {
-  var insertAt = _seq.length; // índice após o último
-  _seq.push({
-    idPonto: local.codigo, nomePonto: local.descricao,
-    tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+  _addPontoChecandoDuplicata(local, function() {
+    var insertAt = _seq.length; // índice após o último
+    _seq.push({
+      idPonto: local.codigo, nomePonto: local.descricao,
+      tipo: local.tipo || '', lat: local.lat || null, lng: local.lng || null, isNew: true
+    });
+    _pendingSelectIdx = insertAt;
+    dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+    _setInsAfter(insertAt);
+    var list = document.getElementById('seqList');
+    if (list) list.scrollTop = list.scrollHeight;
   });
-  _pendingSelectIdx = insertAt;
-  dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
-  _setInsAfter(insertAt);
-  var list = document.getElementById('seqList');
-  if (list) list.scrollTop = list.scrollHeight;
 }
 
 /**
@@ -7729,6 +7798,10 @@ function _findBestInsertIdx(lat, lng) {
  */
 function addPontoNoMapa(local) {
   if (!local.lat || !local.lng) { addPontoNoFim(local); return; }
+  _addPontoChecandoDuplicata(local, function() { _addPontoNoMapaConfirmado(local); });
+}
+
+function _addPontoNoMapaConfirmado(local) {
   var afterIdx = _findBestInsertIdx(+local.lat, +local.lng);
   _seq.splice(afterIdx + 1, 0, {
     idPonto: local.codigo, nomePonto: local.descricao,
@@ -7749,15 +7822,90 @@ function addPontoNoMapa(local) {
 // ============================================================
 //  Save sequence
 // ============================================================
+// ── Rascunho local (recuperação de conflito) ──────────────────
+// Guardado ANTES de cada tentativa de salvar, não só quando o conflito é
+// detectado — assim uma queda de rede no meio do save também não perde a
+// edição, não só o caso de conflito com outra sessão.
+function _draftKey(idEsquema) { return 'vc_draft_' + idEsquema; }
+
+function _salvarRascunhoLocal() {
+  if (!_sel) return;
+  try {
+    var draft = {
+      savedAt: new Date().toISOString(),
+      seq: _seq, comercialTimes: _comercialTimes, tiposParada: _tiposParada,
+      customStopTimes: _customStopTimes, legVia: _legVia, legVelPers: _legVelPers
+    };
+    localStorage.setItem(_draftKey(_sel.id_esquema), JSON.stringify(draft));
+  } catch (e) {}
+}
+
+function _limparRascunhoLocal(idEsquema) {
+  try { localStorage.removeItem(_draftKey(idEsquema)); } catch (e) {}
+}
+
+/** Modal dedicado (não um toast) pro conflito de save — a versão que estava
+ * sendo editada não bate mais com a planilha porque outra sessão salvou esse
+ * mesmo esquema nesse meio-tempo. O rascunho já foi guardado antes do save
+ * (_salvarRascunhoLocal), então recarregar não perde a edição — ela volta a
+ * ser oferecida logo depois do reload. */
+function _mostrarConflitoSalvar() {
+  appConfirm({
+    titulo: 'Conflito ao salvar',
+    mensagem: 'Este esquema foi alterado por outra sessão enquanto você editava.\n\nSuas alterações não foram perdidas — ficaram guardadas neste navegador. Recarregue para ver a versão mais recente; em seguida você poderá optar por restaurar o que estava editando por cima dela.',
+    okLabel: 'Recarregar esquema',
+    onOk: function() {
+      appConfirmClose();
+      carregarPontos(_sel.id_esquema);
+    }
+  });
+}
+
+/** Se existir um rascunho não aplicado deste esquema (de uma tentativa de
+ * save que bateu em conflito), oferece restaurá-lo por cima do que acabou de
+ * carregar do servidor. Chamado ao final de carregarPontos(). */
+function _verificarRascunhoPendente(idEsquema) {
+  var raw;
+  try { raw = localStorage.getItem(_draftKey(idEsquema)); } catch (e) { return; }
+  if (!raw) return;
+  _limparRascunhoLocal(idEsquema); // decide agora — não pergunta de novo depois
+  var draft;
+  try { draft = JSON.parse(raw); } catch (e) { return; }
+  if (!draft || !Array.isArray(draft.seq)) return;
+
+  var quando = '';
+  try { quando = new Date(draft.savedAt).toLocaleString('pt-BR'); } catch (e) {}
+
+  appConfirm({
+    titulo: 'Rascunho não salvo encontrado',
+    mensagem: 'Você tem alterações não salvas deste esquema' + (quando ? ' (de ' + quando + ')' : '') + ', de uma tentativa anterior que bateu em conflito.\n\nQuer restaurá-las por cima da versão que acabou de carregar?',
+    okLabel: 'Restaurar rascunho',
+    onOk: function() {
+      appConfirmClose();
+      _seq             = draft.seq || [];
+      _comercialTimes  = draft.comercialTimes  || {};
+      _tiposParada     = draft.tiposParada     || {};
+      _customStopTimes = draft.customStopTimes || {};
+      _legVia          = draft.legVia          || {};
+      _legVelPers      = draft.legVelPers      || {};
+      dirtySeq(); renderSeq(); updateInsAfter(); updateMap();
+      toast('Rascunho restaurado — revise e salve de novo.', 'success', 5000);
+    }
+  });
+}
+
 function salvarSeq() {
   if (!_sel) { toast('Selecione um esquema.', 'error'); return; }
   var btn = document.getElementById('btnSalvSeq');
   btn.disabled = true; btn.textContent = 'Salvando…';
+  _salvarRascunhoLocal();
 
   loading('Salvando sequência…');
   google.script.run
-    .withSuccessHandler(function() {
+    .withSuccessHandler(function(resp) {
       doneLoading();
+      if (_sel) _sel._loadedAt = (resp && resp.loadedAt) || null;
+      _limparRascunhoLocal(_sel.id_esquema);
       _seq.forEach(function(p) { p.isNew = false; });
       _seqDirt = false;
       document.getElementById('ptUnsaved').style.display = 'none';
@@ -7775,7 +7923,12 @@ function salvarSeq() {
     .withFailureHandler(function(e) {
       doneLoading();
       btn.disabled = false; btn.textContent = 'Salvar Sequência';
-      toast('Erro ao salvar: ' + (e.message || e), 'error');
+      var msg = e.message || String(e);
+      if (msg.indexOf('CONFLITO') !== -1) {
+        _mostrarConflitoSalvar();
+      } else {
+        toast('Erro ao salvar: ' + msg, 'error');
+      }
     })
     .salvarSequenciaPontos(_sel.id_esquema, _seq.map(function(p, idx) {
       var flags = _tiposParada[p.idPonto] || {};
@@ -7790,7 +7943,7 @@ function salvarSeq() {
         tipoTrecho: _legViaSerialized(p.idPonto),
         troca: !!flags.troca, abastecimento: !!flags.abastecimento, alimentacao: !!flags.alimentacao, limpeza: !!flags.limpeza
       };
-    }));
+    }), _sel._loadedAt);
 }
 
 // ============================================================

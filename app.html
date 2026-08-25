@@ -4260,32 +4260,53 @@
       return !!(el && el.offsetParent !== null && el.getClientRects().length > 0);
     }
 
+    // Seções que, quando têm subitens, viram um rótulo de grupo (não clicável)
+    // em vez de item de navegação — os subitens passam a ser a navegação real.
+    // Puramente visual: não muda quais seções existem nem seus dados.
+    var GROUP_HEADER_IDS = { sectionAlertas: true };
+
+    function _splitCountLabel(lbl) {
+      // "Paradas Irregulares (7)" → { text: "Paradas Irregulares", count: "7" }
+      var m = /^(.*)\s\((\d+)\)\s*$/.exec(lbl);
+      return m ? { text: m[1], count: m[2] } : { text: lbl, count: null };
+    }
+
     function refresh() {
       var listEl = document.getElementById('guideList');
       var wrap = document.querySelector('.app-wrapper');
       if (!listEl || !wrap) return;
 
       var html = '', targets = [];
+      html += '<li class="guide-group-label">Análise</li>';
       SECTIONS.forEach(function (sec) {
         var el = document.getElementById(sec.id);
         if (!_visible(el)) return;
-        targets.push({ key: sec.id, el: el });
-        html += '<li>'
-          + '<div class="guide-item" data-target="' + sec.id + '">'
-          + '<span class="guide-dot"></span><span>' + _esc(sec.label) + '</span></div>';
 
         var anchors = el.querySelectorAll('[data-guide-anchor]');
+        var isGroupHeader = GROUP_HEADER_IDS[sec.id] && anchors.length > 0;
+
+        if (isGroupHeader) {
+          html += '<li class="guide-group-label">' + _esc(sec.label) + '</li>';
+        } else {
+          targets.push({ key: sec.id, el: el });
+          html += '<li>'
+            + '<div class="guide-item" data-target="' + sec.id + '">'
+            + '<span class="guide-dot"></span><span>' + _esc(sec.label) + '</span></div>';
+        }
+
         var subHtml = '';
         Array.prototype.forEach.call(anchors, function (an, i) {
           if (!_visible(an)) return;
           if (!an.id) an.id = sec.id + '_sub_' + i;
-          var lbl = an.getAttribute('data-guide-label') || 'Seção';
+          var parts = _splitCountLabel(an.getAttribute('data-guide-label') || 'Seção');
           targets.push({ key: an.id, el: an });
           subHtml += '<li><div class="guide-sub" data-target="' + an.id + '">'
-            + '<span class="guide-tick"></span><span>' + _esc(lbl) + '</span></div></li>';
+            + '<span class="guide-tick"></span><span class="guide-sub-label">' + _esc(parts.text) + '</span>'
+            + (parts.count != null ? '<span class="guide-sub-count">' + _esc(parts.count) + '</span>' : '')
+            + '</div></li>';
         });
         if (subHtml) html += '<ul class="guide-sublist">' + subHtml + '</ul>';
-        html += '</li>';
+        if (!isGroupHeader) html += '</li>';
       });
 
       if (!targets.length) {

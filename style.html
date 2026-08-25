@@ -5,25 +5,58 @@
      ============================================================ */
 
   :root {
-    --bg: #f5f6f8;
+    /* ---- Superfícies / texto (levemente mais frio e menos plano) ---- */
+    --bg: #f4f5f8;
+    --bg2: #eef0f4;
     --surface: #ffffff;
-    --border: #e2e5ea;
-    --text: #1a1d23;
-    --text2: #5a6070;
+    --surface-raised: #ffffff;
+    --border: #e4e7ec;
+    --border-strong: #d6dae2;
+    --text: #14161b;
+    --text2: #565c6b;
     --text3: #9aa0ad;
+
+    /* ---- Identidade (laranja Catedral, dessaturado p/ uso amplo) ---- */
     --laranja: #f47920;
     --laranja2: #d96610;
     --laranja3: rgba(244, 121, 32, 0.1);
     --laranja4: rgba(244, 121, 32, 0.05);
-    --verde: #22a96a;
-    --vermelho: #d94040;
-    --amarelo: #e8a020;
-    --azul: #3b82f6;
-    --cinza: #8a919e;
+
+    /* ---- Semântica de estado (dessaturada — cor comunica, não decora) ---- */
+    --verde: #1f9d63;
+    --verde-bg: rgba(31, 157, 99, 0.09);
+    --verde-border: rgba(31, 157, 99, 0.22);
+    --vermelho: #d33a3a;
+    --vermelho-bg: rgba(211, 58, 58, 0.08);
+    --vermelho-border: rgba(211, 58, 58, 0.24);
+    --amarelo: #c9871f;
+    --amarelo-bg: rgba(201, 135, 31, 0.1);
+    --amarelo-border: rgba(201, 135, 31, 0.24);
+    --azul: #3568d4;
+    --azul-bg: rgba(53, 104, 212, 0.08);
+    --azul-border: rgba(53, 104, 212, 0.22);
+    --cinza: #838a97;
+    --cinza-bg: rgba(131, 138, 151, 0.1);
+    --cinza-border: rgba(131, 138, 151, 0.22);
+
+    /* ---- Escala de espaçamento ---- */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 20px;
+    --sp-6: 24px;
+    --sp-8: 32px;
+
+    /* ---- Raio / sombra (sutis, sem cartão flutuante) ---- */
     --radius: 10px;
     --radius-sm: 6px;
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.07);
-    --shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --radius-lg: 12px;
+    --shadow-sm: 0 1px 2px rgba(16, 20, 30, 0.05);
+    --shadow: 0 1px 3px rgba(16, 20, 30, 0.07), 0 1px 1px rgba(16, 20, 30, 0.04);
+
+    /* ---- Tipografia monoespaçada (horários / números operacionais) ---- */
+    --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
   }
 
   *,
@@ -73,28 +106,28 @@
   .app-header {
     background: var(--surface);
     border-bottom: 1px solid var(--border);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
-    padding: 0 24px;
-    height: 60px;
+    box-shadow: var(--shadow-sm);
+    padding: 0 var(--sp-6);
+    height: 64px;
     display: flex;
     align-items: center;
     justify-content: space-between;
     position: sticky;
     top: 0;
     z-index: 1100;
-    gap: 16px;
+    gap: var(--sp-5);
   }
 
   .header-left {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--sp-3);
     flex-shrink: 0;
   }
 
   .header-logo {
-    width: 34px;
-    height: 34px;
+    width: 36px;
+    height: 36px;
     background: var(--laranja);
     border-radius: var(--radius-sm);
     display: flex;
@@ -108,38 +141,132 @@
   }
 
   .header-title {
-    font-size: 14px;
+    font-size: 16px;
     font-weight: 700;
     color: var(--text);
-    letter-spacing: -0.2px;
-    line-height: 1.2;
+    letter-spacing: -0.25px;
+    line-height: 1.25;
   }
 
   .header-sub {
     font-size: 11px;
+    font-weight: 500;
     color: var(--text3);
-    line-height: 1.2;
+    line-height: 1.3;
+    letter-spacing: 0.01em;
   }
 
   .header-center {
     display: flex;
     align-items: center;
-    gap: 10px;
+    flex: 1;
+    min-width: 0;
+    max-width: 560px;
+    /* Em telas estreitas o conteúdo interno (combobox + chip) não pode
+       nunca vazar por cima do header-right — corta em vez de sobrepor. */
+    overflow: hidden;
+  }
+
+  .header-trip-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     flex: 1;
     min-width: 0;
   }
 
+  /* Ponto indicando que a viagem no combobox é a que está em análise agora */
+  .header-live-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--verde);
+    flex-shrink: 0;
+    box-shadow: 0 0 0 3px var(--verde-bg);
+  }
+
+  .header-icon-btn {
+    flex-shrink: 0;
+    min-width: 32px;
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    width: 32px;
+    height: 32px;
+    cursor: pointer;
+    font-size: 15px;
+    color: var(--text3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  .header-icon-btn:hover { color: var(--laranja); border-color: var(--laranja); }
+
   .header-right {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-4);
     flex-shrink: 0;
   }
+
+  /* Agrupa os controles do header-right em dois clusters visualmente
+     distintos: ações (botões) × status (indicadores de contexto). */
+  .header-actions,
+  .header-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .header-divider {
+    width: 1px;
+    height: 22px;
+    background: var(--border);
+    flex-shrink: 0;
+  }
+
+  /* Botões de ação secundários do header — visual uniforme e discreto */
+  .header-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 12px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text2);
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .header-btn:hover:not(:disabled) {
+    border-color: var(--laranja);
+    color: var(--laranja);
+    background: var(--laranja4);
+  }
+  .header-btn:disabled { cursor: default; opacity: 0.45; }
+
+  .header-btn-primary {
+    border: 1.5px solid var(--laranja);
+    background: var(--laranja);
+    color: #fff;
+  }
+  .header-btn-primary:hover:not(:disabled) {
+    background: var(--laranja2);
+    border-color: var(--laranja2);
+    color: #fff;
+  }
+
 
   /* ── Combobox pesquisável de esquema ── */
   .esquema-combobox {
     position: relative;
-    min-width: 220px;
+    min-width: 140px;
     max-width: 480px;
     flex: 1 1 auto;
   }
@@ -150,17 +277,20 @@
   }
   .esquema-search-input {
     width: 100%;
-    background: var(--bg);
+    background: var(--bg2);
     border: 1px solid var(--border);
     border-radius: 8px;
-    padding: 7px 32px 7px 12px;
-    font-size: 13px;
+    padding: 8px 34px 8px 14px;
+    font-size: 13.5px;
+    font-weight: 600;
     color: var(--text);
     font-family: inherit;
+    letter-spacing: -0.1px;
     cursor: pointer;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
     outline: none;
   }
+  .esquema-search-input::placeholder { font-weight: 400; }
   .esquema-search-input:focus,
   .esquema-search-input.open {
     border-color: var(--laranja);
@@ -265,37 +395,46 @@
     line-height: 1.2;
   }
 
-  /* ---- Badges ---- */
+  /* ---- Badges (indicadores de contexto do header — não são botões) ---- */
   .badge {
-    background: var(--laranja3);
-    border: 1px solid rgba(244, 121, 32, 0.25);
-    color: var(--laranja);
-    padding: 3px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text2);
+    padding: 4px 10px;
     border-radius: 20px;
-    font-size: 11px;
+    font-size: 11.5px;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
     gap: 5px;
     white-space: nowrap;
+    line-height: 1.2;
   }
 
   .badge.verde {
-    background: rgba(34, 169, 106, 0.1);
-    border-color: rgba(34, 169, 106, 0.25);
+    background: var(--verde-bg);
+    border-color: var(--verde-border);
     color: var(--verde);
   }
 
   .badge.vermelho {
-    background: rgba(217, 64, 64, 0.1);
-    border-color: rgba(217, 64, 64, 0.25);
+    background: var(--vermelho-bg);
+    border-color: var(--vermelho-border);
     color: var(--vermelho);
   }
 
   .badge.amarelo {
-    background: rgba(232, 160, 32, 0.1);
-    border-color: rgba(232, 160, 32, 0.25);
+    background: var(--amarelo-bg);
+    border-color: var(--amarelo-border);
     color: var(--amarelo);
+  }
+
+  /* Em telas mais estreitas, os indicadores de contexto (badges) somem
+     primeiro — a mesma informação já aparece na faixa de Resumo — para
+     abrir espaço e o combobox de viagem nunca precisar cortar/sobrepor
+     os botões de ação. */
+  @media (max-width: 1360px) {
+    .header-status, .header-divider { display: none; }
   }
 
   /* ============================================================
@@ -317,9 +456,9 @@
     position: fixed;
     left: 0;
     top: 0;
-    width: 232px;
+    width: 208px;
     height: 100vh;
-    padding: 74px 12px 24px 20px;
+    padding: 80px 10px 24px 16px;
     overflow-y: auto;
     z-index: 40;
     background: var(--bg);
@@ -327,7 +466,7 @@
     display: none;
   }
   .app-wrapper.has-guide .section-guide { display: block; }
-  .app-wrapper.has-guide { padding-left: 232px; }
+  .app-wrapper.has-guide { padding-left: 208px; }
 
   .guide-title {
     font-size: 10px;
@@ -335,17 +474,32 @@
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: var(--text3);
-    margin: 0 8px 10px;
+    margin: 0 8px 14px;
   }
+
+  /* Rótulo de grupo dentro da lista (ex.: "ANÁLISE", "ALERTAS OPERACIONAIS")
+     — inserido dinamicamente pelo SectionGuide, não é clicável. */
+  .guide-group-label {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+    color: var(--text3);
+    padding: 3px 10px;
+    margin-top: 14px;
+  }
+  .guide-group-label:first-child { margin-top: 0; }
+
   .guide-list, .guide-sublist { list-style: none; margin: 0; padding: 0; }
   .guide-list { display: flex; flex-direction: column; gap: 1px; }
 
   .guide-item {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 8px;
-    padding: 7px 10px;
-    border-radius: 7px;
+    padding: 6px 10px 6px 12px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 12.5px;
     color: var(--text2);
@@ -356,37 +510,73 @@
     transition: background 0.12s, color 0.12s;
   }
   .guide-item:hover { background: var(--surface); color: var(--text); }
-  .guide-item.active { color: var(--laranja); background: var(--laranja4); font-weight: 700; }
+  .guide-item.active {
+    color: var(--text);
+    background: var(--laranja4);
+    font-weight: 600;
+  }
+  /* Barra lateral discreta no item ativo — em vez de laranja tomando tudo */
+  .guide-item.active::before {
+    content: '';
+    position: absolute;
+    left: -4px; top: 4px; bottom: 4px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--laranja);
+  }
   .guide-item > span:last-child { overflow: hidden; text-overflow: ellipsis; }
   .guide-dot {
-    width: 6px; height: 6px; border-radius: 50%;
-    background: currentColor; flex-shrink: 0; opacity: 0.45;
+    width: 5px; height: 5px; border-radius: 50%;
+    background: currentColor; flex-shrink: 0; opacity: 0.4;
   }
-  .guide-item.active .guide-dot { opacity: 1; }
+  .guide-item.active .guide-dot { opacity: 0; width: 0; }
 
   .guide-sub {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 7px;
-    padding: 5px 10px 5px 24px;
-    border-radius: 7px;
+    padding: 5px 10px 5px 20px;
+    border-radius: 6px;
     cursor: pointer;
     font-size: 11.5px;
-    color: var(--text3);
+    color: var(--text2);
     font-weight: 500;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
     transition: background 0.12s, color 0.12s;
   }
   .guide-sub:hover { background: var(--surface); color: var(--text); }
-  .guide-sub.active { color: var(--laranja); font-weight: 600; }
-  .guide-sub > span:last-child { overflow: hidden; text-overflow: ellipsis; }
-  .guide-tick {
-    width: 5px; height: 5px; border-radius: 1px;
-    background: currentColor; flex-shrink: 0; opacity: 0.45;
+  .guide-sub.active { color: var(--text); font-weight: 600; background: var(--laranja4); }
+  .guide-sub.active::before {
+    content: '';
+    position: absolute;
+    left: -4px; top: 4px; bottom: 4px;
+    width: 3px;
+    border-radius: 2px;
+    background: var(--laranja);
   }
-  .guide-sub.active .guide-tick { opacity: 1; }
+  .guide-sub-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .guide-sub-count {
+    flex-shrink: 0;
+    font-size: 10.5px;
+    font-weight: 700;
+    color: var(--text3);
+    background: var(--bg2);
+    border-radius: 10px;
+    padding: 1px 6px;
+    line-height: 1.5;
+  }
+  .guide-sub.active .guide-sub-count { color: var(--laranja); background: var(--laranja3); }
+  .guide-tick {
+    width: 4px; height: 4px; border-radius: 1px;
+    background: currentColor; flex-shrink: 0; opacity: 0.4;
+  }
+  .guide-sub.active .guide-tick { opacity: 0; width: 0; }
 
   @media (max-width: 1099px) {
     .app-wrapper.has-guide { padding-left: 0; }
@@ -684,32 +874,40 @@
      SEÇÃO RESUMO (cards)
      ============================================================ */
 
+  /* Faixa analítica compacta — não é um grid de cards de dashboard genérico:
+     uma única superfície com divisores internos sutis entre indicadores. */
   .summary-bar {
     display: flex;
-    gap: 12px;
     flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
   }
 
   .sum-card {
     flex: 1;
-    min-width: 140px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 16px 20px;
-    box-shadow: var(--shadow-sm);
-    transition: box-shadow 0.15s;
+    min-width: 130px;
+    padding: 12px 18px;
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
   }
+  .sum-card:hover { background: var(--bg2); }
+  .sum-card:last-child { border-right: none; }
 
-  .sum-card:hover {
-    box-shadow: var(--shadow);
+  @media (max-width: 900px) {
+    .sum-card { flex-basis: 33.33%; }
   }
 
   .sum-value {
-    font-size: 28px;
+    font-size: 20px;
     font-weight: 700;
-    line-height: 1;
+    line-height: 1.15;
     color: var(--text);
+    letter-spacing: -0.3px;
+    font-variant-numeric: tabular-nums;
   }
 
   .sum-value.verde {
@@ -726,9 +924,12 @@
   }
 
   .sum-label {
-    font-size: 12px;
-    color: var(--text2);
-    margin-top: 4px;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text3);
+    margin-top: 3px;
   }
 
   /* ============================================================
@@ -753,7 +954,7 @@
   .eventos-panel-full {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: var(--radius-lg);
     overflow: hidden;
     display: flex;
     flex-direction: column;
@@ -761,8 +962,17 @@
   }
 
   .eventos-tabela-wrapper {
-    max-height: 520px;
+    max-height: 560px;
     overflow-y: auto;
+    /* sombra sutil no topo/rodapé quando há conteúdo oculto pelo scroll */
+    background:
+      linear-gradient(var(--surface) 30%, rgba(255,255,255,0)),
+      linear-gradient(rgba(255,255,255,0), var(--surface) 70%) bottom,
+      radial-gradient(farthest-side at top, rgba(16,20,30,0.08), rgba(0,0,0,0)),
+      radial-gradient(farthest-side at bottom, rgba(16,20,30,0.08), rgba(0,0,0,0)) bottom;
+    background-repeat: no-repeat;
+    background-size: 100% 24px, 100% 24px, 100% 8px, 100% 8px;
+    background-attachment: local, local, scroll, scroll;
   }
 
   /* Mantido para compatibilidade com código legado */
@@ -785,18 +995,24 @@
   }
 
   .panel-header {
-    padding: 14px 18px;
+    padding: 14px 20px;
     border-bottom: 1px solid var(--border);
+    background: var(--bg2);
     display: flex;
     align-items: center;
     justify-content: space-between;
     flex-shrink: 0;
+    gap: 10px;
   }
 
   .panel-title {
-    font-weight: 600;
-    font-size: 13px;
+    font-weight: 700;
+    font-size: 14px;
     color: var(--text);
+    letter-spacing: -0.1px;
+    display: inline-flex;
+    align-items: baseline;
+    gap: 8px;
   }
 
   .legenda-inline {
@@ -836,13 +1052,21 @@
   }
 
   .count-badge {
-    background: var(--bg);
+    background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
-    padding: 2px 8px;
+    padding: 2px 9px;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 700;
     color: var(--text2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .panel-sub {
+    font-size: 12px;
+    color: var(--text3);
+    font-weight: 400;
+    margin-top: 2px;
   }
 
   /* Map within mapa-panel */
@@ -888,36 +1112,37 @@
 
   .events-table {
     width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 12.5px;
   }
 
   .events-table thead th {
     position: sticky;
     top: 0;
-    background: var(--surface);
-    border-bottom: 2px solid var(--border);
-    padding: 10px 12px;
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border-strong);
+    padding: 9px 12px;
     text-align: left;
-    font-size: 11px;
+    font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.05em;
     color: var(--text2);
     white-space: nowrap;
     z-index: 2;
   }
 
-  .events-table tbody tr:nth-child(even) {
-    background: #fafbfc;
+  .events-table tbody tr {
+    transition: background 0.12s;
   }
 
   .events-table tbody tr:hover td {
-    background: #f5f7ff;
+    background: var(--bg2);
   }
 
   .events-table tbody td {
-    padding: 9px 12px;
+    padding: 8px 12px;
     border-bottom: 1px solid var(--border);
     vertical-align: middle;
     color: var(--text2);
@@ -927,33 +1152,118 @@
     border-bottom: none;
   }
 
-  .events-table tbody tr.row-nao-visitado {
-    opacity: 0.55;
+  /* ---- Severidade da linha: barra lateral discreta, não um banho de cor ----
+     (border-left no 1º td — box-shadow em <tr> não é confiável entre browsers) */
+  .events-table tbody td:first-child {
+    border-left: 3px solid transparent;
   }
 
+  .events-table tbody tr.row-nao-visitado td:first-child {
+    border-left-color: var(--border-strong);
+  }
+  .events-table tbody tr.row-nao-visitado td {
+    color: var(--text3);
+  }
+  .events-table tbody tr.row-nao-visitado .ponto-cell {
+    color: var(--text2);
+  }
+
+  .events-table tbody tr.row-excesso td:first-child {
+    border-left-color: var(--amarelo);
+  }
   .events-table tbody tr.row-excesso td {
-    background: #fffbf0;
+    background: rgba(201, 135, 31, 0.035);
   }
 
-  .events-table tbody tr.row-critico td {
-    background: #fff5f5;
+  .events-table tbody tr.row-critico td:first-child {
+    border-left-color: var(--vermelho);
   }
+  .events-table tbody tr.row-critico td {
+    background: rgba(211, 58, 58, 0.035);
+  }
+
+  .events-table tbody tr:hover.row-excesso td { background: rgba(201, 135, 31, 0.07); }
+  .events-table tbody tr:hover.row-critico td { background: rgba(211, 58, 58, 0.07); }
 
   .events-table .seq-cell {
     color: var(--text3);
     font-size: 11px;
-    width: 36px;
+    width: 32px;
     text-align: center;
     font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
 
   .events-table .ponto-cell {
-    font-weight: 500;
+    font-weight: 600;
+    font-size: 12.8px;
     color: var(--text);
-    max-width: 200px;
+    max-width: 240px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  /* ---- Hierarquia de horários (Entrada/Saída/Comercial/Dif./Parada/Excesso) ---- */
+  .time-cell {
+    white-space: nowrap;
+    font-size: 11.5px;
+    font-family: var(--font-mono);
+    color: var(--text2);
+    letter-spacing: -0.2px;
+  }
+
+  .comercial-cell, .dif-cell, .parada-cell, .excesso-cell {
+    white-space: nowrap;
+  }
+
+  .comercial-value {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--azul);
+    font-weight: 500;
+  }
+  .comercial-value.is-empty {
+    font-family: inherit;
+    color: var(--text3);
+    font-weight: 400;
+  }
+
+  /* Diferença comercial — sinal e número tratados como uma unidade só */
+  .dif-value {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: -0.1px;
+  }
+  .dif-value.is-atraso     { color: var(--vermelho); }
+  .dif-value.is-adiantado  { color: var(--verde); }
+  .dif-value.is-neutro     { color: var(--text3); font-weight: 400; }
+
+  .parada-cell {
+    font-size: 12px;
+    color: var(--text2);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Excesso — a coluna operacionalmente mais importante da tabela */
+  .excesso-value {
+    font-size: 12.5px;
+    font-variant-numeric: tabular-nums;
+  }
+  .excesso-value.is-atencao {
+    color: var(--amarelo);
+    font-weight: 600;
+  }
+  .excesso-value.is-critico {
+    color: var(--vermelho);
+    font-weight: 700;
+  }
+  .excesso-value.is-empty {
+    color: var(--text3);
+    font-weight: 400;
   }
 
   /* ============================================================
@@ -972,27 +1282,27 @@
   }
 
   .tag-realizado {
-    background: #e6f9f0;
+    background: var(--verde-bg);
     color: var(--verde);
-    border: 1px solid rgba(34, 169, 106, 0.2);
+    border: 1px solid var(--verde-border);
   }
 
   .tag-nao-visitado {
-    background: #f0f1f3;
+    background: var(--cinza-bg);
     color: var(--cinza);
-    border: 1px solid rgba(138, 145, 158, 0.2);
+    border: 1px solid var(--cinza-border);
   }
 
   .tag-excesso {
-    background: #fff3e0;
+    background: var(--amarelo-bg);
     color: var(--amarelo);
-    border: 1px solid rgba(232, 160, 32, 0.2);
+    border: 1px solid var(--amarelo-border);
   }
 
   .tag-critico {
-    background: #fff0f0;
+    background: var(--vermelho-bg);
     color: var(--vermelho);
-    border: 1px solid rgba(217, 64, 64, 0.2);
+    border: 1px solid var(--vermelho-border);
   }
 
   /* Tipo de ponto (tabela de pontos) */
@@ -1013,15 +1323,15 @@
   }
 
   .tag-auxiliar {
-    background: rgba(34, 169, 106, 0.1);
+    background: var(--verde-bg);
     color: var(--verde);
-    border: 1px solid rgba(34, 169, 106, 0.25);
+    border: 1px solid var(--verde-border);
   }
 
   .tag-nao-aut {
-    background: rgba(217, 64, 64, 0.1);
+    background: var(--vermelho-bg);
     color: var(--vermelho);
-    border: 1px solid rgba(217, 64, 64, 0.25);
+    border: 1px solid var(--vermelho-border);
   }
 
   /* Hover para gerar ocorrência inline (tag-nao-aut e proibido42) */
@@ -1046,19 +1356,19 @@
   }
 
   .tag-garagem {
-    background: rgba(138, 145, 158, 0.15);
+    background: var(--cinza-bg);
     color: var(--cinza);
-    border: 1px solid rgba(138, 145, 158, 0.3);
+    border: 1px solid var(--cinza-border);
   }
 
   .tag-rodoviaria {
-    background: rgba(59, 130, 246, 0.1);
+    background: var(--azul-bg);
     color: var(--azul);
-    border: 1px solid rgba(59, 130, 246, 0.25);
+    border: 1px solid var(--azul-border);
   }
 
   .tag-desconhecido {
-    background: #f5f6f8;
+    background: var(--bg2);
     color: var(--text3);
     border: 1px solid var(--border);
   }
@@ -1067,31 +1377,31 @@
 
   /* Em trânsito / parada breve — cinza discreto */
   .tag-status-transito {
-    background: #f0f1f3;
+    background: var(--cinza-bg);
     color: var(--text3);
-    border: 1px solid rgba(138, 145, 158, 0.2);
+    border: 1px solid var(--cinza-border);
   }
 
   /* Excesso leve — amarelo suave */
   .tag-status-leve {
-    background: rgba(232, 160, 32, 0.1);
+    background: var(--amarelo-bg);
     color: var(--amarelo);
-    border: 1px solid rgba(232, 160, 32, 0.25);
+    border: 1px solid var(--amarelo-border);
   }
 
   /* Parada prolongada — laranja (atenção) */
   .tag-status-excesso {
-    background: rgba(244, 121, 32, 0.1);
+    background: var(--laranja4);
     color: var(--laranja);
-    border: 1px solid rgba(244, 121, 32, 0.3);
+    border: 1px solid var(--laranja3);
     font-weight: 600;
   }
 
   /* Crítico — vermelho */
   .tag-status-critico {
-    background: rgba(217, 64, 64, 0.12);
+    background: var(--vermelho-bg);
     color: var(--vermelho);
-    border: 1px solid rgba(217, 64, 64, 0.3);
+    border: 1px solid var(--vermelho-border);
     font-weight: 700;
   }
 
@@ -1103,9 +1413,9 @@
     border-radius: 20px;
     font-size: 11px;
     font-weight: 600;
-    background: #e6f9f0;
+    background: var(--verde-bg);
     color: var(--verde);
-    border: 1px solid rgba(34, 169, 106, 0.2);
+    border: 1px solid var(--verde-border);
     white-space: nowrap;
   }
 
@@ -1123,7 +1433,7 @@
     display: flex;
     gap: 12px;
     padding: 14px 16px;
-    border-radius: 10px;
+    border-radius: var(--radius);
     border-left: 3px solid;
     background: var(--surface);
     border-top: 1px solid var(--border);
@@ -1134,27 +1444,27 @@
 
   .alert-card.critico {
     border-left-color: var(--vermelho);
-    background: #fff8f8;
+    background: var(--vermelho-bg);
   }
 
   .alert-card.atencao {
     border-left-color: var(--amarelo);
-    background: #fffdf5;
+    background: var(--amarelo-bg);
   }
 
   .alert-card.parada {
     border-left-color: var(--azul);
-    background: #f0f7ff;
+    background: var(--azul-bg);
   }
 
   .alert-card.info {
     border-left-color: var(--cinza);
-    background: #fafbfc;
+    background: var(--bg2);
   }
 
   .alert-card.nao-visitado {
     border-left-color: var(--cinza);
-    background: #fafbfc;
+    background: var(--bg2);
   }
 
   .alert-icon {
@@ -1646,7 +1956,7 @@
   }
 
   .analysis-table tr:hover td {
-    background: #f5f7ff;
+    background: var(--bg2);
   }
 
   .analysis-table .seq-cell {

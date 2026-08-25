@@ -37,6 +37,7 @@ function onEdit(e) {
     if (ABAS_RASTREADAS_LAST_UPDATED.indexOf(nomeAba) === -1) return;
     EsquemasService.invalidateCache();
     EsquemasService.markUpdated();
+    if (nomeAba === 'LOCAIS') SheetsService.invalidateLocaisCache();
   } catch (err) {
     // Simple trigger: nunca deixa a exceção escapar e travar a edição do usuário.
   }
@@ -149,7 +150,17 @@ function getPontosEsquemaParaFormulario(idEsquema) {
         result[i].tipoTrecho = distVia[norm[0] + ':' + norm[1]] || '';
       }
     }
-    return result;
+    // loadedAt viaja junto com os pontos para permitir detecção de conflito
+    // otimista em salvarSequenciaPontos: quem edita guarda esse timestamp e
+    // reenvia no save; se o esquema tiver sido alterado por outra sessão
+    // nesse meio-tempo, o backend recusa o replace cego em vez de sobrescrever.
+    // tipoViaVel viaja junto para poupar o round-trip extra que carregarPontos
+    // fazia logo em seguida (getTipoViaVelocidades) toda vez que um esquema é aberto.
+    return {
+      pontos: result,
+      loadedAt: EsquemasService.getEsquemaLastUpdated(idEsquema),
+      tipoViaVel: getTipoViaVelocidades(idEsquema)
+    };
   } catch (e) {
     throw new Error('Erro ao ler pontos do esquema ' + idEsquema + ': ' + (e.message || e));
   }
@@ -478,14 +489,61 @@ function gerarExcelEsquemaXlsx(d) {
 }
 
 /**
+ * Apaga um conjunto de linhas (números 1-based) de `sheet` em lote, agrupando
+ * índices contíguos numa única chamada `deleteRows(start, count)` em vez de
+ * um `deleteRow()` por linha — menos chamadas à API do Sheets em esquemas
+ * grandes. Processa da faixa de maior número de linha para a menor, então
+ * apagar uma faixa nunca desloca os números das faixas ainda não apagadas.
+ * @param {Sheet} sheet
+ * @param {number[]} rowNumbers  não precisa estar ordenado.
+ */
+function _deleteRowsBatch_(sheet, rowNumbers) {
+  if (!rowNumbers || !rowNumbers.length) return;
+  var sorted = rowNumbers.slice().sort(function(a, b) { return b - a; }); // desc
+  var i = 0;
+  while (i < sorted.length) {
+    var end = sorted[i];
+    var start = end;
+    var j = i;
+    while (j + 1 < sorted.length && sorted[j + 1] === start - 1) {
+      start = sorted[j + 1];
+      j++;
+    }
+    sheet.deleteRows(start, end - start + 1);
+    i = j + 1;
+  }
+}
+
+/**
  * Substitui toda a sequência de pontos de um esquema na aba ESQUEMA_PONTOS.
  * Apaga as linhas existentes do esquema e reinsere com ORDEM 1,2,3...
+ *
+ * Protegida por LockService (serializa contra escritas concorrentes — Web App
+ * e sidebar do Sheets chamam esta mesma função) e por checagem de conflito
+ * otimista via `loadedAt`: se o esquema tiver sido alterado por outra sessão
+ * desde que o chamador carregou os pontos, recusa o replace em vez de
+ * sobrescrever silenciosamente.
+ *
  * @param {string} idEsquema
  * @param {Array<{idPonto: string, nomePonto: string}>} pontos
- * @returns {boolean}
+ * @param {?string} [loadedAt]  timestamp (EsquemasService.getEsquemaLastUpdated)
+ *   visto pelo chamador quando carregou os pontos, para detecção de conflito.
+ *   Omitido/undefined = pula a checagem (chamadas legadas continuam funcionando).
+ * @returns {{ok:boolean, loadedAt:string}}
  */
-function salvarSequenciaPontos(idEsquema, pontos) {
+function salvarSequenciaPontos(idEsquema, pontos, loadedAt) {
+  var lock = LockService.getScriptLock();
   try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado salvando outro esquema — tente novamente em instantes.');
+  }
+  try {
+    var atual = EsquemasService.getEsquemaLastUpdated(idEsquema);
+    if (loadedAt !== undefined && loadedAt !== null && atual && atual !== loadedAt) {
+      throw new Error('CONFLITO: este esquema foi alterado por outra sessão enquanto você editava. Recarregue o esquema antes de salvar, para não perder a alteração da outra sessão.');
+    }
+
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName('ESQUEMA_PONTOS');
     if (!sheet) throw new Error('Aba "ESQUEMA_PONTOS" não encontrada.');
@@ -509,14 +567,14 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     var idStr = String(idEsquema).trim();
     var lastRow = sheet.getLastRow();
 
-    // Remove todas as linhas do esquema (de baixo para cima para não deslocar índices)
+    // Remove todas as linhas do esquema, agrupadas em faixas contíguas
     if (lastRow >= 2) {
       var ids = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
-      for (var i = ids.length - 1; i >= 0; i--) {
-        if (String(ids[i][0]).trim() === idStr) {
-          sheet.deleteRow(i + 2);
-        }
+      var rowsToDelete = [];
+      for (var i = 0; i < ids.length; i++) {
+        if (String(ids[i][0]).trim() === idStr) rowsToDelete.push(i + 2);
       }
+      _deleteRowsBatch_(sheet, rowsToDelete);
     }
 
     // Reinsere com ORDEM sequencial
@@ -530,6 +588,7 @@ function salvarSequenciaPontos(idEsquema, pontos) {
 
     EsquemasService.invalidateCache();
     EsquemasService.markUpdated();
+    EsquemasService.markEsquemaUpdated(idEsquema);
 
     // Deriva os trechos (legs) da sequência e salva tipo_via em DISTANCIAS.
     // Trechos personalizados ("Pers:72") são específicos do esquema: não vão para o
@@ -543,9 +602,11 @@ function salvarSequenciaPontos(idEsquema, pontos) {
     _atualizarTipoViaDistancias_(legs);
     _colorirEsquemaPontos_(sheet);
 
-    return true;
+    return { ok: true, loadedAt: EsquemasService.getEsquemaLastUpdated(idEsquema) };
   } catch (e) {
     throw new Error('Erro ao salvar sequência: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -654,7 +715,7 @@ function _chamarGroqGrupo_(resumo) {
   var props = PropertiesService.getScriptProperties();
   var key = props.getProperty('GROQ_API_KEY');
   if (!key) return { erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
-  var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
+  var model = props.getProperty('GROQ_MODEL') || 'openai/gpt-oss-120b';
   var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe vários esquemas de viagem (cada um com sua sequência de paradas) e deve compará-los ENTRE SI, apontando APENAS o que está claramente fora do comum: '
     + 'um mesmo local (mesmo código) aparecendo com horários comerciais divergentes em linhas diferentes; partidas/encerramentos incoerentes com o nome da linha; cidades fora de ordem geográfica; o mesmo ponto cadastrado de formas diferentes; desvios grandes; e qualquer inconsistência relevante entre os esquemas. '
     + 'REGRA OBRIGATÓRIA sobre o SENTIDO: o nome da linha cita as duas pontas SEM indicar ordem (ex.: "FORTALEZA X RECIFE"). No sentido "Ida" o trajeto vai da primeira ponta para a segunda; no sentido "Volta" vai da segunda para a primeira (INVERTIDO). Logo, um esquema "Volta" que começa na segunda cidade e termina na primeira está CORRETO — NUNCA aponte isso como incoerência. Só considere incoerente a partida/encerramento que não bata com NENHUMA das duas pontas da linha. '
@@ -864,7 +925,7 @@ function _chamarGroq_(resumo) {
   var props = PropertiesService.getScriptProperties();
   var key = props.getProperty('GROQ_API_KEY');
   if (!key) return { erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
-  var model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
+  var model = props.getProperty('GROQ_MODEL') || 'openai/gpt-oss-120b';
   var sys = 'Você é um analista de rotas rodoviárias interestaduais no Brasil. Recebe a sequência de paradas de um esquema de viagem e aponta APENAS o que está claramente fora do comum: '
     + 'encerramento ou partida incompatível com o nome da linha; cidades fora de ordem geográfica; desvios grandes; paradas que não fazem sentido para o trajeto; possíveis erros de cadastro. '
     + 'REGRA OBRIGATÓRIA sobre o SENTIDO: o nome da linha cita as duas pontas SEM indicar ordem (ex.: "FORTALEZA X RECIFE"). No sentido "Ida" o trajeto vai da primeira ponta para a segunda; no sentido "Volta" vai da segunda para a primeira (INVERTIDO). Logo, um esquema "Volta" que começa na segunda cidade e termina na primeira está CORRETO — NUNCA aponte isso como incompatibilidade. Só considere incompatível a partida/encerramento que não bata com NENHUMA das duas pontas da linha. '
@@ -1263,6 +1324,7 @@ function cadastrarLocal(d) {
     row[25] = lng;                                 // Longitude
 
     sheet.appendRow(row);
+    SheetsService.invalidateLocaisCache();
 
     return {
       codigo:    codigo,
@@ -1332,6 +1394,7 @@ function importarLocais(rows, atualizar) {
     if (toAppend.length) {
       sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, width).setValues(toAppend);
     }
+    if (updated.length || toAppend.length) SheetsService.invalidateLocaisCache();
 
     return { imported: imported, updated: updated, skipped: skipped };
   } catch (e) {
@@ -1345,6 +1408,12 @@ function importarLocais(rows, atualizar) {
  * @returns {boolean}
  */
 function salvarPontoEsquema(dados) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado salvando outro esquema — tente novamente em instantes.');
+  }
   try {
     if (!dados.idEsquema || !dados.idPonto || !dados.nomePonto) {
       throw new Error('Campos obrigatórios ausentes.');
@@ -1364,9 +1433,12 @@ function salvarPontoEsquema(dados) {
 
     EsquemasService.invalidateCache();
     EsquemasService.markUpdated();
+    EsquemasService.markEsquemaUpdated(dados.idEsquema);
     return true;
   } catch (e) {
     throw new Error('Erro ao salvar ponto: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -2006,6 +2078,12 @@ function doGet(e) {
  * @returns {{ excluido: number, pontosExcluidos: number }}
  */
 function excluirEsquema(idEsquema) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado salvando outro esquema — tente novamente em instantes.');
+  }
   try {
     var ss  = SpreadsheetApp.getActiveSpreadsheet();
     var id  = String(idEsquema).trim();
@@ -2018,12 +2096,12 @@ function excluirEsquema(idEsquema) {
       var lastRow = shEsq.getLastRow();
       if (lastRow >= 2) {
         var vals = shEsq.getRange(2, 1, lastRow - 1, 1).getValues();
-        for (var i = vals.length - 1; i >= 0; i--) {
-          if (String(vals[i][0]).trim() === id) {
-            shEsq.deleteRow(i + 2);
-            excluido++;
-          }
+        var rowsEsq = [];
+        for (var i = 0; i < vals.length; i++) {
+          if (String(vals[i][0]).trim() === id) rowsEsq.push(i + 2);
         }
+        excluido = rowsEsq.length;
+        _deleteRowsBatch_(shEsq, rowsEsq);
       }
     }
 
@@ -2034,12 +2112,12 @@ function excluirEsquema(idEsquema) {
       var lastPtRow = shPts.getLastRow();
       if (lastPtRow >= 2) {
         var ptVals = shPts.getRange(2, 1, lastPtRow - 1, 1).getValues();
-        for (var j = ptVals.length - 1; j >= 0; j--) {
-          if (String(ptVals[j][0]).trim() === id) {
-            shPts.deleteRow(j + 2);
-            pontosExcluidos++;
-          }
+        var rowsPts = [];
+        for (var j = 0; j < ptVals.length; j++) {
+          if (String(ptVals[j][0]).trim() === id) rowsPts.push(j + 2);
         }
+        pontosExcluidos = rowsPts.length;
+        _deleteRowsBatch_(shPts, rowsPts);
       }
     }
 
@@ -2048,16 +2126,29 @@ function excluirEsquema(idEsquema) {
     return { excluido: excluido, pontosExcluidos: pontosExcluidos };
   } catch (e) {
     throw new Error('Erro ao excluir esquema: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
 /**
  * Retorna esquemas (fresh) + locais com coordenadas para a Web App de gestão.
- * @returns {{ esquemas: Array, locais: Array }}
+ *
+ * @param {?string} [lastKnownUpdate]  EsquemasService.getLastUpdated() que o
+ *   cliente já tinha (de um boot anterior, guardado em localStorage). Se bater
+ *   com o valor atual, serve do cache normal (TTL 5 min) em vez de forçar
+ *   invalidateCache() — evita repagar a leitura completa de ESQUEMAS/
+ *   ESQUEMA_PONTOS em toda abertura do Gerenciador quando ninguém escreveu
+ *   nada nesse meio-tempo. Omitido/undefined = sempre invalida (usado pelo
+ *   botão "Recarregar", que deve forçar releitura de propósito).
+ * @returns {{ esquemas: Array, locais: Array, lastUpdated: ?string }}
  */
-function getDadosManager() {
+function getDadosManager(lastKnownUpdate) {
   try {
-    EsquemasService.invalidateCache();
+    var atual = EsquemasService.getLastUpdated();
+    if (!lastKnownUpdate || !atual || atual !== lastKnownUpdate) {
+      EsquemasService.invalidateCache();
+    }
     var esquemas  = EsquemasService.getEsquemas();
     var terminais = EsquemasService.getTerminaisPorEsquema();
     var pontosPorEsq = EsquemasService.getPontosTodosEsquemas();
@@ -2102,7 +2193,8 @@ function getDadosManager() {
       esquemas:          esquemas,
       locais:            locais,
       temposPermanencia: SheetsService.getTemposPermanencia(),
-      rotasAjustadas:    getRotasAjustadas()
+      rotasAjustadas:    getRotasAjustadas(),
+      lastUpdated:       atual
     };
   } catch (e) {
     throw new Error('Erro ao carregar dados do manager: ' + e.message);
@@ -2115,11 +2207,20 @@ function getDadosManager() {
  * @returns {{ id: number }}
  */
 function criarEsquema(dados) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado criando outro esquema — tente novamente em instantes.');
+  }
   try {
     var ss    = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName('ESQUEMAS');
     if (!sheet) throw new Error('Aba "ESQUEMAS" não encontrada.');
 
+    // maxId + 1 precisa do lock acima: sem ele, duas criações quase
+    // simultâneas podem ler o mesmo maxId e gravar dois esquemas com o
+    // mesmo id_esquema, corrompendo a filtragem de pontos de ambos.
     var lastRow = sheet.getLastRow();
     var maxId   = 0;
     if (lastRow >= 2) {
@@ -2139,6 +2240,8 @@ function criarEsquema(dados) {
     return { id: newId };
   } catch (e) {
     throw new Error('Erro ao criar esquema: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -2193,6 +2296,12 @@ function _esquemasAjustadoCol_(sheet) {
  * @returns {boolean} o novo estado.
  */
 function marcarEsquemaAjustado(idEsquema, ajustado) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado salvando outro esquema — tente novamente em instantes.');
+  }
   try {
     var ss    = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName('ESQUEMAS');
@@ -2216,6 +2325,8 @@ function marcarEsquemaAjustado(idEsquema, ajustado) {
     throw new Error('Esquema #' + idEsquema + ' não encontrado.');
   } catch (e) {
     throw new Error('Erro ao marcar esquema: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -2226,6 +2337,12 @@ function marcarEsquemaAjustado(idEsquema, ajustado) {
  * @returns {boolean}
  */
 function atualizarEsquema(idEsquema, dados) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(30000);
+  } catch (e) {
+    throw new Error('Sistema ocupado salvando outro esquema — tente novamente em instantes.');
+  }
   try {
     var ss    = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName('ESQUEMAS');
@@ -2255,6 +2372,8 @@ function atualizarEsquema(idEsquema, dados) {
     throw new Error('Esquema #' + idEsquema + ' não encontrado.');
   } catch (e) {
     throw new Error('Erro ao atualizar esquema: ' + e.message);
+  } finally {
+    lock.releaseLock();
   }
 }
 

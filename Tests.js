@@ -356,7 +356,7 @@ function _test_getPontos_fallback_distancias() {
     ptSheet.appendRow([_TEST_ID_A, 2, 'T_P2', 'Ponto Teste 2', '', '', '', '']);
     var ptLastRow = ptSheet.getLastRow();
 
-    var pontos = getPontosEsquemaParaFormulario(_TEST_ID_A);
+    var pontos = getPontosEsquemaParaFormulario(_TEST_ID_A).pontos;
 
     // Limpeza
     ptSheet.deleteRow(ptLastRow);
@@ -391,7 +391,7 @@ function _test_getPontos_mantem_tipo_trecho_existente() {
     ptSheet.appendRow([_TEST_ID_A, 2, 'T_P4', 'Ponto 4', '', '', '', '']);
     var ptLastRow = ptSheet.getLastRow();
 
-    var pontos = getPontosEsquemaParaFormulario(_TEST_ID_A);
+    var pontos = getPontosEsquemaParaFormulario(_TEST_ID_A).pontos;
 
     ptSheet.deleteRow(ptLastRow);
     ptSheet.deleteRow(ptLastRow - 1);

@@ -405,7 +405,7 @@ var DiagnosticoService = (() => {
     const props = PropertiesService.getScriptProperties();
     const key = props.getProperty('GROQ_API_KEY');
     if (!key) return { ok: false, erro: 'Chave GROQ_API_KEY não configurada nas Script Properties.' };
-    const model = props.getProperty('GROQ_MODEL') || 'llama-3.3-70b-versatile';
+    const model = props.getProperty('GROQ_MODEL') || 'openai/gpt-oss-120b';
 
     const payload = {
       model: model,

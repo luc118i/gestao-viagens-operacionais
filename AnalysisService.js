@@ -692,12 +692,15 @@ var AnalysisService = (() => {
 
     // 3) Remove paradas muito curtas (micro-manobras / cercas curtas) —
     //    exceto o ÚLTIMO ponto da viagem (diz a que horas ela realmente
-    //    terminou) e o último ponto NÃO-garagem (o destino comercial final
-    //    do itinerário, que costuma ser seguido de uma parada na garagem).
-    //    Sem essa exceção, um veículo que só passa rápido pelo destino
-    //    final antes de seguir pra garagem faz esse ponto sumir da viagem
-    //    inteira e aparecer como "não visitado" — mesmo tendo sido
-    //    realizado.
+    //    terminou), o último ponto NÃO-garagem (o destino comercial final
+    //    do itinerário, que costuma ser seguido de uma parada na garagem)
+    //    e qualquer ponto RODOVIÁRIA/GARAGEM cadastrado — esses são paradas
+    //    de itinerário oficiais, não ruído de GPS, e devem aparecer mesmo
+    //    quando a passagem foi rápida (ex.: rodoviária visitada em <5min).
+    //    Sem essas exceções, um veículo que só passa rápido pelo destino
+    //    final antes de seguir pra garagem, ou por uma rodoviária do
+    //    roteiro, faz esse ponto sumir da viagem inteira e aparecer como
+    //    "não visitado" — mesmo tendo sido realizado.
     const ultimoIdx = merged.length - 1;
     let ultimoNaoGaragemIdx = -1;
     for (let i = merged.length - 1; i >= 0; i--) {
@@ -705,6 +708,7 @@ var AnalysisService = (() => {
     }
     const cleaned = merged.filter((pt, idx) => {
       if (idx === ultimoIdx || idx === ultimoNaoGaragemIdx) return true;
+      if (pt.rodoviaria || pt.garagem) return true;
       if (!pt.parada_s || pt.parada_s <= 0) return true;
       return pt.parada_s >= LIMITE_PARADA_MINIMA_S;
     });

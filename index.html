@@ -16,7 +16,7 @@
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
       rel="stylesheet"
     />
 
@@ -42,7 +42,8 @@
         </div>
 
         <div class="header-center">
-          <div style="display:flex; align-items:center; gap:8px; flex:1; min-width:0;">
+          <div class="header-trip-row">
+            <span class="header-live-dot" id="headerLiveDot" style="display:none" title="Viagem em análise"></span>
             <div class="esquema-combobox" id="esquemaCombobox">
               <div class="esquema-combobox-input-wrap">
                 <input
@@ -58,10 +59,8 @@
             </div>
             <button
               id="btnRefreshEsquemas"
+              class="header-icon-btn"
               title="Atualizar lista de esquemas"
-              style="flex-shrink:0; background:none; border:1px solid var(--border); border-radius:7px; width:32px; height:32px; cursor:pointer; font-size:15px; color:var(--text3); display:flex; align-items:center; justify-content:center; transition:color 0.15s, border-color 0.15s;"
-              onmouseover="this.style.color='var(--laranja)';this.style.borderColor='var(--laranja)';"
-              onmouseout="this.style.color='var(--text3)';this.style.borderColor='var(--border)';"
             >↻</button>
             <div id="esquemaInfo" class="esquema-info" style="display:none"></div>
           </div>
@@ -70,60 +69,57 @@
         </div>
 
         <div class="header-right">
-          <button
-            id="btnUsuarioAtual"
-            title="Conta usada como 'Analisado por' nos relatórios e ocorrências gerados por aqui"
-            onclick="AppModule.abrirModalUsuario()"
-            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
-            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
-          >👤 <span id="btnUsuarioAtualNome">Entrar</span></button>
-          <button
-            id="btnRelatorio"
-            disabled
-            style="display:none; padding:5px 14px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="if(!this.disabled){this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';}"
-            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
-          ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>Relatório</button>
-          <button
-            id="btnVincularMotorista"
-            disabled
-            style="display:none; padding:5px 14px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="if(!this.disabled){this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';}"
-            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
-          ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Motorista</button>
-          <button
-            id="btnNovaAnalise"
-            title="Limpar dados e iniciar nova análise"
-            onclick="AppModule._novaAnalise()"
-            style="padding:5px 14px; border-radius:6px; border:1.5px solid var(--laranja); background:var(--laranja); color:#fff; font-size:12px; font-weight:700; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="this.style.opacity='0.85';"
-            onmouseout="this.style.opacity='1';"
-          >+ Nova Análise</button>
-          <button
-            id="btnGerenciarEsquemas"
-            title="Abrir Web App de gestão de esquemas"
-            onclick="window.open('<?= webAppUrl ?>?page=manager', '_blank')"
-            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
-            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
-          ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>Esquemas</button>
-          <button
-            id="btnAnaliseMassa"
-            title="Importar PDFs de viagens anteriores para análise histórica por trecho"
-            style="padding:5px 12px; border-radius:6px; border:1px solid var(--border); background:transparent; color:var(--text2); font-size:12px; font-weight:600; cursor:pointer; white-space:nowrap; transition:all 0.15s;"
-            onmouseover="this.style.borderColor='var(--laranja)';this.style.color='var(--laranja)';"
-            onmouseout="this.style.borderColor='var(--border)';this.style.color='var(--text2)';"
-          ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13" style="vertical-align:-2px;margin-right:4px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Análise em Massa</button>
-          <span id="badgeVeiculo" class="badge" style="display: none">
-            <span id="badgeVeiculoNum">—</span>
-          </span>
-          <span id="badgeAlertas" class="badge vermelho" style="display: none">
-            <span id="badgeAlertasNum">0</span> alertas
-          </span>
-          <span id="badgeStatus" class="badge verde" style="display: none">
-            Análise carregada
-          </span>
+          <div class="header-actions">
+            <button
+              id="btnUsuarioAtual"
+              class="header-btn"
+              title="Conta usada como 'Analisado por' nos relatórios e ocorrências gerados por aqui"
+              onclick="AppModule.abrirModalUsuario()"
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg><span id="btnUsuarioAtualNome">Entrar</span></button>
+            <button
+              id="btnRelatorio"
+              class="header-btn"
+              disabled
+              style="display:none;"
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1"/></svg>Relatório</button>
+            <button
+              id="btnVincularMotorista"
+              class="header-btn"
+              disabled
+              style="display:none;"
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Motorista</button>
+            <button
+              id="btnGerenciarEsquemas"
+              class="header-btn"
+              title="Abrir Web App de gestão de esquemas"
+              onclick="window.open('<?= webAppUrl ?>?page=manager', '_blank')"
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>Esquemas</button>
+            <button
+              id="btnAnaliseMassa"
+              class="header-btn"
+              title="Importar PDFs de viagens anteriores para análise histórica por trecho"
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Análise em Massa</button>
+            <button
+              id="btnNovaAnalise"
+              class="header-btn header-btn-primary"
+              title="Limpar dados e iniciar nova análise"
+              onclick="AppModule._novaAnalise()"
+            >+ Nova Análise</button>
+          </div>
+
+          <div class="header-divider"></div>
+
+          <div class="header-status">
+            <span id="badgeVeiculo" class="badge" style="display: none">
+              <span id="badgeVeiculoNum">—</span>
+            </span>
+            <span id="badgeAlertas" class="badge vermelho" style="display: none">
+              <span id="badgeAlertasNum">0</span> alertas
+            </span>
+            <span id="badgeStatus" class="badge verde" style="display: none">
+              Análise carregada
+            </span>
+          </div>
         </div>
       </header>
 

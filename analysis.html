@@ -214,19 +214,19 @@
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
         var _excEx = _excessoExibido(_ov, excessoS, paradaS);
         var excessoHtml = (_excEx > 0)
-          ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
-          : '<span style="color:var(--text3);">—</span>';
+          ? '<span class="excesso-value ' + (_excEx > 30*60 ? 'is-critico' : 'is-atencao') + '">' + _fmtDuration(_excEx) + '</span>'
+          : '<span class="excesso-value is-empty">—</span>';
 
         tr.innerHTML =
           '<td class="seq-cell">' + ponto.seq + '</td>' +
           '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(ponto.seq, _isAjustavel(ponto, excessoS), statusTag) +
-          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+          '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
           _comercialCells('', ponto.entrada, ponto.saida, idx === 0) +
-          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
-          '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
-          '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+          '<td class="time-cell">' + _fmtDatetime(ponto.saida) + '</td>' +
+          '<td class="parada-cell">' + paradaHtml + '</td>' +
+          '<td class="excesso-cell">' + excessoHtml + '</td>';
 
         tbody.appendChild(tr);
       });
@@ -262,8 +262,8 @@
         var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
         var _excEx = _excessoExibido(_ov, excessoS, paradaS);
         var excessoHtml = (_excEx > 0)
-          ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
-          : '<span style="color:var(--text3);">—</span>';
+          ? '<span class="excesso-value ' + (_excEx > 30*60 ? 'is-critico' : 'is-atencao') + '">' + _fmtDuration(_excEx) + '</span>'
+          : '<span class="excesso-value is-empty">—</span>';
 
         var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
 
@@ -272,11 +272,11 @@
           '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
-          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+          '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
           _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, idx === 0) +
-          '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
-          '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
-          '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+          '<td class="time-cell">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
+          '<td class="parada-cell">' + paradaHtml + '</td>' +
+          '<td class="excesso-cell">' + excessoHtml + '</td>';
 
         tbody.appendChild(tr);
       });
@@ -368,8 +368,8 @@
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
       var _excEx = _excessoExibido(_ov, excessoS, paradaS);
       var excessoHtml = (_excEx > 0)
-        ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
-        : '<span style="color:var(--text3);">—</span>';
+        ? '<span class="excesso-value ' + (_excEx > 30*60 ? 'is-critico' : 'is-atencao') + '">' + _fmtDuration(_excEx) + '</span>'
+        : '<span class="excesso-value is-empty">—</span>';
 
       var tipoTag = pr ? _buildTipoTag(_ov ? Object.assign({}, pr, { proibido42: false }) : pr) : '<span class="tag-tipo tag-desconhecido">—</span>';
 
@@ -378,11 +378,11 @@
         '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
-        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
+        '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
         _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, !!isFirst) +
-        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
-        '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
-        '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+        '<td class="time-cell">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
+        '<td class="parada-cell">' + paradaHtml + '</td>' +
+        '<td class="excesso-cell">' + excessoHtml + '</td>';
 
       tbody.appendChild(tr);
     }
@@ -419,19 +419,19 @@
       var paradaHtml = paradaS > 0 ? _fmtDuration(paradaS) : '—';
       var _excEx = _excessoExibido(_ov, excessoS, paradaS);
       var excessoHtml = (_excEx > 0)
-        ? '<span style="color:' + (_excEx > 30*60 ? 'var(--vermelho)' : 'var(--amarelo)') + '; font-weight:600;">' + _fmtDuration(_excEx) + '</span>'
-        : '<span style="color:var(--text3);">—</span>';
+        ? '<span class="excesso-value ' + (_excEx > 30*60 ? 'is-critico' : 'is-atencao') + '">' + _fmtDuration(_excEx) + '</span>'
+        : '<span class="excesso-value is-empty">—</span>';
 
       tr.innerHTML =
         '<td class="seq-cell" style="color:var(--text3);">•</td>' +
         '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(ponto.seq, true, statusTag) +
-        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.entrada) + '</td>' +
+        '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
         _comercialCells('', ponto.entrada, ponto.saida, false) +
-        '<td style="white-space:nowrap; font-size:11px; font-family:monospace; color:var(--text2);">' + _fmtDatetime(ponto.saida) + '</td>' +
-        '<td style="white-space:nowrap; font-size:12px;">' + paradaHtml + '</td>' +
-        '<td style="white-space:nowrap; font-size:12px;">' + excessoHtml + '</td>';
+        '<td class="time-cell">' + _fmtDatetime(ponto.saida) + '</td>' +
+        '<td class="parada-cell">' + paradaHtml + '</td>' +
+        '<td class="excesso-cell">' + excessoHtml + '</td>';
 
       tbody.appendChild(tr);
     }
@@ -922,6 +922,7 @@
       }
 
       _showBadge('badgeStatus', true);
+      _showBadge('headerLiveDot', true);
 
       // Motorista na coluna de configuração
       var driverName = document.getElementById('driverName');
@@ -1009,7 +1010,7 @@
       });
 
       // Badges
-      ['badgeVeiculo', 'badgeAlertas', 'badgeStatus'].forEach(function(id) {
+      ['badgeVeiculo', 'badgeAlertas', 'badgeStatus', 'headerLiveDot'].forEach(function(id) {
         _showBadge(id, false);
       });
 
@@ -1250,12 +1251,12 @@
       var real = _extractHHMM(usarSaida ? saidaReal : entradaReal);
       var dif = (com && real) ? _diffMin(real, com) : null;
       var comCel = com
-        ? '<span style="color:#1565c0; font-family:monospace; font-size:11px;">' + _escHtml(com) + '</span>'
-        : '<span style="color:var(--text3);">—</span>';
-      var cor = dif == null ? 'var(--text3)' : dif > 0 ? 'var(--vermelho)' : dif < 0 ? 'var(--verde)' : 'var(--text2)';
-      var difCel = '<span style="color:' + cor + '; font-weight:' + (dif ? '600' : '400') + '; font-size:11px;">' + _fmtDiff(dif) + '</span>';
-      return '<td style="white-space:nowrap;">' + comCel + '</td>' +
-             '<td style="white-space:nowrap;">' + difCel + '</td>';
+        ? '<span class="comercial-value">' + _escHtml(com) + '</span>'
+        : '<span class="comercial-value is-empty">—</span>';
+      var difClass = dif == null ? 'is-neutro' : dif > 0 ? 'is-atraso' : dif < 0 ? 'is-adiantado' : 'is-neutro';
+      var difCel = '<span class="dif-value ' + difClass + '">' + _fmtDiff(dif) + '</span>';
+      return '<td class="comercial-cell">' + comCel + '</td>' +
+             '<td class="dif-cell">' + difCel + '</td>';
     }
 
     function _setText(id, val) {
