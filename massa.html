@@ -301,6 +301,12 @@
   #massaHorariosTable td:first-child, #massaHorariosTable th:first-child {
     white-space: normal; max-width: 220px;
   }
+  /* Badge de consistência (Sistemático/Pontual/Instável/Único dado) abaixo
+     do nome do local — versão compacta do .badge padrão do app, que é
+     grande demais pra caber dentro de uma célula de tabela densa. */
+  #massaHorariosTable .massa-badge-consistencia {
+    padding: 1px 7px; font-size: 9.5px; margin-top: 3px; cursor: help;
+  }
   /* "Tempo Desl." tem tooltip explicando de qual ponto veio o trecho —
      sublinhado pontilhado dá a dica de que há mais informação no hover. */
   #massaHorariosTable td[title] { cursor: help; border-bottom: 1px dotted var(--text3); }
@@ -1119,7 +1125,8 @@
 
       const rows = (pivot.locais || []).map(function (loc, idx) {
         const cells = [];
-        cells.push('<td>' + _esc(loc.local) + '</td>');
+        const badgeConsistencia = _renderBadgeConsistencia(loc.consistencia);
+        cells.push('<td>' + _esc(loc.local) + (badgeConsistencia ? '<br>' + badgeConsistencia : '') + '</td>');
         const tituloTempoDesl = !loc.tempoDeslocamento
           ? ''
           : loc.tempoDeslocamentoEstimado
@@ -1380,21 +1387,59 @@
       return (h < 10 ? '0' : '') + h + ':' + (m < 10 ? '0' : '') + m;
     }
 
+    // Espelha _classificarConsistencia do servidor (HistoricoHorariosStore) —
+    // precisa recalcular no cliente porque remover uma coluna de data muda
+    // quantas viagens entram na conta, sem round-trip ao servidor.
+    const LIMIAR_CONSIDERAVEL_MIN_CLIENT = 60;
+    function _classificarConsistenciaClient(minutosArr, programadoMin) {
+      if (programadoMin == null || !minutosArr.length) return null;
+      const qtdViagens = minutosArr.length;
+      const qtdAtrasadas = minutosArr.filter(function (min) {
+        return Math.abs(min - programadoMin) >= LIMIAR_CONSIDERAVEL_MIN_CLIENT;
+      }).length;
+      if (qtdAtrasadas === 0) return null;
+      if (qtdViagens < 2) return { classe: 'unico', qtdAtrasadas: qtdAtrasadas, qtdViagens: qtdViagens };
+      const ratio = qtdAtrasadas / qtdViagens;
+      const classe = ratio >= 0.7 ? 'sistematico' : (ratio <= 0.3 ? 'pontual' : 'instavel');
+      return { classe: classe, qtdAtrasadas: qtdAtrasadas, qtdViagens: qtdViagens };
+    }
+
+    const CONSISTENCIA_LABEL = { sistematico: 'Sistemático', pontual: 'Pontual', instavel: 'Instável', unico: 'Único dado' };
+    const CONSISTENCIA_COR = { sistematico: 'vermelho', pontual: 'amarelo', instavel: '', unico: '' };
+    const CONSISTENCIA_TITULO = {
+      sistematico: 'A maioria das viagens chegou fora do horário — desvio recorrente, considere ajustar o horário programado.',
+      pontual: 'Só uma viagem (ou uma minoria) destoou — atraso isolado, vale investigar a ocorrência antes de mudar o horário.',
+      instavel: 'Metade das viagens atrasou, metade não — sem padrão claro ainda.',
+      unico: 'Só há uma viagem registrada pra esse local — aguarde mais dados antes de decidir.'
+    };
+    function _renderBadgeConsistencia(consistencia) {
+      if (!consistencia) return '';
+      const cor = CONSISTENCIA_COR[consistencia.classe] || '';
+      const label = CONSISTENCIA_LABEL[consistencia.classe] || consistencia.classe;
+      const titulo = (CONSISTENCIA_TITULO[consistencia.classe] || '') +
+        ' (' + consistencia.qtdAtrasadas + ' de ' + consistencia.qtdViagens + ' viagens atrasadas)';
+      return '<span class="badge massa-badge-consistencia' + (cor ? ' ' + cor : '') + '" title="' + _esc(titulo) + '">' + label + '</span>';
+    }
+
     // Recalcula Sugestão/diffMin de um local a partir das datas que
     // sobraram (depois de remover uma coluna) — mesma lógica de
     // HistoricoHorariosStore.getPivot, só que no cliente, pra refletir a
     // remoção na hora sem esperar um reload do servidor. Sugestão manual
     // (override do usuário) nunca é recalculada — ela sempre prevalece.
     function _recomputarSugestaoLocal(loc, datasRestantes) {
-      if (loc.sugestaoManual) return;
       const minutos = datasRestantes
         .map(function (d) { return loc.porData ? loc.porData[d] : null; })
         .filter(Boolean)
         .map(_horaParaMinutosClient)
         .filter(function (v) { return v != null; });
+      const programadoMin = _horaParaMinutosClient(loc.programado);
+      // A consistência (sistemático/pontual/instável) reflete o dado bruto,
+      // não a sugestão manual — sempre recalcula, mesmo com override.
+      loc.consistencia = _classificarConsistenciaClient(minutos, programadoMin);
+
+      if (loc.sugestaoManual) return;
       if (!minutos.length) { loc.sugestao = ''; loc.diffMin = null; return; }
       let sugestaoMin = _sugestaoModaHoraMediaMinClient(minutos);
-      const programadoMin = _horaParaMinutosClient(loc.programado);
       // Espelha o teto de ±2h do servidor (HistoricoHorariosStore.getPivot).
       if (sugestaoMin != null && programadoMin != null) {
         const LIMITE_SUGESTAO_DESVIO_MIN = 120;

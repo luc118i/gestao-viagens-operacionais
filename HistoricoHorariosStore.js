@@ -513,6 +513,34 @@ var HistoricoHorariosStore = (() => {
   }
 
   /**
+   * Classifica o padrão de atraso de um local: "sistemático" (a maioria das
+   * viagens chega fora do horário — pede mudança de horário programado) vs
+   * "pontual" (só uma viagem isolada destoou — pede investigar a ocorrência,
+   * não mexer no horário) vs "instável" (meio a meio, sem padrão claro). A
+   * Sugestão (moda/média) sozinha não distingue os dois primeiros casos: uma
+   * viagem com +1h29 cercada de dias no horário produz quase a mesma
+   * sugestão agregada que um atraso reincidente de +25min todo dia — mas são
+   * problemas operacionais bem diferentes. Retorna null quando não há dado
+   * suficiente pra classificar (nenhuma viagem fora do limiar, ou sem
+   * horário programado pra comparar).
+   * @param {number[]} minutosArr minutos desde meia-noite de cada viagem real
+   * @param {number|null} programadoMin minutos desde meia-noite do horário comercial
+   * @returns {{classe:string, qtdAtrasadas:number, qtdViagens:number}|null}
+   */
+  function _classificarConsistencia(minutosArr, programadoMin) {
+    if (programadoMin == null || !minutosArr.length) return null;
+    const qtdViagens = minutosArr.length;
+    const qtdAtrasadas = minutosArr.filter(function (min) {
+      return Math.abs(min - programadoMin) >= LIMIAR_CONSIDERAVEL_MIN;
+    }).length;
+    if (qtdAtrasadas === 0) return null; // nada fora do horário — sem o que classificar
+    if (qtdViagens < 2) return { classe: 'unico', qtdAtrasadas: qtdAtrasadas, qtdViagens: qtdViagens };
+    const ratio = qtdAtrasadas / qtdViagens;
+    const classe = ratio >= 0.7 ? 'sistematico' : (ratio <= 0.3 ? 'pontual' : 'instavel');
+    return { classe: classe, qtdAtrasadas: qtdAtrasadas, qtdViagens: qtdViagens };
+  }
+
+  /**
    * Normaliza nome de local pra comparação (remove acento, caixa alta,
    * espaços colapsados) — o nome do local vem de duas fontes que nem
    * sempre concordam: o texto extraído do PDF ("RODOVIARIA DE GOIANIA -
@@ -676,15 +704,13 @@ var HistoricoHorariosStore = (() => {
       // viagem com +1h29 num dia, cercada de dias no horário, pode gerar
       // uma sugestão média ainda perto do programado — diffMin pequeno
       // escondendo a linha inteira, mesmo com um atraso real e grave
-      // registrado em info.porData. Aqui verificamos data a data: se
-      // alguma viagem isolada já passou do limiar, o local é relevante
-      // independente do que a média diga.
-      let temDesvioIsolado = false;
-      if (programadoMin != null) {
-        temDesvioIsolado = minutos.some(function (min) {
-          return Math.abs(min - programadoMin) >= LIMIAR_CONSIDERAVEL_MIN;
-        });
-      }
+      // registrado em info.porData. _classificarConsistencia olha data a
+      // data: se alguma viagem isolada já passou do limiar, o local é
+      // relevante independente do que a média diga, e o resultado também
+      // dá pro front-end mostrar se é um problema sistemático (a maioria
+      // das viagens atrasa) ou pontual (um outlier isolado).
+      const consistencia = _classificarConsistencia(minutos, programadoMin);
+      const temDesvioIsolado = !!consistencia;
 
       const localNorm = _normNome(local);
 
@@ -718,6 +744,7 @@ var HistoricoHorariosStore = (() => {
         sugestaoManual: temOverride,
         diffMin: diffMin,
         temDesvioIsolado: temDesvioIsolado,
+        consistencia: consistencia,
         ordem: localNorm in ordemPorNomeNorm ? ordemPorNomeNorm[localNorm] : Infinity
       };
     });
