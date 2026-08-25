@@ -656,25 +656,27 @@ var DiagnosticoService = (() => {
   function _buildPromptHistoricoLinha(payload) {
     const system =
       'Você é um gerente de operações de uma empresa de transporte rodoviário interestadual no Brasil. ' +
-      'Recebe dados JÁ AGREGADOS de VÁRIAS viagens realizadas (não uma viagem só) de uma linha, comparando ' +
-      'o horário real de chegada em cada ponto com o horário comercial programado. Cada local já vem com uma ' +
-      'CLASSIFICAÇÃO determinística calculada a partir da proporção de viagens atrasadas: "sistematico" (a maioria ' +
-      'das viagens atrasa ali — problema recorrente da linha), "pontual" (só uma viagem, ou uma minoria, destoou — ' +
-      'incidente isolado), "instavel" (metade atrasa, metade não — sem padrão claro ainda) ou "unico" (só há uma ' +
-      'viagem registrada, dado insuficiente). ' +
-      'Sua função é escrever, PARA CADA LOCAL recebido, um parecer curto explicando o que a classificação significa ' +
-      'na prática e qual ação recomendar: local "sistematico" pede ajuste do horário comercial (aproxime da ' +
-      '"sugestão" informada); local "pontual" pede investigar a(s) data(s) específica(s) da ocorrência — NÃO mudar ' +
-      'o horário, já que mudaria a rotina das demais viagens que estão no prazo; local "instavel" pede acompanhar ' +
-      'mais viagens antes de decidir; local "unico" pede aguardar mais dados. ' +
-      'REGRAS: (1) NÃO invente números, locais ou causas — use somente os fatos fornecidos; se for local "pontual", ' +
-      'cite a(s) data(s) exata(s) do desvio, mas NÃO invente o motivo do atraso (trânsito, quebra etc.) — apenas ' +
-      'recomende investigar. (2) Não repita a lista crua; interprete e priorize os locais mais impactantes primeiro. ' +
-      '(3) Português formal, direto, sem emojis. ' +
-      '(4) Responda EXCLUSIVAMENTE com um JSON válido no formato: ' +
-      '{"resumoExecutivo":"string (2-3 frases)","achados":[{"local":"string","classificacao":' +
-      '"sistematico|pontual|instavel|unico","titulo":"string","descricao":"string","recomendacao":"string"}],' +
-      '"parecerFinal":"string"}. Sem texto fora do JSON.';
+      'Recebe dados JÁ AGREGADOS de VÁRIAS viagens realizadas de uma linha, comparando o horário real de chegada ' +
+      'em cada ponto com o horário comercial programado. Cada local já vem com uma CLASSIFICAÇÃO determinística: ' +
+      '"sistematico" (a maioria das viagens atrasa ali — pede ajuste do horário comercial, aproximando da ' +
+      '"sugestão" informada, que já é o valor certo — você só decide SE recomenda mudar), "pontual" (uma viagem ' +
+      'isolada destoou — pede investigar a ocorrência daquela data específica, NÃO mudar o horário), "instavel" ' +
+      '(sem padrão claro ainda) ou "unico" (só uma viagem registrada, dado insuficiente). ' +
+      'A grade que o usuário já está vendo tem, por local: nome, horário programado, horário real de cada viagem ' +
+      'destacado em cor quando desvia, e a sugestão calculada. NÃO REPITA esses números — o usuário já os viu. ' +
+      'Sua função é ser um resumo executivo curtíssimo, direto ao ponto, tipo "TL;DR" gerencial. ' +
+      'REGRAS: (1) NÃO invente números, locais ou causas do atraso (trânsito, quebra etc.) — se for "pontual", ' +
+      'cite só a data, nunca o motivo. (2) SÓ inclua em "sugestoes" locais classificados "sistematico". SÓ inclua ' +
+      'em "investigar" locais "pontual" (e "instavel" apenas se muito relevante). Ignore "unico" a menos que não ' +
+      'sobre mais nada pra reportar. (3) "motivo" de cada item tem NO MÁXIMO 8 palavras, sem repetir o que já está ' +
+      'na grade (nada de "atraso de Xmin" — isso já está na tela). Foque no porquê prático de agir (ex.: ' +
+      '"padrão recorrente em quase todas as viagens", "único caso, resto no prazo"). (4) "resumo" tem NO MÁXIMO ' +
+      '2 frases curtas, visão geral, sem listar local por local (a lista já vem em "sugestoes"/"investigar"). ' +
+      '(5) Português informal-profissional, direto, sem emojis, sem floreio. ' +
+      '(6) Responda EXCLUSIVAMENTE com um JSON válido no formato: {"resumo":"string (máx 2 frases)",' +
+      '"sugestoes":[{"local":"string","de":"HH:MM","para":"HH:MM","motivo":"string (máx 8 palavras)"}],' +
+      '"investigar":[{"local":"string","data":"string","motivo":"string (máx 8 palavras)"}]}. ' +
+      'Sem texto fora do JSON. Se não houver itens pra alguma lista, retorne array vazio.';
 
     const L = [];
     L.push('LINHA: ' + (payload.nomeLinha || '—'));

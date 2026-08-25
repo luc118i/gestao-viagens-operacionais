@@ -362,27 +362,45 @@
   #massaHorariosTable th:hover .massa-data-remover { opacity: 1; }
   #massaHorariosTable .massa-data-remover:hover { color: #d94040; }
 
-  /* Painel do parecer da IA sobre o Histórico da linha — reaproveita as
-     classes .diag-* já usadas pelo Diagnóstico Inteligente (viagem única)
-     em style.html, só adiciona o wrapper/× de fechar próprios daqui. */
+  /* Painel do parecer da IA sobre o Histórico da linha — compacto de
+     propósito: a grade logo abaixo já mostra local/horário/desvio, isso
+     aqui é só o "TL;DR" acionável (resumo + o que fazer), não outro
+     relatório com card por local repetindo o que já está na tela. */
   .massa-narrativa-ia {
-    position: relative; margin-top: 12px; padding: 16px 40px 16px 18px;
-    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    position: relative; margin-top: 12px; padding: 14px 36px 14px 16px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
   }
   .massa-narrativa-ia-fechar {
-    position: absolute; top: 10px; right: 10px; border: none; background: none;
+    position: absolute; top: 8px; right: 8px; border: none; background: none;
     color: var(--text3); cursor: pointer; padding: 4px; border-radius: 6px;
     display: flex; align-items: center; justify-content: center;
     transition: background 0.15s, color 0.15s;
   }
   .massa-narrativa-ia-fechar:hover { background: var(--bg); color: var(--vermelho); }
-  .massa-narrativa-ia-modelo { font-size: 10.5px; color: var(--text3); margin-top: -4px; margin-bottom: 10px; }
-  /* Badges de classificação nos achados — mesma paleta do .diag-badge, só
-     mapeando sistematico/pontual/instavel/unico pros tons já existentes. */
-  .diag-badge--sistematico { background: rgba(217,64,64,0.12); color: var(--vermelho); }
-  .diag-badge--pontual { background: rgba(59,130,246,0.12); color: var(--azul); }
-  .diag-badge--instavel { background: rgba(232,160,32,0.15); color: var(--amarelo); }
-  .diag-badge--unico { background: rgba(138,145,158,0.14); color: var(--text2); }
+  .massa-ia-header {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; font-weight: 700; color: var(--laranja);
+    text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 6px;
+  }
+  .massa-ia-resumo { font-size: 13px; line-height: 1.5; color: var(--text); margin: 0 0 4px; }
+  .massa-ia-secao { margin-top: 10px; }
+  .massa-ia-secao-titulo {
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px;
+    color: var(--text3); margin-bottom: 4px;
+  }
+  .massa-ia-secao-titulo--sugestao::before { content: '● '; color: var(--vermelho); }
+  .massa-ia-secao-titulo--investigar::before { content: '● '; color: var(--azul); }
+  .massa-ia-lista { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+  .massa-ia-item {
+    display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap;
+    font-size: 12.5px; padding: 3px 0;
+  }
+  .massa-ia-local { font-weight: 700; color: var(--text); min-width: 140px; }
+  .massa-ia-meio { color: var(--text2); white-space: nowrap; }
+  .massa-ia-de { text-decoration: line-through; color: var(--text3); }
+  .massa-ia-para { font-weight: 700; color: var(--vermelho); }
+  .massa-ia-data { font-weight: 700; color: var(--azul); }
+  .massa-ia-motivo { color: var(--text3); font-size: 11.5px; font-style: italic; }
 
   .massa-confirmar-banner {
     display: flex; align-items: center; justify-content: space-between; gap: 12px;
@@ -1674,47 +1692,47 @@
         );
     }
 
-    // Rótulo/badge por classificação de consistência — mesmo vocabulário do
-    // badge da grade (_renderBadgeConsistencia), reaproveitado aqui pros
-    // achados do parecer da IA.
-    function _classificacaoLabel(c) { return CONSISTENCIA_LABEL[c] || c || '—'; }
+    // Uma linha por item — "Local  09:45 → 10:15  padrão recorrente" — nada
+    // de card/parágrafo por local: a grade logo abaixo já mostra os números,
+    // isso aqui é só o "TL;DR" acionável.
+    function _renderItemIA(local, meio, motivo) {
+      return '<li class="massa-ia-item">' +
+        '<span class="massa-ia-local">' + _esc(local || '') + '</span>' +
+        '<span class="massa-ia-meio">' + meio + '</span>' +
+        (motivo ? '<span class="massa-ia-motivo">' + _esc(motivo) + '</span>' : '') +
+        '</li>';
+    }
 
-    function _renderNarrativaIA(narrativa, modelo) {
+    function _renderNarrativaIA(narrativa) {
       const n = narrativa || {};
       const partes = [];
 
-      partes.push('<div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">' +
-        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="15" height="15" style="color:var(--laranja);"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>' +
-        '<span style="font-size:13px; font-weight:700; color:var(--text);">Análise IA — Histórico da linha</span>' +
-        '<span class="view-tab-badge">IA</span>' +
+      partes.push('<div class="massa-ia-header">' +
+        '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14" style="color:var(--laranja);"><path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z"/><line x1="9" y1="21" x2="15" y2="21"/></svg>' +
+        'Análise IA' +
         '</div>');
-      if (modelo) partes.push('<div class="massa-narrativa-ia-modelo">Modelo: ' + _esc(modelo) + '</div>');
 
-      if (n.resumoExecutivo) {
-        partes.push('<p class="diag-lead">' + _esc(n.resumoExecutivo) + '</p>');
-      }
+      if (n.resumo) partes.push('<p class="massa-ia-resumo">' + _esc(n.resumo) + '</p>');
 
-      if (n.achados && n.achados.length) {
-        const itens = n.achados.map(function (a) {
-          const cls = a.classificacao || '';
-          return '<div class="diag-causa">' +
-            '<div class="diag-causa-head">' +
-              '<span class="diag-causa-titulo">' + _esc(a.local || '') + (a.titulo ? ' — ' + _esc(a.titulo) : '') + '</span>' +
-              '<span class="diag-badge diag-badge--' + _esc(cls) + '">' + _esc(_classificacaoLabel(cls)) + '</span>' +
-            '</div>' +
-            '<div class="diag-causa-desc">' + _esc(a.descricao || '') + '</div>' +
-            (a.recomendacao ? '<div class="diag-causa-desc" style="margin-top:4px;"><strong>Recomendação:</strong> ' + _esc(a.recomendacao) + '</div>' : '') +
-          '</div>';
+      if (n.sugestoes && n.sugestoes.length) {
+        const itens = n.sugestoes.map(function (s) {
+          const meio = '<span class="massa-ia-de">' + _esc(s.de || '') + '</span> → <span class="massa-ia-para">' + _esc(s.para || '') + '</span>';
+          return _renderItemIA(s.local, meio, s.motivo);
         }).join('');
-        partes.push('<div class="diag-causas" style="margin-top:10px;">' + itens + '</div>');
+        partes.push(
+          '<div class="massa-ia-secao"><div class="massa-ia-secao-titulo massa-ia-secao-titulo--sugestao">Sugestão de ajuste de horário</div>' +
+          '<ul class="massa-ia-lista">' + itens + '</ul></div>'
+        );
       }
 
-      if (n.parecerFinal) {
+      if (n.investigar && n.investigar.length) {
+        const itens = n.investigar.map(function (i) {
+          const meio = '<span class="massa-ia-data">' + _esc(i.data || '') + '</span>';
+          return _renderItemIA(i.local, meio, i.motivo);
+        }).join('');
         partes.push(
-          '<div class="diag-parecer" style="margin-top:14px;">' +
-            '<div class="diag-parecer-head">Parecer</div>' +
-            '<div class="diag-parecer-body">' + _esc(n.parecerFinal) + '</div>' +
-          '</div>'
+          '<div class="massa-ia-secao"><div class="massa-ia-secao-titulo massa-ia-secao-titulo--investigar">Investigar (atraso pontual)</div>' +
+          '<ul class="massa-ia-lista">' + itens + '</ul></div>'
         );
       }
 
@@ -1742,7 +1760,7 @@
           btn.disabled = false;
           btn.innerHTML = textoOriginal;
           if (res && res.ok) {
-            _renderNarrativaIA(res.narrativa, res.modelo);
+            _renderNarrativaIA(res.narrativa);
           } else {
             UIModule.showToast((res && res.erro) || 'Erro ao gerar análise.', 'error', 6000);
           }
