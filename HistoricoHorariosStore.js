@@ -481,35 +481,27 @@ var HistoricoHorariosStore = (() => {
   }
 
   /**
-   * Sugestão automática a partir dos horários reais de várias viagens: a
-   * HORA usa a moda (o valor de hora que mais se repete — o "horário
-   * cheio" real da maioria das viagens, sem ser puxado por um outlier
-   * isolado de madrugada/atraso enorme), e os MINUTOS usam a média,
-   * arredondada pra cima pro próximo múltiplo de 5 (sugestão fica sempre
-   * "redonda", fácil de comunicar pro motorista/operação).
+   * Sugestão automática a partir dos horários reais de várias viagens: usa
+   * a MEDIANA (não a média) dos minutos-do-dia de cada viagem, arredondada
+   * pra cima pro próximo múltiplo de 5 (sugestão fica sempre "redonda",
+   * fácil de comunicar pro motorista/operação). Mediana em vez de média
+   * porque é naturalmente resistente a outlier — uma viagem isolada de
+   * madrugada/atraso enorme não "puxa" a sugestão pra longe de onde a
+   * maioria das viagens realmente chega, sem precisar da combinação
+   * moda(hora)+média(minuto) usada antes só pra contornar esse mesmo
+   * problema. Com 2 viagens divergentes (empate na mediana), pega a maior
+   * das duas — mantém a lógica antiga de "arredondar pra cima" também
+   * nesse caso.
    * @param {number[]} minutosArr minutos desde meia-noite de cada viagem
    * @returns {number|null} minutos desde meia-noite da sugestão, ou null
    */
-  function _sugestaoModaHoraMediaMin(minutosArr) {
+  function _sugestaoMediana(minutosArr) {
     if (!minutosArr.length) return null;
-    const contagemHoras = {};
-    minutosArr.forEach(function (min) {
-      const h = Math.floor(min / 60);
-      contagemHoras[h] = (contagemHoras[h] || 0) + 1;
-    });
-    let horaModa = Math.floor(minutosArr[0] / 60);
-    let maxContagem = 0;
-    minutosArr.forEach(function (min) {
-      const h = Math.floor(min / 60);
-      if (contagemHoras[h] > maxContagem) {
-        maxContagem = contagemHoras[h];
-        horaModa = h;
-      }
-    });
-    const mediaMinutos = minutosArr.reduce(function (a, b) { return a + (b % 60); }, 0) / minutosArr.length;
-    const minutoArredondado = Math.ceil(mediaMinutos / 5) * 5;
-    if (minutoArredondado >= 60) return (horaModa + 1) * 60;
-    return horaModa * 60 + minutoArredondado;
+    const ordenado = minutosArr.slice().sort(function (a, b) { return a - b; });
+    const n = ordenado.length;
+    const meio = Math.floor(n / 2);
+    const mediana = n % 2 !== 0 ? ordenado[meio] : (ordenado[meio - 1] + ordenado[meio]) / 2;
+    return Math.ceil(mediana / 5) * 5;
   }
 
   /**
@@ -684,7 +676,7 @@ var HistoricoHorariosStore = (() => {
         .filter(Boolean)
         .map(_horaParaMinutos)
         .filter(function (v) { return v != null; });
-      let sugestaoAutoMin = _sugestaoModaHoraMediaMin(minutos);
+      let sugestaoAutoMin = _sugestaoMediana(minutos);
       const programadoMin = _horaParaMinutos(info.programado);
       // Trava a sugestão automática em ±2h do horário comercial — o setor
       // não aprova pedido de mudança maior que isso, então limita aqui em
