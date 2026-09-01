@@ -4186,8 +4186,8 @@
     function _qBlocoDados(meta) {
       meta = meta || {};
       var l = [];
-      if (meta.linha)   l.push('🚍 *Linha:* ' + meta.linha + (meta.horario ? ' · ' + meta.horario : ''));
-      if (meta.veiculo) l.push('🔑 *Prefixo:* ' + meta.veiculo);
+      if (meta.linha)   l.push('🗺️ *Linha:* ' + meta.linha + (meta.horario ? ' · ' + meta.horario : ''));
+      if (meta.veiculo) l.push('🚌 *Prefixo:* ' + meta.veiculo);
       var mot = meta.motoristaNome || '';
       if (meta.matricula) mot += (mot ? ' · ' : '') + 'mat. ' + meta.matricula;
       if (mot) l.push('👤 *Motorista:* ' + mot);
