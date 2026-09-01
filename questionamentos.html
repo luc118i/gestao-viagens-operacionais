@@ -1,0 +1,165 @@
+<script>
+  // ============================================================
+  //  QuestionamentosModule  —  Histórico de questionamentos ao motorista
+  //  Subseção dentro de #sectionAlertas. Lista as perguntas enviadas ao
+  //  motorista sobre eventos do trecho, com a resposta (registrada à mão pelo
+  //  monitor depois de lê-la no chat do WhatsApp) e o status.
+  //  As ações (abrir modal, enviar, registrar resposta) vivem no AppModule
+  //  (app.html) — aqui é só render + recarregar.
+  // ============================================================
+  var QuestionamentosModule = (function () {
+
+    var _itens   = [];
+    var _loading = false;
+    var _reqKey  = null;   // cancela respostas de chamadas antigas
+
+    function _grid() { return document.getElementById('questionamentosGrid'); }
+
+    /** Recarrega do servidor com base na viagem atual. */
+    function reload() {
+      var trip = (window.AppModule && AppModule.getTrip) ? AppModule.getTrip() : null;
+      var grid = _grid();
+      if (!grid) return;
+      if (!trip || !trip.length) { _itens = []; _render(); return; }
+
+      _loading = true;
+      var key = String(Date.now());
+      _reqKey = key;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (key !== _reqKey) return;
+          _loading = false;
+          _itens = (res && res.ok && res.itens) ? res.itens : [];
+          _render();
+        })
+        .withFailureHandler(function () {
+          if (key !== _reqKey) return;
+          _loading = false;
+          _render();
+        })
+        .getQuestionamentos({ enrichedTrip: trip });
+    }
+
+    /** Zera (nova análise / limpar). */
+    function reset() {
+      _itens = [];
+      _reqKey = null;
+      _loading = false;
+      _render();
+    }
+
+    function _render() {
+      var grid = _grid();
+      if (!grid) return;
+
+      // Se há questionamentos mas a seção Alertas está oculta (viagem sem
+      // alertas operacionais), revela para o histórico não sumir.
+      var sec = document.getElementById('sectionAlertas');
+      if (sec && _itens.length && sec.style.display === 'none') sec.style.display = 'block';
+
+      var header =
+        '<div class="q-subhead" data-guide-anchor data-guide-label="Questionamentos ao Motorista">' +
+          '<span>Questionamentos ao Motorista</span>' +
+          '<span class="q-subhead-count">' + _itens.length + '</span>' +
+          '<span class="q-subhead-line"></span>' +
+          '<button type="button" class="op-btn-sm" onclick="AppModule.qAbrirAvulso()">💬 Outro assunto</button>' +
+        '</div>';
+
+      if (_loading && !_itens.length) {
+        grid.innerHTML = header + '<div class="q-empty">Carregando…</div>';
+        _guide();
+        return;
+      }
+      if (!_itens.length) {
+        grid.innerHTML = header +
+          '<div class="q-empty">Nenhum questionamento enviado nesta viagem. ' +
+          'Use o botão <strong>💬 Questionar</strong> num alerta acima.</div>';
+        _guide();
+        return;
+      }
+
+      var cards = _itens.slice().reverse().map(_card).join('');
+      grid.innerHTML = header + '<div class="q-list">' + cards + '</div>';
+      _guide();
+    }
+
+    function _card(it) {
+      var st = _statusMeta(it.status);
+      var envioBad = (it.envio_status === 'falhou')
+        ? '<span class="q-envio q-envio-falhou" title="' + _esc(it.envio_erro || '') + '">✕ falha no envio</span>'
+        : (it.envio_status === 'pendente')
+          ? '<span class="q-envio q-envio-pendente">⏳ não enviado</span>'
+          : '';
+
+      var linhas = [];
+      linhas.push(_kv('Motorista', it.motorista_nome + (it.motorista_matricula ? ' · ' + it.motorista_matricula : '')));
+      if (it.trecho)  linhas.push(_kv('Trecho/local', it.trecho));
+      if (it.linha || it.horario) linhas.push(_kv('Linha', [it.linha, it.horario].filter(Boolean).join(' · ')));
+      if (it.veiculo) linhas.push(_kv('Veículo', it.veiculo));
+      if (it.evento_label) linhas.push(_kv('Ocorrência', it.evento_label));
+
+      var resposta = it.resposta
+        ? '<div class="q-resp"><div class="q-resp-head">Resposta do motorista' +
+            (it.respondido_em ? ' · ' + _fmtData(it.respondido_em) : '') + '</div>' +
+            '<div class="q-resp-body">' + _esc(it.resposta) + '</div></div>'
+        : '';
+
+      var acoes = [];
+      if (it.status === 'Aguardando resposta') {
+        acoes.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.qAbrirResposta(\'' + it.id + '\')">✍ Registrar resposta</button>');
+        acoes.push('<button type="button" class="op-btn-sm" onclick="AppModule.qMarcarSemResposta(\'' + it.id + '\')">Sem resposta</button>');
+        if (it.envio_status !== 'enviado') {
+          acoes.push('<button type="button" class="op-btn-sm" onclick="AppModule.qReenviar(\'' + it.id + '\')">↻ Reenviar</button>');
+        }
+      }
+
+      return '' +
+        '<div class="q-card" data-q-id="' + it.id + '">' +
+          '<div class="q-card-head">' +
+            '<span class="q-status ' + st.cls + '">' + st.label + '</span>' +
+            envioBad +
+            '<span class="q-when">' + _fmtData(it.criado_em) + '</span>' +
+          '</div>' +
+          '<div class="q-kvs">' + linhas.join('') + '</div>' +
+          '<div class="q-msg"><div class="q-msg-head">Mensagem enviada' +
+            (it.enviado_em ? ' · ' + _fmtData(it.enviado_em) : '') + '</div>' +
+            '<div class="q-msg-body">' + _esc(it.mensagem) + '</div></div>' +
+          resposta +
+          (it.monitor ? '<div class="q-monitor">Monitor: ' + _esc(it.monitor) + '</div>' : '') +
+          (acoes.length ? '<div class="q-actions">' + acoes.join('') + '</div>' : '') +
+        '</div>';
+    }
+
+    function _kv(k, v) {
+      return '<div class="q-kv"><span class="q-kv-k">' + _esc(k) + '</span>' +
+        '<span class="q-kv-v">' + _esc(v) + '</span></div>';
+    }
+
+    function _statusMeta(status) {
+      if (status === 'Respondido')   return { cls: 'q-respondido',   label: 'Respondido' };
+      if (status === 'Sem resposta') return { cls: 'q-sem-resposta', label: 'Sem resposta' };
+      return { cls: 'q-aguardando', label: 'Aguardando resposta' };
+    }
+
+    function _guide() {
+      if (typeof SectionGuide !== 'undefined') SectionGuide.refresh();
+    }
+
+    function _esc(s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
+    function _fmtData(iso) {
+      if (!iso) return '';
+      try { return new Date(iso).toLocaleString('pt-BR'); } catch (e) { return String(iso); }
+    }
+
+    return {
+      reload: reload,
+      reset:  reset,
+      getItens: function () { return _itens; }
+    };
+  })();
+</script>

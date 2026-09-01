@@ -2822,6 +2822,266 @@ function reabrirAlertaAuto(payload) {
   }
 }
 
+// ============================================================
+//  QUESTIONAMENTO AO MOTORISTA (investigação operacional no trecho)
+//  O monitor seleciona um alerta/evento, o sistema monta a pergunta
+//  contextualizada e envia via WhatsApp (rizer-agent, só envio). O motorista
+//  responde no chat; o monitor registra a resposta aqui e o status muda.
+//  Persistência: aba QUESTIONAMENTOS_MOTORISTA (QuestionamentoStore).
+// ============================================================
+
+/**
+ * Rascunho para o modal Questionar: mensagem pré-montada + telefone do
+ * motorista (lookup na API). Um roundtrip só.
+ *
+ * @param {{tipo:string, eventoLabel:string, ponto:string, trecho:string,
+ *          velocidadeKmh:number, velEsperadaMin:number, velEsperadaMax:number,
+ *          tempoMin:number, distKm:number, descricao:string,
+ *          motoristaNome:string, motoristaMatricula:string}} payload
+ * @returns {{ok:boolean, mensagem?:string, telefone?:string, erro?:string}}
+ */
+function getQuestionamentoDraft(payload) {
+  try {
+    payload = payload || {};
+    var mensagem = QuestionamentoTemplates.montarMensagem({
+      tipo:           payload.tipo,
+      evento_label:   payload.eventoLabel,
+      ponto:          payload.ponto,
+      trecho:         payload.trecho,
+      descricao:      payload.descricao,
+      velocidadeKmh:  payload.velocidadeKmh,
+      velEsperadaMin: payload.velEsperadaMin,
+      velEsperadaMax: payload.velEsperadaMax,
+      tempoMin:       payload.tempoMin,
+      distKm:         payload.distKm,
+      motoristaNome:  payload.motoristaNome,
+      monitorNome:    payload.monitorNome
+    });
+    var capa = QuestionamentoTemplates.montarCapa({
+      motoristaNome: payload.motoristaNome, trecho: payload.trecho, total: 1
+    });
+    var tel = _lookupTelefoneMotorista(payload.motoristaMatricula, payload.motoristaNome);
+    return { ok: true, mensagem: mensagem, capa: capa, telefone: tel || '' };
+  } catch (e) {
+    Logger.log('[getQuestionamentoDraft] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Busca o telefone do motorista na tabela drivers da API (GET /drivers/lookup).
+ * Não lança — devolve '' se não achar / API indisponível.
+ * @returns {string} dígitos com DDI, ex.: "5531999998888" (ou vazio)
+ */
+function _lookupTelefoneMotorista(matricula, nome) {
+  try {
+    var props   = PropertiesService.getScriptProperties();
+    var baseUrl = (props.getProperty('REPORT_API_URL') || '').replace(/\/$/, '');
+    if (!baseUrl) return '';
+    var code = String(matricula || nome || '').trim();
+    if (!code) return '';
+    var resp = UrlFetchApp.fetch(
+      baseUrl + '/drivers/lookup?code=' + encodeURIComponent(code),
+      { method: 'get', muteHttpExceptions: true }
+    );
+    if (resp.getResponseCode() !== 200) return '';
+    var d = JSON.parse(resp.getContentText() || '{}');
+    return _normalizarTelefoneBR(String((d && d.phone) || ''));
+  } catch (e) {
+    Logger.log('[_lookupTelefoneMotorista] ' + (e.message || e));
+    return '';
+  }
+}
+
+/**
+ * Garante DDI 55 em telefone BR. O cadastro às vezes guarda só DDD+número
+ * (ex.: 34988389697) — sem o 55, o WhatsApp lê "34" como país e rejeita.
+ */
+function _normalizarTelefoneBR(raw) {
+  var s = String(raw || '').replace(/\D/g, '').replace(/^0+/, '');
+  if (!s) return '';
+  if (s.length >= 12 && s.substring(0, 2) === '55') return s;
+  if (s.length === 10 || s.length === 11) return '55' + s;
+  return s;
+}
+
+/** Entrypoint direto para o telefone (usado se o modal só precisar dele). */
+function getTelefoneMotorista(matricula, nome) {
+  try {
+    return { ok: true, telefone: _lookupTelefoneMotorista(matricula, nome) };
+  } catch (e) {
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Rascunho consolidado: uma pergunta só cobrindo todas as pendências do
+ * trecho de um motorista (ícone "Questionar" no cabeçalho do grupo).
+ *
+ * @param {{motoristaNome:string, motoristaMatricula:string, trecho:string,
+ *          itens:Array<{tipo:string,label:string,trecho:string,tempoMin:number,
+ *          velocidadeKmh:number,velEsperadaMin:number,velEsperadaMax:number}>}} payload
+ * @returns {{ok:boolean, mensagem?:string, telefone?:string, erro?:string}}
+ */
+function getQuestionamentoDraftConsolidado(payload) {
+  try {
+    payload = payload || {};
+    var mensagem = QuestionamentoTemplates.montarMensagemConsolidada({
+      motoristaNome: payload.motoristaNome,
+      trecho:        payload.trecho,
+      itens:         payload.itens || [],
+      monitorNome:   payload.monitorNome
+    });
+    var capa = QuestionamentoTemplates.montarCapa({
+      motoristaNome: payload.motoristaNome,
+      trecho:        payload.trecho,
+      total:         (payload.itens || []).length
+    });
+    // pularTelefone: rebuilds do modal (troca de temas) não precisam refazer o
+    // lookup na API — o cliente já tem o número em cache.
+    var tel = payload.pularTelefone ? '' : _lookupTelefoneMotorista(payload.motoristaMatricula, payload.motoristaNome);
+    return { ok: true, mensagem: mensagem, capa: capa, telefone: tel || '' };
+  } catch (e) {
+    Logger.log('[getQuestionamentoDraftConsolidado] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Lista os questionamentos já feitos para a viagem atual (por hash do conteúdo).
+ * @param {{enrichedTrip:Array}} payload
+ * @returns {{ok:boolean, hash?:string, itens?:Array, erro?:string}}
+ */
+function getQuestionamentos(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length) {
+      return { ok: true, hash: '', itens: [] };
+    }
+    var hash = QuestionamentoStore.computeHash(payload);
+    return { ok: true, hash: hash, itens: QuestionamentoStore.listForTrip(hash) };
+  } catch (e) {
+    Logger.log('[getQuestionamentos] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Registra um novo questionamento (status "Aguardando resposta",
+ * envio_status "pendente"). O envio pelo WhatsApp é feito no cliente logo
+ * depois; marcarEnvioQuestionamento atualiza o resultado.
+ *
+ * @param {{enrichedTrip:Array, alertKey:string, eventoTipo:string,
+ *          eventoLabel:string, trecho:string, linha:string, horario:string,
+ *          motoristaMatricula:string, motoristaNome:string, veiculo:string,
+ *          telefone:string, mensagem:string}} payload
+ * @returns {{ok:boolean, item?:Object, erro?:string}}
+ */
+function registrarQuestionamento(payload) {
+  try {
+    if (!payload || !payload.enrichedTrip || !payload.enrichedTrip.length) {
+      return { ok: false, erro: 'Nenhuma viagem carregada.' };
+    }
+    if (!String(payload.mensagem || '').trim()) {
+      return { ok: false, erro: 'Mensagem vazia.' };
+    }
+    var hash = QuestionamentoStore.computeHash(payload);
+    // O webapp roda como USER_DEPLOYING / ANYONE_ANONYMOUS, então
+    // Session.getActiveUser() volta vazio — o monitor vem do cliente
+    // (mesma lógica de params.analisadoPor nas ocorrências).
+    var monitor = String(payload.monitor || '').trim();
+    if (!monitor) {
+      try { monitor = Session.getActiveUser().getEmail() || ''; } catch (e) { /* sem permissão */ }
+    }
+
+    var item = QuestionamentoStore.insert({
+      hash:                hash,
+      alert_key:           payload.alertKey || '',
+      evento_tipo:         payload.eventoTipo || '',
+      evento_label:        payload.eventoLabel || '',
+      trecho:              payload.trecho || '',
+      linha:               payload.linha || '',
+      horario:             payload.horario || '',
+      motorista_matricula: payload.motoristaMatricula || '',
+      motorista_nome:      payload.motoristaNome || '',
+      veiculo:             payload.veiculo || '',
+      telefone:            String(payload.telefone || '').replace(/\D/g, ''),
+      mensagem:            payload.mensagem,
+      envio_status:        'pendente',
+      status:              QuestionamentoStore.STATUS.AGUARDANDO,
+      monitor:             monitor
+    });
+    return { ok: true, item: item };
+  } catch (e) {
+    Logger.log('[registrarQuestionamento] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Atualiza o resultado do envio pelo WhatsApp de um questionamento.
+ * @param {{id:string, ok:boolean, erro:string}} payload
+ * @returns {{ok:boolean, item?:Object, erro?:string}}
+ */
+function marcarEnvioQuestionamento(payload) {
+  try {
+    if (!payload || !payload.id) return { ok: false, erro: 'ID ausente.' };
+    var enviado = !!payload.ok;
+    var item = QuestionamentoStore.update(payload.id, {
+      envio_status: enviado ? 'enviado' : 'falhou',
+      envio_erro:   enviado ? '' : String(payload.erro || '').slice(0, 300),
+      enviado_em:   enviado ? new Date().toISOString() : ''
+    });
+    if (!item) return { ok: false, erro: 'Questionamento não encontrado.' };
+    return { ok: true, item: item };
+  } catch (e) {
+    Logger.log('[marcarEnvioQuestionamento] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Registra a resposta do motorista (lida no chat do WhatsApp) e move o
+ * status para "Respondido".
+ * @param {{id:string, resposta:string}} payload
+ * @returns {{ok:boolean, item?:Object, erro?:string}}
+ */
+function registrarRespostaQuestionamento(payload) {
+  try {
+    if (!payload || !payload.id) return { ok: false, erro: 'ID ausente.' };
+    var resposta = String(payload.resposta || '').trim();
+    if (!resposta) return { ok: false, erro: 'Resposta vazia.' };
+    var item = QuestionamentoStore.update(payload.id, {
+      resposta:      resposta,
+      respondido_em: new Date().toISOString(),
+      status:        QuestionamentoStore.STATUS.RESPONDIDO
+    });
+    if (!item) return { ok: false, erro: 'Questionamento não encontrado.' };
+    return { ok: true, item: item };
+  } catch (e) {
+    Logger.log('[registrarRespostaQuestionamento] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Marca um questionamento como "Sem resposta" (motorista não respondeu).
+ * @param {{id:string}} payload
+ * @returns {{ok:boolean, item?:Object, erro?:string}}
+ */
+function marcarSemRespostaQuestionamento(payload) {
+  try {
+    if (!payload || !payload.id) return { ok: false, erro: 'ID ausente.' };
+    var item = QuestionamentoStore.update(payload.id, {
+      status: QuestionamentoStore.STATUS.SEM_RESPOSTA
+    });
+    if (!item) return { ok: false, erro: 'Questionamento não encontrado.' };
+    return { ok: true, item: item };
+  } catch (e) {
+    Logger.log('[marcarSemRespostaQuestionamento] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
 /**
  * Entrypoint do editor de esquemas: explica via IA por que o horário
  * comercial diverge da proposta calculada (fase de PLANEJAMENTO — esquema

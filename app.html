@@ -1173,6 +1173,7 @@
       var secSwitcher = document.getElementById('sectionViewSwitcher');
       if (secSwitcher) secSwitcher.style.display = '';
       if (window.DiagnosticoModule) DiagnosticoModule.onNewTrip();
+      if (window.QuestionamentosModule) QuestionamentosModule.reload();
 
       _agendarMapa(_enrichedTrip, _comparacao, _locaisCache);
 
@@ -2870,6 +2871,7 @@
       var secSwitcher = document.getElementById('sectionViewSwitcher');
       if (secSwitcher) secSwitcher.style.display = 'none';
       if (window.DiagnosticoModule) DiagnosticoModule.reset();
+      if (window.QuestionamentosModule) QuestionamentosModule.reset();
 
       // Reseta barra de modo de visualização
       var secModo = document.getElementById('sectionModoVisualizacao');
@@ -4045,6 +4047,905 @@
       else runner.removerJustificativaAlerta({ enrichedTrip: _enrichedTrip, alertKey: key });
     }
 
+    // ============================================================
+    //  QUESTIONAMENTO AO MOTORISTA (investigação operacional no trecho)
+    //  Envia a pergunta pelo WhatsApp (RIZER Agent, 127.0.0.1:3334) e registra
+    //  o histórico via google.script.run. A resposta é lida no chat e
+    //  registrada à mão depois (QuestionamentosModule).
+    // ============================================================
+    var AGENT_URL = 'http://127.0.0.1:3334';
+    var _qCtx = null;      // contexto do modal Questionar aberto
+    var _qRespId = null;   // id no modal Registrar resposta
+
+    function _qNum(x) { var n = Number(x); return isNaN(n) ? null : n; }
+
+    /**
+     * Normaliza telefone para o formato que o WhatsApp espera: dígitos com DDI.
+     * O cadastro costuma guardar só DDD + número (ex.: 34988389697) — sem o 55,
+     * o getNumberId interpreta "34" como país (Espanha) e rejeita.
+     */
+    function _qNormalizarTelefone(raw) {
+      var d = String(raw || '').replace(/\D/g, '').replace(/^0+/, '');
+      if (!d) return '';
+      if (d.length >= 12 && d.slice(0, 2) === '55') return d;   // já tem DDI Brasil
+      if (d.length === 10 || d.length === 11) return '55' + d;  // DDD + 8/9 dígitos
+      return d;                                                 // deixa como veio
+    }
+
+    // ── Geração da mensagem no cliente (espelha QuestionamentoTemplates.gs) ──
+    // Feito no cliente pra o modal montar/regerar a cobrança na hora, sem
+    // depender de round-trip a cada troca de tema.
+    var _Q_TITULO = '*⚠️ MONITORAMENTO CATEDRAL*';
+    var _Q_CATS = [
+      { key: 'VEL_ALTA',  ico: '🚨', titulo: 'Excesso de velocidade',          tipos: { VELOCIDADE_ALTA: 1, VELOCIDADE_EXCESSIVA: 1 } },
+      { key: 'VEL_BAIXA', ico: '🐢', titulo: 'Velocidade abaixo do padrão',    tipos: { VELOCIDADE_BAIXA: 1 } },
+      { key: 'PROIBIDA',  ico: '⛔', titulo: 'Parada em local não autorizado', tipos: { PARADA_PROIBIDA: 1 } },
+      { key: 'LONGA',     ico: '⏱️', titulo: 'Permanência acima do previsto',   tipos: { PARADA_LONGA: 1 } },
+      { key: 'NAO_VIS',   ico: '📍', titulo: 'Ponto de controle não visitado',  tipos: { PONTO_NAO_VISITADO: 1 } },
+      { key: 'NAO_ID',    ico: '❓', titulo: 'Parada em local não previsto',    tipos: { LOCAL_NAO_IDENTIFICADO: 1 } },
+      { key: 'OUTRO',     ico: '▫️', titulo: 'Outras inconsistências',          tipos: null }
+    ];
+
+    function _qCatDe(tipo) {
+      var t = String(tipo || '').toUpperCase();
+      for (var i = 0; i < _Q_CATS.length; i++) {
+        var c = _Q_CATS[i];
+        if (!c.tipos) return c;
+        if (c.tipos[t]) return c;
+      }
+      return _Q_CATS[_Q_CATS.length - 1];
+    }
+
+    function _qFmtMin(v) {
+      var m = Math.round(Number(v) || 0);
+      if (!m) return '';
+      if (m < 60) return m + ' min';
+      var h = Math.floor(m / 60), mm = m % 60;
+      return h + 'h' + (mm ? ('0' + mm).slice(-2) : '');
+    }
+
+    function _qPrimNome(nome) {
+      var n = String(nome || '').trim().split(/\s+/)[0] || '';
+      return n ? n.charAt(0).toUpperCase() + n.slice(1).toLowerCase() : '';
+    }
+
+    /** Assinatura do monitor no fim da mensagem (espelha _assinatura no servidor). */
+    function _qAssinatura() {
+      var n = String(_obterUsuarioAtual() || '').trim();
+      if (n.indexOf('@') > -1) n = n.split('@')[0];
+      n = n.replace(/[._-]+/g, ' ').trim().replace(/\b\w/g, function (c) { return c.toUpperCase(); });
+      return '\n\n_— ' + (n ? n + ', ' : '') + 'Equipe de Monitoramento Catedral_';
+    }
+
+    /** Frase-bullet de um item dentro do seu grupo (com formatação WhatsApp). */
+    function _qLinhaItem(it) {
+      var tipo  = String(it.tipo || '').toUpperCase();
+      var local = String(it.trecho || it.ponto || '').trim();
+      var vel   = it.velocidadeKmh != null ? Math.round(it.velocidadeKmh) : null;
+      var faixa = (it.velEsperadaMin != null && it.velEsperadaMax != null)
+        ? (it.velEsperadaMin + '–' + it.velEsperadaMax) : '';
+      var tempo = _qFmtMin(it.tempoMin);
+      if (tipo === 'VELOCIDADE_BAIXA' || tipo === 'VELOCIDADE_ALTA' || tipo === 'VELOCIDADE_EXCESSIVA') {
+        return (vel != null ? '*' + vel + ' km/h*' : 'velocidade fora do padrão') +
+          (local ? ' — ' + local : '') + (faixa ? ' _(padrão ' + faixa + ' km/h)_' : '');
+      }
+      if (tipo === 'PARADA_LONGA') {
+        return (local || 'local não informado') + (tempo ? ' — *' + tempo + '*' : '');
+      }
+      return local || String(it.label || 'item');
+    }
+
+    /** Versão sem markdown, para o rótulo do checkbox. */
+    function _qItemResumo(it) {
+      return _qLinhaItem(it).replace(/[*_]/g, '');
+    }
+
+    function _qFato(ev) {
+      var tipo  = String(ev.tipo || '').toUpperCase();
+      var local = String(ev.trecho || ev.ponto || '').trim();
+      var vel   = ev.velocidadeKmh != null ? (Math.round(ev.velocidadeKmh) + ' km/h') : '';
+      var faixa = (ev.velEsperadaMin != null && ev.velEsperadaMax != null)
+        ? (ev.velEsperadaMin + '–' + ev.velEsperadaMax + ' km/h') : '';
+      var tempo = _qFmtMin(ev.tempoMin);
+      switch (tipo) {
+        case 'PONTO_NAO_VISITADO':
+          return 'o veículo não passou pelo ponto de controle ' + (local || 'previsto') + ', obrigatório no itinerário da linha';
+        case 'LOCAL_NAO_IDENTIFICADO':
+          return 'foi registrada parada em local não previsto no esquema da linha' + (local ? ' (' + local + ')' : '');
+        case 'PARADA_PROIBIDA':
+          return 'foi registrada parada em local não autorizado' + (local ? ' (' + local + ')' : '');
+        case 'PARADA_LONGA':
+          return 'o tempo de permanência ' + (local ? 'em ' + local + ' ' : '') + 'foi ' +
+            (tempo ? 'de ' + tempo + ', ' : '') + 'acima do limite previsto para o local';
+        case 'VELOCIDADE_BAIXA':
+          return 'a velocidade média ' + (local ? 'no trecho ' + local + ' ' : '') +
+            (vel ? 'ficou em ' + vel + ', ' : 'ficou ') + 'abaixo do padrão operacional exigido' + (faixa ? ' (' + faixa + ')' : '');
+        case 'VELOCIDADE_ALTA':
+        case 'VELOCIDADE_EXCESSIVA':
+          return 'a velocidade média ' + (local ? 'no trecho ' + local + ' ' : '') +
+            (vel ? 'foi de ' + vel + ', ' : 'ficou ') + 'acima do limite estabelecido' + (faixa ? ' (padrão ' + faixa + ')' : '');
+        default:
+          var assunto = String(ev.evento_label || ev.label || ev.descricao || '').trim();
+          return (assunto ? assunto.charAt(0).toLowerCase() + assunto.slice(1) : 'foi identificada uma inconsistência operacional') +
+            (local && assunto ? ' em ' + local : '');
+      }
+    }
+
+    function _qMontarSingle(ev, nome) {
+      var pn = _qPrimNome(nome);
+      var f = _qFato(ev);
+      f = f.charAt(0).toUpperCase() + f.slice(1);
+      return _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, identificamos a seguinte falha operacional' +
+        (ev.trecho ? ' no trecho *' + ev.trecho + '*' : '') + ', que *exige justificativa*:\n\n' +
+        '> ' + f + '.\n\n' +
+        '_Solicitamos que apresente o esclarecimento o quanto antes._\nO retorno deve ser enviado por esta conversa.' +
+        _qAssinatura();
+    }
+
+    function _qMontarConsolidada(nome, trecho, itens) {
+      var pn = _qPrimNome(nome);
+      var onde = trecho ? 'no trecho *' + trecho + '*' : 'no trecho sob sua responsabilidade';
+      var cab = _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*,';
+      if (!itens.length) {
+        return cab + ' precisamos de um posicionamento seu sobre ' + onde + '. O retorno deve ser enviado por esta conversa.' + _qAssinatura();
+      }
+      var blocos = _Q_CATS.map(function (c) {
+        var lst = itens.filter(function (it) { return _qCatDe(it.tipo).key === c.key; });
+        if (!lst.length) return '';
+        return '*' + c.ico + ' ' + c.titulo + ' (' + lst.length + ')*\n' +
+          lst.map(function (it) { return '• ' + _qLinhaItem(it); }).join('\n');
+      }).filter(Boolean).join('\n\n');
+      var plural = itens.length > 1;
+      var intro = ' identificamos *' + itens.length + (plural ? ' falhas operacionais*' : ' falha operacional*') +
+        ' ' + onde + (plural ? ' que exigem' : ' que exige') + ' justificativa:';
+      return cab + intro + '\n\n' + blocos + '\n\n' +
+        '_Solicitamos que se manifeste sobre cada item acima o quanto antes._\n' +
+        'O retorno deve ser enviado por esta conversa.' + _qAssinatura();
+    }
+
+    function _qMontarCapa(nome, trecho, total) {
+      var pn = _qPrimNome(nome);
+      var plural = total !== 1;
+      return _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, registramos *' + total +
+        (plural ? ' falhas operacionais*' : ' falha operacional*') +
+        (trecho ? ' no trecho *' + trecho + '*' : '') +
+        ' que ' + (plural ? 'exigem' : 'exige') + ' justificativa.\n\nOs itens estão detalhados na mensagem a seguir. 👇';
+    }
+
+    /** Busca o telefone do motorista (cacheia em _qCtx.telefone). */
+    function _qFetchTelefone(v) {
+      if (_qCtx && _qCtx.telefone) { _qSetDriverInfo(_qCtx.telefone); return; }
+      _qSetDriverInfo('');
+      google.script.run
+        .withSuccessHandler(function (res) { _qSetDriverInfo(res && res.ok ? res.telefone : ''); })
+        .withFailureHandler(function () { _qSetDriverInfo(''); })
+        .getTelefoneMotorista((v && v.matricula) || '', (v && v.nome) || '');
+    }
+
+    function _btnModalLoading(btn, loading, label) {
+      if (!btn) return;
+      if (loading) {
+        btn.dataset.originalHtml = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = label || 'Aguarde…';
+      } else {
+        btn.disabled = false;
+        if (btn.dataset.originalHtml != null) {
+          btn.innerHTML = btn.dataset.originalHtml;
+          delete btn.dataset.originalHtml;
+        }
+      }
+    }
+
+    // Legenda de imagem no WhatsApp corta em ~1024 caracteres. Acima disso a
+    // cobrança vai em 2 mensagens: banner + capa curta, depois o texto completo.
+    var Q_CAPTION_LIMIT = 950;
+
+    function _qAgentPost(path, body) {
+      return fetch(AGENT_URL + path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body || {})
+      }).then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (j) {
+          return r.ok ? { ok: true, data: j } : { ok: false, erro: (j && j.error) || ('HTTP ' + r.status) };
+        });
+      });
+    }
+
+    /**
+     * Envia a cobrança pelo RIZER Agent. Resolve sempre com {ok, erro}.
+     * `capa` = legenda curta usada quando `message` não cabe na legenda da imagem.
+     */
+    function _qSendWhatsApp(phone, message, capa) {
+      var tel = _qNormalizarTelefone(phone);
+      if (!tel) return Promise.resolve({ ok: false, erro: 'Telefone ausente' });
+      return fetch(AGENT_URL + '/whatsapp/status')
+        .then(function (r) { return r.json(); })
+        .then(function (st) {
+          if (!st || !st.connected) {
+            // dispara a conexão pra facilitar (QR aparece no RIZER Agent)
+            _qAgentPost('/whatsapp/connect', {});
+            return { ok: false, erro: 'WhatsApp não conectado no RIZER Agent. Abra o app, conecte (leia o QR se pedir) e tente de novo.' };
+          }
+          var longo = String(message || '').length > Q_CAPTION_LIMIT;
+          var capaMsg = capa || ('*⚠️ MONITORAMENTO OPERACIONAL CATEDRAL*\n\n'
+            + 'Prezado(a), registramos falhas operacionais que exigem justificativa. '
+            + 'Detalhes na mensagem a seguir. 👇');
+
+          // 1ª mensagem: banner + (mensagem completa OU capa curta)
+          var primeira = {
+            phone: tel,
+            message: longo ? capaMsg : message,
+            attachBanner: true,
+            banner: 'questionamento'
+          };
+          return _qAgentPost('/whatsapp/send', primeira).then(function (r1) {
+            if (!r1.ok || !longo) return r1;
+            // 2ª mensagem: texto completo, sem banner
+            return _qAgentPost('/whatsapp/send', { phone: tel, message: message, attachBanner: false });
+          });
+        })
+        .catch(function (e) {
+          return { ok: false, erro: 'RIZER Agent inacessível (' + (e && e.message ? e.message : e) + ')' };
+        });
+    }
+
+    /** Atualiza a linha de status do WhatsApp no modal Questionar. */
+    function _qCheckAgent() {
+      var el = document.getElementById('questionarAgentStatus');
+      if (!el) return;
+      el.innerHTML = '<span class="q-agent-wait">Verificando WhatsApp…</span>';
+      fetch(AGENT_URL + '/whatsapp/status')
+        .then(function (r) { return r.json(); })
+        .then(function (st) {
+          if (st && st.connected) {
+            el.innerHTML = '<span class="q-agent-ok">● WhatsApp conectado</span>';
+          } else {
+            el.innerHTML = '<span class="q-agent-off">● WhatsApp desconectado</span> '
+              + '<button type="button" class="op-btn-sm" onclick="AppModule.qConectarAgent()">Conectar</button>';
+          }
+        })
+        .catch(function () {
+          el.innerHTML = '<span class="q-agent-off">● RIZER Agent não está aberto</span>';
+        });
+    }
+
+    function qConectarAgent() {
+      var el = document.getElementById('questionarAgentStatus');
+      if (el) el.innerHTML = '<span class="q-agent-wait">Conectando… leia o QR no RIZER Agent se aparecer.</span>';
+      _qAgentPost('/whatsapp/connect', {}).then(function () {
+        setTimeout(_qCheckAgent, 3500);
+      });
+    }
+
+    function _qEsquemaInfo() {
+      var idEsquema = (document.getElementById('selectEsquema') || {}).value || '';
+      var esqObj = _esquemas.find(function (e) { return String(e.id_esquema) === String(idEsquema); });
+      return {
+        nomeLinha: esqObj ? (esqObj.nome_linha || '') : '',
+        horario:   esqObj ? (esqObj.horario || '') : ''
+      };
+    }
+
+    function _qVeiculo() {
+      if (_analysis && _analysis.summary && _analysis.summary.veiculo) return String(_analysis.summary.veiculo).trim();
+      if (_enrichedTrip[0] && _enrichedTrip[0].veiculo) return String(_enrichedTrip[0].veiculo).trim();
+      return '';
+    }
+
+    function _qSeqFromKey(key) {
+      var parts = String(key || '').split('|');
+      var last = parts[parts.length - 1];
+      return /^\d+$/.test(last) ? Number(last) : null;
+    }
+
+    /** Vínculo que cobre o seq; fallback _vinculos[0]. */
+    function _qVinculoParaSeq(seq) {
+      if (!_vinculos.length) return null;
+      if (seq != null) {
+        for (var i = 0; i < _vinculos.length; i++) {
+          var v = _vinculos[i];
+          if (v.seqMin != null && v.seqMax != null && seq >= v.seqMin && seq <= v.seqMax) return v;
+        }
+      }
+      return _vinculos[0];
+    }
+
+    function _qVinculoAtual() {
+      if (_qCtx && _qCtx.forcedVinculo) return _qCtx.forcedVinculo;
+      var sel = document.getElementById('questionarDriver');
+      if (_vinculos.length > 1 && sel && sel.value !== '') {
+        var idx = Number(sel.value);
+        if (!isNaN(idx) && _vinculos[idx]) return _vinculos[idx];
+      }
+      return _vinculos[0] || null;
+    }
+
+    function _qPreencheDrivers(defVinculo) {
+      var row = document.getElementById('questionarDriverRow');
+      var sel = document.getElementById('questionarDriver');
+      if (sel && _vinculos.length > 1) {
+        sel.innerHTML = _vinculos.map(function (v, i) {
+          var label = v.nome || v.matricula || ('Motorista ' + (i + 1));
+          if (v.ponto_inicio) label += ' — ' + v.ponto_inicio + ' → ' + (v.ponto_fim || '');
+          return '<option value="' + i + '">' + _escHtml(label) + '</option>';
+        }).join('');
+        var di = _vinculos.indexOf(defVinculo);
+        sel.value = String(di >= 0 ? di : 0);
+        if (row) row.style.display = '';
+        sel.onchange = function () { _qLoadDraft(); };
+      } else if (row) {
+        row.style.display = 'none';
+      }
+    }
+
+    function _qSetDriverInfo(tel) {
+      var info = document.getElementById('questionarDriverInfo');
+      var btn = document.getElementById('btnEnviarQuestionar');
+      var v = _qVinculoAtual();
+      var d = _qNormalizarTelefone(tel);
+      if (_qCtx) _qCtx.telefone = d;
+      if (info) {
+        info.innerHTML = v
+          ? ('<strong>' + _escHtml(v.nome || v.matricula || '—') + '</strong>'
+             + (v.matricula ? ' · ' + _escHtml(v.matricula) : '')
+             + ' · ' + (d ? ('📱 ' + _escHtml(d)) : '<span class="q-no-tel">sem telefone cadastrado</span>'))
+          : '—';
+      }
+      if (btn) btn.disabled = !d;
+    }
+
+    /** (Re)carrega mensagem-modelo + telefone conforme o motorista selecionado. */
+    function _qLoadDraft() {
+      if (!_qCtx) return;
+      var v = _qVinculoAtual();
+      if (!v) return;
+      var ev = _qCtx.ev || {};
+      var msg = document.getElementById('questionarMsg');
+
+      if (_qCtx.consolidado) {
+        var sel = _qTemasSelecionados();
+        var t = document.getElementById('questionarMsg');
+        var be = document.getElementById('btnEnviarQuestionar');
+        var trechoC = (_qCtx.ev && _qCtx.ev.trecho) || '';
+        if (!sel.length) {
+          if (t) { t.value = ''; t.placeholder = 'Selecione ao menos uma falha acima.'; }
+          _qCtx._autofilled = true;
+          _qSetDriverInfo(_qCtx.telefone || '');
+          if (be) be.disabled = true;
+          return;
+        }
+        if (t && (!t.value || _qCtx._autofilled)) {
+          t.value = _qMontarConsolidada(v.nome, trechoC, sel);
+          t.placeholder = '';
+          _qCtx._autofilled = true;
+        }
+        _qCtx.capa = _qMontarCapa(v.nome, trechoC, sel.length);
+        _qFetchTelefone(v);
+        return;
+      }
+
+      if (_qCtx.avulso) {
+        if (msg && (!msg.value || _qCtx._autofilled)) {
+          var pn = _qPrimNome(v.nome);
+          msg.value = _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, o monitoramento '
+            + 'da Catedral requer um *esclarecimento formal* sobre este trecho. '
+            + 'Solicitamos que apresente a justificativa o quanto antes.\n'
+            + 'O retorno deve ser enviado por esta conversa.' + _qAssinatura();
+          _qCtx._autofilled = true;
+        }
+        _qFetchTelefone(v);
+        return;
+      }
+
+      // Alerta único
+      if (msg && (!msg.value || _qCtx._autofilled)) {
+        msg.value = _qMontarSingle(ev, v.nome);
+        msg.placeholder = '';
+        _qCtx._autofilled = true;
+      }
+      _qFetchTelefone(v);
+    }
+
+    /**
+     * Checklist de falhas agrupada por categoria (espelha os blocos da
+     * mensagem). Cabeçalho de grupo = master checkbox. Todas marcadas.
+     */
+    function _qRenderTemas() {
+      var box = document.getElementById('questionarTemas');
+      if (!box || !_qCtx) return;
+      var itens = _qCtx.itens || [];
+      _qCtx.temasCheck = itens.map(function () { return true; });
+
+      var html = _Q_CATS.map(function (c) {
+        var idxs = [];
+        itens.forEach(function (it, i) { if (_qCatDe(it.tipo).key === c.key) idxs.push(i); });
+        if (!idxs.length) return '';
+        var linhas = idxs.map(function (i) {
+          return '<label class="q-tema">'
+            + '<input type="checkbox" checked data-q-tema="' + i + '" onchange="AppModule.qToggleTema(this)">'
+            + '<span>' + _escHtml(_qItemResumo(itens[i])) + '</span>'
+            + '</label>';
+        }).join('');
+        return '<div class="q-tema-grp">'
+          + '<label class="q-tema-grp-head">'
+          +   '<input type="checkbox" checked data-q-grp="' + c.key + '" onchange="AppModule.qToggleTemaGrupo(this)">'
+          +   '<span>' + c.ico + ' ' + _escHtml(c.titulo) + ' <em>(' + idxs.length + ')</em></span>'
+          + '</label>' + linhas
+          + '</div>';
+      }).join('');
+
+      box.innerHTML = html || '<div class="q-empty">Sem falhas atribuíveis a este trecho.</div>';
+      _qUpdateTemasResumo();
+    }
+
+    /** Master checkbox de um grupo → marca/desmarca todos os itens dele. */
+    function qToggleTemaGrupo(el) {
+      if (!_qCtx) return;
+      var key = el.getAttribute('data-q-grp');
+      var on = !!el.checked;
+      var box = document.getElementById('questionarTemas');
+      var cbs = box ? box.querySelectorAll('input[data-q-tema]') : [];
+      Array.prototype.forEach.call(cbs, function (cb) {
+        var i = Number(cb.getAttribute('data-q-tema'));
+        if (_qCatDe((_qCtx.itens[i] || {}).tipo).key === key) {
+          cb.checked = on;
+          _qCtx.temasCheck[i] = on;
+        }
+      });
+      _qUpdateTemasResumo();
+      _qCtx._autofilled = true;
+      _qLoadDraft();
+    }
+
+    /** Itens de falha atualmente marcados. */
+    function _qTemasSelecionados() {
+      if (!_qCtx || !_qCtx.itens) return [];
+      var chk = _qCtx.temasCheck || [];
+      return _qCtx.itens.filter(function (it, i) { return chk[i] !== false; });
+    }
+
+    /** Checkbox de falha alternado → regenera a mensagem. */
+    function qToggleTema(el) {
+      if (!_qCtx) return;
+      var i = Number(el.getAttribute('data-q-tema'));
+      if (!_qCtx.temasCheck) _qCtx.temasCheck = [];
+      _qCtx.temasCheck[i] = !!el.checked;
+      _qSyncGrupos();
+      _qUpdateTemasResumo();
+      _qCtx._autofilled = true;         // permite a regeneração sobrescrever
+      _qLoadDraft();
+    }
+
+    /** Ajusta o estado (checked / indeterminate) dos masters de grupo. */
+    function _qSyncGrupos() {
+      var box = document.getElementById('questionarTemas');
+      if (!box || !_qCtx) return;
+      Array.prototype.forEach.call(box.querySelectorAll('input[data-q-grp]'), function (head) {
+        var key = head.getAttribute('data-q-grp');
+        var total = 0, on = 0;
+        (_qCtx.itens || []).forEach(function (it, i) {
+          if (_qCatDe(it.tipo).key !== key) return;
+          total++;
+          if (_qCtx.temasCheck[i] !== false) on++;
+        });
+        head.checked = on > 0;
+        head.indeterminate = on > 0 && on < total;
+      });
+    }
+
+    // Trava o scroll da página enquanto um q-modal estiver aberto; restaura ao
+    // fechar. Sincroniza pelo estado real do DOM (cobre os dois modais).
+    var _qScrollY = 0;
+    function _qSyncScrollLock() {
+      var anyOpen = !!document.querySelector('.q-overlay.open');
+      var locked = document.body.classList.contains('q-modal-lock');
+      if (anyOpen && !locked) {
+        _qScrollY = window.pageYOffset || document.documentElement.scrollTop || 0;
+        var sbw = window.innerWidth - document.documentElement.clientWidth;
+        if (sbw > 0) document.body.style.paddingRight = sbw + 'px'; // evita o "pulo" ao sumir a barra
+        document.body.classList.add('q-modal-lock');
+      } else if (!anyOpen && locked) {
+        document.body.classList.remove('q-modal-lock');
+        document.body.style.paddingRight = '';
+        window.scrollTo(0, _qScrollY);
+      }
+    }
+
+    /** Recolhe/expande a seção de falhas do modal consolidado. */
+    function qToggleTemasSec() {
+      var sec = document.getElementById('questionarTemasSec');
+      if (sec) sec.classList.toggle('collapsed');
+    }
+
+    /** Atualiza o resumo ("8 de 12 falhas") ao lado do título da seção. */
+    function _qUpdateTemasResumo() {
+      var el = document.getElementById('questionarTemasResumo');
+      if (!el || !_qCtx) return;
+      var total = (_qCtx.itens || []).length;
+      var sel = _qTemasSelecionados().length;
+      if (!total) { el.textContent = '—'; return; }
+      el.textContent = (sel === total)
+        ? (total + (total === 1 ? ' falha' : ' falhas'))
+        : (sel + ' de ' + total + ' falhas');
+    }
+
+    function _qOpen(ev, mode, extra) {
+      // mode: '' (alerta) | 'avulso' | 'consolidado'
+      extra = extra || {};
+      var avulso = mode === 'avulso';
+      _qCtx = {
+        ev: ev,
+        avulso: avulso,
+        consolidado: mode === 'consolidado',
+        forcedVinculo: extra.forcedVinculo || null,
+        itens: extra.itens || null,
+        telefone: '',
+        capa: '',
+        _autofilled: false
+      };
+      var ref = document.getElementById('questionarRef');
+      if (ref) {
+        ref.innerHTML = avulso
+          ? '<strong>Questionamento avulso</strong>'
+          : ('<strong>' + _escHtml(ev.eventoLabel || 'Alerta') + '</strong>'
+             + (ev.trecho ? '<br>' + _escHtml(ev.trecho) : ''));
+      }
+      var avRow = document.getElementById('questionarAvulsoRow');
+      if (avRow) avRow.style.display = avulso ? '' : 'none';
+      var assunto = document.getElementById('questionarAssunto');
+      if (assunto) assunto.value = '';
+      var msg = document.getElementById('questionarMsg');
+      if (msg) msg.value = '';
+      var temasSec = document.getElementById('questionarTemasSec');
+      if (_qCtx.consolidado) {
+        _qRenderTemas();
+        _qUpdateTemasResumo();
+        if (temasSec) { temasSec.style.display = ''; temasSec.classList.add('collapsed'); }
+      } else if (temasSec) {
+        temasSec.style.display = 'none';
+      }
+      var driverRow = document.getElementById('questionarDriverRow');
+      if (_qCtx.forcedVinculo) {
+        if (driverRow) driverRow.style.display = 'none';
+      } else {
+        _qPreencheDrivers(_qVinculoParaSeq(ev.seq));
+      }
+      _qSetDriverInfo('');
+      var overlay = document.getElementById('modalQuestionarMotorista');
+      if (overlay) overlay.classList.add('open');
+      _qSyncScrollLock();
+      var bodyEl = overlay ? overlay.querySelector('.q-modal-body') : null;
+      if (bodyEl) bodyEl.scrollTop = 0;
+      _qCheckAgent();
+      _qLoadDraft();
+    }
+
+    /** Abre o modal Questionar para o alerta do card do botão. */
+    function abrirModalQuestionar(btn) {
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        UIModule.showToast('Entre com sua conta (botão 👤 no topo) antes de questionar o motorista.', 'error', 5000);
+        return;
+      }
+      if (_vinculos.length === 0) {
+        var bv = document.getElementById('btnVincularMotorista');
+        if (bv) bv.click();
+        UIModule.showToast('Vincule o motorista do trecho e clique em "💬 Questionar" novamente.', 'info', 5000);
+        return;
+      }
+      var card = btn && btn.closest ? btn.closest('.op-alert-card') : null;
+      if (!card) return;
+      var key = card.dataset.alertKey || '';
+      var full = ((_analysis && _analysis.alerts) || []).filter(function (a) { return a.alertKey === key; })[0] || null;
+      var ev = {
+        alertKey:      key,
+        tipo:          card.dataset.alertTipo || (full && full.tipo) || '',
+        eventoLabel:   card.dataset.alertTitle || '',
+        trecho:        card.dataset.alertTrecho || (full && full.trecho) || '',
+        seq:           _qSeqFromKey(key),
+        velocidadeKmh: full ? full.velocidadeKmh : _qNum(card.dataset.alertVel),
+        velEsperadaMin: full ? full.velEsperadaMin : _qNum(card.dataset.alertVelMin),
+        velEsperadaMax: full ? full.velEsperadaMax : _qNum(card.dataset.alertVelMax),
+        tempoMin:      full ? full.tempoMin : _qNum(card.dataset.alertTempoMin),
+        distKm:        full ? full.distKm : _qNum(card.dataset.alertDistKm),
+        descricao:     full ? full.descricao : (card.dataset.alertDescricao || '')
+      };
+      _qOpen(ev, '');
+    }
+
+    function qAbrirAvulso() {
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        UIModule.showToast('Entre com sua conta (botão 👤 no topo) antes de questionar o motorista.', 'error', 5000);
+        return;
+      }
+      if (_vinculos.length === 0) {
+        var bv = document.getElementById('btnVincularMotorista');
+        if (bv) bv.click();
+        UIModule.showToast('Vincule o motorista do trecho primeiro.', 'info', 5000);
+        return;
+      }
+      _qOpen({ alertKey: '', tipo: 'OUTRO', eventoLabel: '', trecho: '', seq: null }, 'avulso');
+    }
+
+    var _Q_OPS = {
+      VELOCIDADE_EXCESSIVA: 1, VELOCIDADE_ALTA: 1, VELOCIDADE_BAIXA: 1,
+      PARADA_PROIBIDA: 1, PARADA_LONGA: 1, LOCAL_NAO_IDENTIFICADO: 1, PONTO_NAO_VISITADO: 1
+    };
+
+    /** Pendências operacionais atribuíveis ao trecho de um vínculo. */
+    function _alertasDoTrecho(v) {
+      var out = [];
+      if (!v || v.seqMin == null || v.seqMax == null) return out;
+      var min = Math.min(v.seqMin, v.seqMax), max = Math.max(v.seqMin, v.seqMax);
+      var manualMap = (_justState && _justState.justificativas) || {};
+
+      function isJust(a) {
+        var m = manualMap[a.alertKey];
+        var reaberto = m && m.status === 'reaberto';
+        return (m && !reaberto) || (a.autoJustificado && !reaberto);
+      }
+
+      // Permanência / local não previsto: dwell no ponto de partida (embarque) e
+      // no ponto final (chegada/rendição) não conta como falha do trecho.
+      var DWELL = { PARADA_LONGA: 1, LOCAL_NAO_IDENTIFICADO: 1 };
+      var VELOC = { VELOCIDADE_EXCESSIVA: 1, VELOCIDADE_ALTA: 1, VELOCIDADE_BAIXA: 1 };
+
+      // Segmentos por seq — para checar se os DOIS extremos de um trecho de
+      // velocidade foram parada REAL (regra dos 5 min / rodoviária / garagem;
+      // ver deParadaValida/paraParadaValida no AnalysisService). Trecho cujo
+      // extremo foi só passagem não é falha de velocidade do motorista.
+      var segBySeq = {};
+      ((_analysis && _analysis.segments) || []).forEach(function (s) { segBySeq[s.seq] = s; });
+
+      ((_analysis && _analysis.alerts) || []).forEach(function (a) {
+        if (!_Q_OPS[a.tipo] || a.tipo === 'PONTO_NAO_VISITADO') return;
+        _fillAlertMeta(a);
+        if (isJust(a)) return;
+
+        if (a.seq == null) {
+          // Sem seq: só alerta de velocidade (trecho/segmento) pode ser
+          // atribuído, e mesmo assim só em viagem de 1 motorista. Paradas sem
+          // seq não são posicionáveis → descarta (evita a parada da garagem).
+          if (!VELOC[a.tipo] || _vinculos.length > 1) return;
+        } else if (a.tipo === 'PARADA_PROIBIDA') {
+          // Parada em local proibido conta em qualquer ponto do trecho,
+          // inclusive no ponto final — só não conta antes do início (garagem).
+          if (a.seq < min || a.seq > max) return;
+        } else if (DWELL[a.tipo]) {
+          if (a.seq <= min || a.seq >= max) return;   // ignora dwell inicial e final
+        } else if (a.seq < min || a.seq > max) {
+          return;
+        }
+
+        // Velocidade: só é falha do motorista se o trecho vai de uma parada
+        // real a outra. Se algum extremo foi só passagem (< 5 min e não é
+        // rodoviária/garagem), ignora.
+        if (VELOC[a.tipo] && a.seq != null) {
+          var seg = segBySeq[a.seq];
+          if (!seg || seg.deParadaValida === false || seg.paraParadaValida === false) return;
+        }
+
+        out.push({
+          tipo: a.tipo,
+          label: a.descricao || a.tipo,
+          trecho: a.trecho || '',
+          tempoMin: a.tempoMin != null ? a.tempoMin : null,
+          velocidadeKmh: a.velocidadeKmh != null ? a.velocidadeKmh : null,
+          velEsperadaMin: a.velEsperadaMin != null ? a.velEsperadaMin : null,
+          velEsperadaMax: a.velEsperadaMax != null ? a.velEsperadaMax : null
+        });
+      });
+
+      // Pontos não visitados dentro do recorte de esquema do motorista
+      var slice = _filtrarEsquemaPorTrechoLocal(_esquemaPontos, v.ponto_inicio, v.ponto_fim);
+      if (slice && _comparacao) {
+        var ids = {};
+        slice.forEach(function (ep) { ids[String(ep.id_ponto)] = 1; });
+        _comparacao.forEach(function (c) {
+          if (c.visitado || !ids[String(c.id_ponto)]) return;
+          var key = 'PONTO_NAO_VISITADO|' + (c.nome_ponto || '');
+          var m = manualMap[key];
+          if (m && m.status !== 'reaberto') return;
+          out.push({ tipo: 'PONTO_NAO_VISITADO', label: 'Ponto não visitado', trecho: c.nome_ponto || '' });
+        });
+      }
+      return out;
+    }
+
+    /** Rótulo legível do trecho do vínculo: nome dos pontos (não o código). */
+    function _qTrechoLabel(v) {
+      function nomeDoSeq(seq) {
+        if (seq == null) return '';
+        var p = _enrichedTrip.filter(function (x) { return Number(x.seq) === Number(seq); })[0];
+        return (p && p.ponto) ? String(p.ponto).trim() : '';
+      }
+      var ini = nomeDoSeq(v.seqMin) || String(v.ponto_inicio || '').trim();
+      var fim = nomeDoSeq(v.seqMax) || String(v.ponto_fim || '').trim();
+      if (ini && fim) return ini + ' → ' + fim;
+      return ini || fim || '';
+    }
+
+    /** Abre o modal Questionar com TODAS as pendências do trecho do motorista. */
+    function qAbrirConsolidado(idx) {
+      if (!_authLogado()) {
+        abrirModalUsuario();
+        UIModule.showToast('Entre com sua conta (botão 👤 no topo) antes de questionar o motorista.', 'error', 5000);
+        return;
+      }
+      var v = _vinculos[idx];
+      if (!v) { UIModule.showToast('Motorista não encontrado.', 'error'); return; }
+      var itens = _alertasDoTrecho(v);
+      if (!itens.length) {
+        UIModule.showToast('Nenhuma pendência neste trecho para questionar.', 'info', 4000);
+        return;
+      }
+      var trecho = _qTrechoLabel(v);
+      var ev = {
+        alertKey: '',
+        tipo: 'CONSOLIDADO',
+        eventoLabel: 'Resumo — ' + itens.length + ' pendência' + (itens.length > 1 ? 's' : '') + ' do trecho',
+        trecho: trecho,
+        seq: null
+      };
+      _qOpen(ev, 'consolidado', { forcedVinculo: v, itens: itens });
+    }
+
+    function qFecharModal() {
+      var overlay = document.getElementById('modalQuestionarMotorista');
+      if (overlay) overlay.classList.remove('open');
+      _qSyncScrollLock();
+      _qCtx = null;
+    }
+
+    function qEnviar() {
+      if (!_qCtx) return;
+      var v = _qVinculoAtual();
+      if (!v) { UIModule.showToast('Selecione um motorista.', 'error'); return; }
+      var selTemas = _qCtx.consolidado ? _qTemasSelecionados() : null;
+      if (_qCtx.consolidado && !selTemas.length) {
+        UIModule.showToast('Marque ao menos uma falha para incluir na cobrança.', 'error', 5000);
+        return;
+      }
+      var msg = ((document.getElementById('questionarMsg') || {}).value || '').trim();
+      if (!msg) { UIModule.showToast('Escreva a mensagem.', 'error'); return; }
+      var tel = _qNormalizarTelefone(_qCtx.telefone);
+      if (!tel) { UIModule.showToast('Motorista sem telefone cadastrado — cadastre o número antes de enviar.', 'error', 6000); return; }
+      var assunto = ((document.getElementById('questionarAssunto') || {}).value || '').trim();
+      var esq = _qEsquemaInfo();
+      var btn = document.getElementById('btnEnviarQuestionar');
+      _btnModalLoading(btn, true, 'Enviando…');
+
+      var payload = {
+        enrichedTrip:       _enrichedTrip,
+        alertKey:           _qCtx.ev.alertKey || '',
+        eventoTipo:         _qCtx.ev.tipo || (_qCtx.avulso ? 'OUTRO' : ''),
+        eventoLabel:        _qCtx.avulso ? (assunto || 'Outro assunto')
+                            : (_qCtx.consolidado
+                               ? ('Cobrança consolidada — ' + selTemas.length + ' falha' + (selTemas.length > 1 ? 's' : ''))
+                               : (_qCtx.ev.eventoLabel || '')),
+        trecho:             _qCtx.ev.trecho || '',
+        linha:              esq.nomeLinha,
+        horario:            esq.horario,
+        motoristaMatricula: v.matricula || '',
+        motoristaNome:      v.nome || '',
+        veiculo:            _qVeiculo(),
+        telefone:           tel,
+        mensagem:           msg,
+        monitor:            _obterUsuarioAtual() || ''
+      };
+
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res || !res.ok || !res.item) {
+            _btnModalLoading(btn, false);
+            UIModule.showToast((res && res.erro) || 'Erro ao registrar questionamento.', 'error');
+            return;
+          }
+          var id = res.item.id;
+          _qSendWhatsApp(tel, msg, _qCtx && _qCtx.capa).then(function (sr) {
+            google.script.run
+              .withSuccessHandler(function () {
+                _btnModalLoading(btn, false);
+                qFecharModal();
+                if (window.QuestionamentosModule) QuestionamentosModule.reload();
+                if (sr.ok) UIModule.showToast('Questionamento enviado ao motorista.', 'success', 3500);
+                else UIModule.showToast('Registrado, mas o envio falhou: ' + (sr.erro || '') + '. Use "Reenviar" no histórico.', 'error', 8000);
+              })
+              .withFailureHandler(function () {
+                _btnModalLoading(btn, false);
+                qFecharModal();
+                if (window.QuestionamentosModule) QuestionamentosModule.reload();
+              })
+              .marcarEnvioQuestionamento({ id: id, ok: !!sr.ok, erro: sr.erro || '' });
+          });
+        })
+        .withFailureHandler(function (e) {
+          _btnModalLoading(btn, false);
+          UIModule.showToast('Falha: ' + (e && e.message ? e.message : String(e)), 'error');
+        })
+        .registrarQuestionamento(payload);
+    }
+
+    function qReenviar(id) {
+      var itens = (window.QuestionamentosModule && QuestionamentosModule.getItens) ? QuestionamentosModule.getItens() : [];
+      var it = itens.filter(function (x) { return x.id === id; })[0];
+      if (!it) return;
+      var tel = _qNormalizarTelefone(it.telefone);
+      if (!tel) { UIModule.showToast('Sem telefone salvo neste questionamento.', 'error'); return; }
+      UIModule.showToast('Reenviando…', 'info', 1500);
+      _qSendWhatsApp(tel, it.mensagem).then(function (sr) {
+        google.script.run
+          .withSuccessHandler(function () {
+            if (window.QuestionamentosModule) QuestionamentosModule.reload();
+            UIModule.showToast(sr.ok ? 'Reenviado ao motorista.' : ('Falha no reenvio: ' + (sr.erro || '')), sr.ok ? 'success' : 'error', sr.ok ? 3000 : 6000);
+          })
+          .marcarEnvioQuestionamento({ id: id, ok: !!sr.ok, erro: sr.erro || '' });
+      });
+    }
+
+    function qAbrirResposta(id) {
+      var itens = (window.QuestionamentosModule && QuestionamentosModule.getItens) ? QuestionamentosModule.getItens() : [];
+      var it = itens.filter(function (x) { return x.id === id; })[0];
+      _qRespId = id;
+      var ref = document.getElementById('respostaRef');
+      if (ref) {
+        ref.innerHTML = it
+          ? ('<strong>' + _escHtml(it.evento_label || 'Questionamento') + '</strong>' + (it.trecho ? '<br>' + _escHtml(it.trecho) : ''))
+          : '—';
+      }
+      var ta = document.getElementById('respostaTexto');
+      if (ta) ta.value = (it && it.resposta) ? it.resposta : '';
+      var overlay = document.getElementById('modalRegistrarResposta');
+      if (overlay) overlay.classList.add('open');
+      _qSyncScrollLock();
+      if (ta) setTimeout(function () { ta.focus(); }, 60);
+    }
+
+    function qFecharResposta() {
+      var overlay = document.getElementById('modalRegistrarResposta');
+      if (overlay) overlay.classList.remove('open');
+      _qSyncScrollLock();
+      _qRespId = null;
+    }
+
+    function qSalvarResposta() {
+      if (!_qRespId) { qFecharResposta(); return; }
+      var ta = document.getElementById('respostaTexto');
+      var txt = ((ta && ta.value) || '').trim();
+      if (!txt) { UIModule.showToast('Digite a resposta do motorista.', 'error'); return; }
+      var btn = document.getElementById('btnSalvarResposta');
+      _btnModalLoading(btn, true, 'Salvando…');
+      google.script.run
+        .withSuccessHandler(function (res) {
+          _btnModalLoading(btn, false);
+          if (!res || !res.ok) { UIModule.showToast((res && res.erro) || 'Erro ao salvar.', 'error'); return; }
+          qFecharResposta();
+          if (window.QuestionamentosModule) QuestionamentosModule.reload();
+          UIModule.showToast('Resposta registrada.', 'success', 3000);
+        })
+        .withFailureHandler(function (e) {
+          _btnModalLoading(btn, false);
+          UIModule.showToast('Falha: ' + (e && e.message ? e.message : String(e)), 'error');
+        })
+        .registrarRespostaQuestionamento({ id: _qRespId, resposta: txt });
+    }
+
+    function qMarcarSemResposta(id) {
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res || !res.ok) { UIModule.showToast((res && res.erro) || 'Erro ao atualizar.', 'error'); return; }
+          if (window.QuestionamentosModule) QuestionamentosModule.reload();
+          UIModule.showToast('Marcado como "Sem resposta".', 'info', 2500);
+        })
+        .withFailureHandler(function (e) {
+          UIModule.showToast('Falha: ' + (e && e.message ? e.message : String(e)), 'error');
+        })
+        .marcarSemRespostaQuestionamento({ id: id });
+    }
+
     /**
      * Cria ocorrência de parada irregular para um único evento Não Aut. (tipo 42).
      * Chamado pelo botão inline nos cards de alerta PARADA_PROIBIDA.
@@ -4261,6 +5162,20 @@
       salvarJustificativa: salvarJustificativa,
       fecharModalJustificar: _fecharModalJustificar,
       reabrirAlerta: reabrirAlerta,
+      abrirModalQuestionar: abrirModalQuestionar,
+      qAbrirConsolidado: qAbrirConsolidado,
+      qToggleTema: qToggleTema,
+      qToggleTemaGrupo: qToggleTemaGrupo,
+      qToggleTemasSec: qToggleTemasSec,
+      qConectarAgent: qConectarAgent,
+      qAbrirAvulso: qAbrirAvulso,
+      qFecharModal: qFecharModal,
+      qEnviar: qEnviar,
+      qReenviar: qReenviar,
+      qAbrirResposta: qAbrirResposta,
+      qFecharResposta: qFecharResposta,
+      qSalvarResposta: qSalvarResposta,
+      qMarcarSemResposta: qMarcarSemResposta,
       fecharModalPendencias: fecharModalPendencias,
       confirmarGerarComPendencias: confirmarGerarComPendencias,
       _novaAnalise: _onLimpar,

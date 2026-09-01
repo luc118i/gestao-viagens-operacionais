@@ -1753,6 +1753,248 @@
   .op-alert-ref strong { color: var(--text); }
 
   /* ============================================================
+     QUESTIONAMENTO AO MOTORISTA — subseção dentro de #sectionAlertas
+     ============================================================ */
+
+  .q-section { margin-top: 22px; }
+
+  .q-subhead {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-weight: 700; color: var(--text);
+    text-transform: uppercase; letter-spacing: 0.03em;
+    margin: 4px 0 12px;
+  }
+  .q-subhead-line { flex: 1; height: 1px; background: var(--border); }
+  .q-subhead-count {
+    font-size: 10.5px; font-weight: 700; color: var(--text2);
+    background: var(--bg); border: 1px solid var(--border);
+    border-radius: 999px; padding: 1px 7px;
+  }
+  .q-subhead .op-btn-sm { text-transform: none; letter-spacing: 0; }
+
+  .q-empty {
+    font-size: 12px; color: var(--text2);
+    background: var(--bg); border: 1px dashed var(--border);
+    border-radius: 10px; padding: 14px; text-align: center;
+  }
+
+  .q-list { display: flex; flex-direction: column; gap: 12px; }
+
+  .q-card {
+    border: 1px solid var(--border); border-radius: 12px;
+    background: var(--card, #fff); padding: 12px 14px;
+  }
+  .q-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .q-when { font-size: 11px; color: var(--text2); margin-left: auto; }
+
+  .q-status {
+    font-size: 10.5px; font-weight: 700; padding: 2px 9px; border-radius: 999px;
+    border: 1px solid transparent;
+  }
+  .q-status.q-aguardando   { background: rgba(230, 162, 60, 0.14); color: #b9770e; border-color: rgba(230, 162, 60, 0.35); }
+  .q-status.q-respondido   { background: rgba(46, 160, 90, 0.14);  color: #1e7d43;  border-color: rgba(46, 160, 90, 0.35); }
+  .q-status.q-sem-resposta { background: var(--bg); color: var(--text2); border-color: var(--border); }
+
+  .q-envio { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 6px; }
+  .q-envio-falhou   { color: var(--vermelho); background: rgba(217, 64, 64, 0.1); }
+  .q-envio-pendente { color: var(--text2); background: var(--bg); }
+
+  .q-kvs { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-bottom: 8px; }
+  .q-kv { font-size: 11.5px; line-height: 1.5; }
+  .q-kv-k { color: var(--text2); margin-right: 5px; }
+  .q-kv-v { color: var(--text); font-weight: 600; }
+
+  .q-msg, .q-resp {
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin-top: 6px; font-size: 12px; line-height: 1.45;
+  }
+  .q-msg { background: var(--bg); }
+  .q-resp { background: rgba(46, 160, 90, 0.06); border-color: rgba(46, 160, 90, 0.28); }
+  .q-msg-head, .q-resp-head {
+    font-size: 10px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.04em; color: var(--text2); margin-bottom: 4px;
+  }
+  .q-msg-body, .q-resp-body { color: var(--text); white-space: pre-wrap; }
+
+  .q-monitor { font-size: 10.5px; color: var(--text2); margin-top: 8px; }
+  .q-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+
+  .q-modal-driver {
+    font-size: 12px; color: var(--text); background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; margin-bottom: 4px;
+  }
+  .q-no-tel { color: var(--vermelho); font-weight: 600; }
+
+  /* Checklist de falhas no modal de cobrança consolidada — um card por
+     categoria (assunto), com respiro entre os itens. */
+  .q-temas {
+    display: flex; flex-direction: column; gap: 12px;
+    padding: 2px;
+  }
+  .q-tema-grp {
+    display: flex; flex-direction: column;
+    border: 1px solid var(--border); border-radius: 10px;
+    background: var(--surface); overflow: hidden;
+  }
+  .q-tema-grp-head {
+    display: flex; align-items: center; gap: 9px; cursor: pointer;
+    font-size: 11px; font-weight: 800; color: var(--text);
+    text-transform: uppercase; letter-spacing: 0.03em;
+    padding: 10px 13px;
+    background: var(--bg);
+    border-bottom: 1px solid var(--border);
+    transition: background .12s;
+  }
+  .q-tema-grp-head:hover { background: var(--card, #f4f4f5); }
+  .q-tema-grp-head em { font-style: normal; color: var(--text2); font-weight: 600; }
+  .q-tema-grp-head input { cursor: pointer; flex-shrink: 0; width: 15px; height: 15px; }
+  .q-tema {
+    display: flex; align-items: flex-start; gap: 10px; cursor: pointer;
+    font-size: 12px; color: var(--text); line-height: 1.5;
+    padding: 11px 14px 11px 30px;
+    transition: background .12s;
+  }
+  .q-tema + .q-tema { border-top: 1px solid var(--border); }
+  .q-tema:hover { background: var(--bg); }
+  .q-tema input { margin-top: 2px; cursor: pointer; flex-shrink: 0; width: 15px; height: 15px; }
+  .q-tema span { flex: 1; }
+
+  .q-agent-status {
+    font-size: 11px; display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
+  }
+  .q-agent-status .op-btn-sm { text-transform: none; letter-spacing: 0; padding: 2px 9px; }
+  .q-agent-ok   { color: var(--verde, #1e7d43); font-weight: 700; }
+  .q-agent-off  { color: var(--vermelho); font-weight: 700; }
+  .q-agent-wait { color: var(--text2); }
+
+  /* ============================================================
+     MODAL QUESTIONAR MOTORISTA — overlay acima de tudo, corpo
+     rolável, cabeçalho e rodapé fixos, seções agrupadas.
+     ============================================================ */
+
+  /* Fica acima do .app-header (1100), .report-screen (1200) e demais modais. */
+  #modalQuestionarMotorista.q-overlay,
+  #modalRegistrarResposta.q-overlay { z-index: 1400; }
+
+  /* Trava o scroll da página quando um q-modal está aberto. */
+  body.q-modal-lock { overflow: hidden; }
+
+  #modalQuestionarMotorista .q-modal {
+    width: 660px;
+    max-width: min(660px, 94vw);
+    max-height: min(88vh, 780px);
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;               /* o scroll é só do .q-modal-body */
+  }
+
+  #modalQuestionarMotorista .q-modal-header {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 18px 22px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+
+  #modalQuestionarMotorista .q-modal-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 18px 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  /* Cada seção mantém a altura natural — quem rola é o .q-modal-body (ou a
+     lista .q-temas, que tem scroll próprio). Sem isso o flexbox espreme a
+     seção "Falhas" e trava a lista. */
+  #modalQuestionarMotorista .q-modal-body > * { flex-shrink: 0; }
+
+  #modalQuestionarMotorista .q-modal-footer {
+    flex-shrink: 0;
+    margin: 0;
+    padding: 14px 22px;
+    border-top: 1px solid var(--border);
+    background: var(--surface);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  #modalQuestionarMotorista .q-modal-actions { display: flex; gap: 10px; margin-left: auto; flex-shrink: 0; }
+
+  /* Seções */
+  .q-sec {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+  }
+  .q-sec-head {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 11px 14px;
+    background: var(--bg);
+    border: 0;
+    font: inherit;
+    text-align: left;
+  }
+  .q-sec-head.static { cursor: default; }
+  button.q-sec-head { cursor: pointer; transition: background .12s; }
+  button.q-sec-head:hover { background: var(--card, #f4f4f5); }
+  .q-sec-title {
+    font-size: 11px; font-weight: 800; letter-spacing: 0.04em;
+    text-transform: uppercase; color: var(--text2);
+  }
+  .q-sec-sub {
+    font-size: 11px; color: var(--text3, var(--text2));
+    margin-left: 4px; font-weight: 600;
+  }
+  .q-sec-caret {
+    margin-left: auto; flex-shrink: 0; color: var(--text2);
+    transition: transform .2s ease;
+  }
+  .q-sec--collapsible.collapsed .q-sec-caret { transform: rotate(-90deg); }
+
+  .q-sec-body { padding: 14px; }
+  .q-sec-body > * { min-height: 0; }
+  .q-sec--collapsible.collapsed .q-sec-body { display: none; }
+  .q-sec-body .form-group:last-child,
+  .q-sec-body .q-modal-driver:last-child { margin-bottom: 0; }
+  .q-sec-body .q-modal-note { margin-top: 10px; }
+
+  #modalQuestionarMotorista #questionarMsg { min-height: 150px; resize: vertical; line-height: 1.5; }
+
+  @media (max-width: 640px) {
+    #modalQuestionarMotorista .q-modal { max-height: 92vh; }
+    #modalQuestionarMotorista .q-modal-header,
+    #modalQuestionarMotorista .q-modal-body,
+    #modalQuestionarMotorista .q-modal-footer { padding-left: 16px; padding-right: 16px; }
+    #modalQuestionarMotorista .q-modal-actions { width: 100%; }
+    #modalQuestionarMotorista .q-modal-actions .btn { flex: 1; }
+  }
+
+  /* Botão "Questionar" no cabeçalho do grupo de motorista (tabela de eventos) */
+  .grupo-q-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    font-size: 10.5px; font-weight: 700; line-height: 1;
+    padding: 4px 9px; border-radius: 999px; cursor: pointer;
+    color: var(--text2); background: var(--card, #fff);
+    border: 1px solid var(--border); white-space: nowrap;
+    transition: color .12s, border-color .12s, background .12s;
+  }
+  .grupo-q-btn:hover { color: var(--laranja); border-color: var(--laranja); }
+  .q-modal-note {
+    font-size: 11px; color: var(--text2); line-height: 1.45;
+    margin-top: 8px; padding-left: 4px;
+  }
+
+  /* ============================================================
      SEÇÃO AÇÕES
      ============================================================ */
 

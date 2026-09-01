@@ -248,12 +248,18 @@
           var hr = document.createElement('tr');
           hr.className = 'grupo-header-row';
           var trechoTxt = (g.ini && g.fim) ? (g.ini + ' → ' + g.fim) : '';
+          var qBtn = (typeof AppModule !== 'undefined' && AppModule.qAbrirConsolidado && g.idx != null)
+            ? '<button type="button" class="grupo-q-btn" title="Questionar o motorista sobre as pendências deste trecho (mensagem única)" onclick="AppModule.qAbrirConsolidado(' + Number(g.idx) + ')">💬 Questionar</button>'
+            : '';
           hr.innerHTML = '<td colspan="10" style="padding:7px 12px;background:' + g.cor + '14;border-left:4px solid ' + g.cor + ';">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
             '<span style="display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:700;color:' + g.cor + ';">' +
             '<span style="width:9px;height:9px;border-radius:50%;background:' + g.cor + ';display:inline-block;flex-shrink:0;"></span>' +
             _escHtml(g.nome) + (g.mat ? ' · mat. ' + _escHtml(g.mat) : '') +
             (trechoTxt ? '<span style="color:var(--text3);font-weight:500;margin-left:4px;">' + _escHtml(trechoTxt) + '</span>' : '') +
-            '</span></td>';
+            '</span>' +
+            (qBtn ? '<span style="margin-left:auto;">' + qBtn + '</span>' : '') +
+            '</div></td>';
           tbody.appendChild(hr);
         }
       }
@@ -939,6 +945,13 @@
       card.dataset.alertTipo   = a.tipo || '';
       card.dataset.alertTitle  = titulo;
       card.dataset.alertTrecho = a.trecho || '';
+      // Dados p/ o modal Questionar (fallback se o alerta não estiver em _analysis.alerts)
+      if (a.velocidadeKmh != null)  card.dataset.alertVel      = a.velocidadeKmh;
+      if (a.velEsperadaMin != null) card.dataset.alertVelMin   = a.velEsperadaMin;
+      if (a.velEsperadaMax != null) card.dataset.alertVelMax   = a.velEsperadaMax;
+      if (a.tempoMin != null)       card.dataset.alertTempoMin = a.tempoMin;
+      if (a.distKm != null)         card.dataset.alertDistKm   = a.distKm;
+      if (a.descricao)              card.dataset.alertDescricao = a.descricao;
 
       var html = ''
         + '<div class="op-alert-head">'
@@ -979,6 +992,7 @@
       var actions = [];
       if (sev !== 'justificado') {
         actions.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.abrirModalJustificar(this)">📝 Justificar</button>');
+        actions.push('<button type="button" class="op-btn-sm" onclick="AppModule.abrirModalQuestionar(this)">💬 Questionar</button>');
         if (a.tipo === 'PARADA_PROIBIDA' && a.seq != null) {
           actions.push('<button type="button" class="op-btn-sm danger" onclick="AppModule.criarParadaIrregularInline(this,' + Number(a.seq) + ')">+ Criar ocorrência</button>');
         } else if (a.tipo === 'PARADA_LONGA' && a.seq != null) {

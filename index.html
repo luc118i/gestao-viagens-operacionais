@@ -405,6 +405,7 @@
           <span id="countAlertas" class="count-badge">0</span>
         </div>
         <div class="op-alerts" id="alertasGrid"></div>
+        <div class="q-section" id="questionamentosGrid"></div>
       </section>
 
       <!-- ========== SEÇÃO DIAGNÓSTICO INTELIGENTE ========== -->
@@ -581,6 +582,92 @@
         <div class="modal-footer">
           <button class="btn btn-ghost" id="btnCancelJustificar" type="button" onclick="AppModule.fecharModalJustificar()">Cancelar</button>
           <button class="btn btn-primary" id="btnConfirmJustificar" type="button" onclick="AppModule.salvarJustificativa()">Salvar justificativa</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Questionar motorista sobre um evento/alerta do trecho -->
+    <div class="modal-overlay q-overlay" id="modalQuestionarMotorista">
+      <div class="modal q-modal">
+        <div class="modal-header q-modal-header">
+          <span class="modal-title">Questionar motorista</span>
+          <button class="modal-close" type="button" onclick="AppModule.qFecharModal()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+
+        <div class="q-modal-body">
+          <div class="op-alert-ref" id="questionarRef">—</div>
+
+          <!-- Falhas / assuntos — seção colapsável -->
+          <section class="q-sec q-sec--collapsible collapsed" id="questionarTemasSec" style="display:none;">
+            <button type="button" class="q-sec-head" onclick="AppModule.qToggleTemasSec()">
+              <span class="q-sec-title">Falhas a incluir na cobrança</span>
+              <span class="q-sec-sub" id="questionarTemasResumo">—</span>
+              <svg class="q-sec-caret" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="q-sec-body" id="questionarTemasRow">
+              <div class="q-temas" id="questionarTemas"></div>
+            </div>
+          </section>
+
+          <!-- Destinatário -->
+          <section class="q-sec">
+            <div class="q-sec-head static"><span class="q-sec-title">Destinatário</span></div>
+            <div class="q-sec-body open">
+              <div class="form-group" id="questionarDriverRow" style="display:none;">
+                <label class="form-label">Motorista</label>
+                <select class="form-input" id="questionarDriver"></select>
+              </div>
+              <div class="q-modal-driver" id="questionarDriverInfo">—</div>
+            </div>
+          </section>
+
+          <!-- Assunto (só modo avulso) -->
+          <section class="q-sec" id="questionarAvulsoRow" style="display:none;">
+            <div class="q-sec-head static"><span class="q-sec-title">Assunto / evento</span></div>
+            <div class="q-sec-body open">
+              <input type="text" class="form-input" id="questionarAssunto" placeholder="Ex: desvio de rota no retorno / saída fora do horário" />
+            </div>
+          </section>
+
+          <!-- Mensagem -->
+          <section class="q-sec">
+            <div class="q-sec-head static"><span class="q-sec-title">Mensagem ao motorista</span></div>
+            <div class="q-sec-body open">
+              <textarea class="form-input" id="questionarMsg" rows="7" placeholder="Carregando modelo…"></textarea>
+              <div class="q-modal-note">
+                A mensagem vai pelo WhatsApp (RIZER Agent) com o banner institucional
+                como capa. A resposta do motorista chega no chat — registre-a depois
+                no histórico "Questionamentos ao Motorista".
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="modal-footer q-modal-footer">
+          <div class="q-agent-status" id="questionarAgentStatus">—</div>
+          <div class="q-modal-actions">
+            <button class="btn btn-ghost" type="button" onclick="AppModule.qFecharModal()">Cancelar</button>
+            <button class="btn btn-primary" id="btnEnviarQuestionar" type="button" onclick="AppModule.qEnviar()">Enviar pelo WhatsApp</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal: Registrar a resposta do motorista (lida no chat) -->
+    <div class="modal-overlay q-overlay" id="modalRegistrarResposta">
+      <div class="modal">
+        <div class="modal-header">
+          <span class="modal-title">Registrar resposta do motorista</span>
+          <button class="modal-close" type="button" onclick="AppModule.qFecharResposta()"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+        </div>
+        <div class="op-alert-ref" id="respostaRef">—</div>
+        <div class="form-group">
+          <label class="form-label">Resposta (copie do chat do WhatsApp)</label>
+          <textarea class="form-input" id="respostaTexto" rows="4" placeholder="O que o motorista respondeu…"></textarea>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-ghost" type="button" onclick="AppModule.qFecharResposta()">Cancelar</button>
+          <button class="btn btn-primary" id="btnSalvarResposta" type="button" onclick="AppModule.qSalvarResposta()">Salvar resposta</button>
         </div>
       </div>
     </div>
@@ -867,6 +954,7 @@
     <?!= include('map') ?> <?!= include('analysis') ?> <?!= include('ui') ?>
     <?!= include('app') ?>
     <?!= include('diagnostico') ?>
+    <?!= include('questionamentos') ?>
     <?!= include('massa') ?>
   </body>
 </html>
