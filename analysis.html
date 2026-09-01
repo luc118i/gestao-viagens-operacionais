@@ -102,23 +102,32 @@
       };
     }
 
-    /** HTML da sub-linha de antecipação — só para o 1º ponto (garagem de partida). */
-    function _antecipInfoLine(ponto) {
-      if (!_partidaGaragemInfo || ponto !== _firstTripPt) return '';
+    /**
+     * Acrescenta uma linha de detalhe (largura total da tabela) logo abaixo da
+     * linha da garagem de PARTIDA, com a info de antecipação. Linha própria em
+     * vez de sub-texto na célula "Ponto" — que é estreita e cortava o texto.
+     */
+    function _appendAntecipRow(tbody, ponto) {
+      if (!_partidaGaragemInfo || ponto !== _firstTripPt) return;
       var i = _partidaGaragemInfo;
       var real = _fmtDurMinCli(Math.max(0, i.antecedMin));
       var txt, cor;
       if (i.exigidoMin != null) {
         var ok = i.difMin >= 0;
         cor = ok ? 'var(--verde,#22a96a)' : 'var(--vermelho,#d94040)';
-        txt = 'Antecipação: ' + real + ' antes da partida (' + i.comercial + ') · exigido ' +
-              _fmtDurMinCli(i.exigidoMin) + ' · ' +
-              (ok ? 'dentro do prazo' : 'fora do prazo (faltaram ' + _fmtDurMinCli(Math.abs(i.difMin)) + ')');
+        txt = 'Antecipação da garagem: saiu ' + real + ' antes da partida programada (' + i.comercial +
+              ') · exigido ' + _fmtDurMinCli(i.exigidoMin) + ' · ' +
+              (ok ? 'dentro do prazo' : 'fora do prazo — faltaram ' + _fmtDurMinCli(Math.abs(i.difMin)));
       } else {
         cor = 'var(--text3,#8a8f99)';
-        txt = 'Antecipação: saiu ' + real + ' antes da partida programada (' + i.comercial + ')';
+        txt = 'Antecipação da garagem: saiu ' + real + ' antes da partida programada (' + i.comercial + ')';
       }
-      return '<div style="font-size:10px;font-style:normal;margin-top:2px;color:' + cor + ';">' + _escHtml(txt) + '</div>';
+      var tr = document.createElement('tr');
+      tr.className = 'row-antecip-garagem';
+      tr.innerHTML = '<td colspan="10" style="padding:4px 12px 8px 34px;font-size:10.5px;' +
+        'font-style:normal;color:' + cor + ';border-top:0;background:rgba(0,0,0,0.015);">' +
+        _escHtml(txt) + '</td>';
+      tbody.appendChild(tr);
     }
 
     /** Estado de override de um ponto pela seq. */
@@ -325,7 +334,7 @@
 
         tr.innerHTML =
           '<td class="seq-cell">' + ponto.seq + '</td>' +
-          '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + _antecipInfoLine(ponto) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(ponto.seq, _isAjustavel(ponto, excessoS), statusTag) +
           '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
@@ -335,6 +344,7 @@
           '<td class="excesso-cell">' + excessoHtml + '</td>';
 
         tbody.appendChild(tr);
+        _appendAntecipRow(tbody, ponto);
       });
     }
 
@@ -375,7 +385,7 @@
 
         tr.innerHTML =
           '<td class="seq-cell">' + (item.ordem || (idx + 1)) + '</td>' +
-          '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + _antecipInfoLine(pr) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
           '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
@@ -385,6 +395,7 @@
           '<td class="excesso-cell">' + excessoHtml + '</td>';
 
         tbody.appendChild(tr);
+        _appendAntecipRow(tbody, pr);
       });
     }
 
@@ -484,7 +495,7 @@
 
       tr.innerHTML =
         '<td class="seq-cell">' + (item.ordem || '') + '</td>' +
-        '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + _antecipInfoLine(pr) + '</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
         '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
@@ -494,6 +505,7 @@
         '<td class="excesso-cell">' + excessoHtml + '</td>';
 
       tbody.appendChild(tr);
+      _appendAntecipRow(tbody, pr);
     }
 
     function _renderNonSchemaStopRow(tbody, ponto) {
@@ -533,7 +545,7 @@
 
       tr.innerHTML =
         '<td class="seq-cell" style="color:var(--text3);">•</td>' +
-        '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + _antecipInfoLine(ponto) + '</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(ponto.seq, true, statusTag) +
         '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
@@ -543,6 +555,7 @@
         '<td class="excesso-cell">' + excessoHtml + '</td>';
 
       tbody.appendChild(tr);
+      _appendAntecipRow(tbody, ponto);
     }
 
     // ============================================================
