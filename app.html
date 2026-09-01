@@ -4171,21 +4171,45 @@
       }
     }
 
-    function _qMontarSingle(ev, nome) {
-      var pn = _qPrimNome(nome);
+    /** Dados da viagem no topo da mensagem: linha, prefixo, motorista + matrícula. */
+    function _qMeta(v) {
+      var esq = (typeof _qEsquemaInfo === 'function') ? _qEsquemaInfo() : {};
+      return {
+        linha:         (esq && esq.nomeLinha) || '',
+        horario:       (esq && esq.horario) || '',
+        veiculo:       (typeof _qVeiculo === 'function' ? _qVeiculo() : '') || '',
+        motoristaNome: (v && v.nome) || '',
+        matricula:     (v && v.matricula && v.matricula !== '—') ? String(v.matricula) : ''
+      };
+    }
+
+    function _qBlocoDados(meta) {
+      meta = meta || {};
+      var l = [];
+      if (meta.linha)   l.push('🚍 *Linha:* ' + meta.linha + (meta.horario ? ' · ' + meta.horario : ''));
+      if (meta.veiculo) l.push('🔑 *Prefixo:* ' + meta.veiculo);
+      var mot = meta.motoristaNome || '';
+      if (meta.matricula) mot += (mot ? ' · ' : '') + 'mat. ' + meta.matricula;
+      if (mot) l.push('👤 *Motorista:* ' + mot);
+      return l.length ? l.join('\n') + '\n\n' : '';
+    }
+
+    function _qMontarSingle(ev, meta) {
+      var pn = _qPrimNome(meta && meta.motoristaNome);
       var f = _qFato(ev);
       f = f.charAt(0).toUpperCase() + f.slice(1);
-      return _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, identificamos a seguinte falha operacional' +
+      return _Q_TITULO + '\n\n' + _qBlocoDados(meta) +
+        'Prezado(a) *' + (pn || 'condutor(a)') + '*, identificamos a seguinte falha operacional' +
         (ev.trecho ? ' no trecho *' + ev.trecho + '*' : '') + ', que *exige justificativa*:\n\n' +
         '> ' + f + '.\n\n' +
         '_Solicitamos que apresente o esclarecimento o quanto antes._\nO retorno deve ser enviado por esta conversa.' +
         _qAssinatura();
     }
 
-    function _qMontarConsolidada(nome, trecho, itens) {
-      var pn = _qPrimNome(nome);
+    function _qMontarConsolidada(trecho, itens, meta) {
+      var pn = _qPrimNome(meta && meta.motoristaNome);
       var onde = trecho ? 'no trecho *' + trecho + '*' : 'no trecho sob sua responsabilidade';
-      var cab = _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*,';
+      var cab = _Q_TITULO + '\n\n' + _qBlocoDados(meta) + 'Prezado(a) *' + (pn || 'condutor(a)') + '*,';
       if (!itens.length) {
         return cab + ' precisamos de um posicionamento seu sobre ' + onde + '. O retorno deve ser enviado por esta conversa.' + _qAssinatura();
       }
@@ -4203,10 +4227,11 @@
         'O retorno deve ser enviado por esta conversa.' + _qAssinatura();
     }
 
-    function _qMontarCapa(nome, trecho, total) {
-      var pn = _qPrimNome(nome);
+    function _qMontarCapa(trecho, total, meta) {
+      var pn = _qPrimNome(meta && meta.motoristaNome);
       var plural = total !== 1;
-      return _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, registramos *' + total +
+      return _Q_TITULO + '\n\n' + _qBlocoDados(meta) +
+        'Prezado(a) *' + (pn || 'condutor(a)') + '*, registramos *' + total +
         (plural ? ' falhas operacionais*' : ' falha operacional*') +
         (trecho ? ' no trecho *' + trecho + '*' : '') +
         ' que ' + (plural ? 'exigem' : 'exige') + ' justificativa.\n\nOs itens estão detalhados na mensagem a seguir. 👇';
@@ -4403,6 +4428,7 @@
       if (!v) return;
       var ev = _qCtx.ev || {};
       var msg = document.getElementById('questionarMsg');
+      var meta = _qMeta(v);
 
       if (_qCtx.consolidado) {
         var sel = _qTemasSelecionados();
@@ -4417,19 +4443,20 @@
           return;
         }
         if (t && (!t.value || _qCtx._autofilled)) {
-          t.value = _qMontarConsolidada(v.nome, trechoC, sel);
+          t.value = _qMontarConsolidada(trechoC, sel, meta);
           t.placeholder = '';
           _qCtx._autofilled = true;
         }
-        _qCtx.capa = _qMontarCapa(v.nome, trechoC, sel.length);
+        _qCtx.capa = _qMontarCapa(trechoC, sel.length, meta);
         _qFetchTelefone(v);
         return;
       }
 
       if (_qCtx.avulso) {
         if (msg && (!msg.value || _qCtx._autofilled)) {
-          var pn = _qPrimNome(v.nome);
-          msg.value = _Q_TITULO + '\n\nPrezado(a) *' + (pn || 'condutor(a)') + '*, o monitoramento '
+          var pn = _qPrimNome(meta.motoristaNome);
+          msg.value = _Q_TITULO + '\n\n' + _qBlocoDados(meta)
+            + 'Prezado(a) *' + (pn || 'condutor(a)') + '*, o monitoramento '
             + 'da Catedral requer um *esclarecimento formal* sobre este trecho. '
             + 'Solicitamos que apresente a justificativa o quanto antes.\n'
             + 'O retorno deve ser enviado por esta conversa.' + _qAssinatura();
@@ -4441,7 +4468,7 @@
 
       // Alerta único
       if (msg && (!msg.value || _qCtx._autofilled)) {
-        msg.value = _qMontarSingle(ev, v.nome);
+        msg.value = _qMontarSingle(ev, meta);
         msg.placeholder = '';
         _qCtx._autofilled = true;
       }
