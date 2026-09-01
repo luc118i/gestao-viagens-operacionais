@@ -375,6 +375,11 @@
           _esquemas = dados.esquemas || [];
           _motoristas = dados.motoristas || [];
 
+          // Antecipação mínima por garagem → linha da garagem em "Eventos da Rota"
+          if (dados.antecipacaoGaragens && AnalysisModule.setAntecipacaoGaragens) {
+            AnalysisModule.setAntecipacaoGaragens(dados.antecipacaoGaragens);
+          }
+
           // Popula o combobox pesquisável com os esquemas carregados
           _renderEsquemaOpts('');
 

@@ -2532,7 +2532,11 @@ function getDadosIniciais() {
   try {
     var esquemas = EsquemasService.getEsquemas();
     var motoristas = SheetsService.getMotoristas();
-    return { esquemas: esquemas, motoristas: motoristas };
+    // Antecipação mínima por garagem (aba "Garagens") — usada na linha da
+    // garagem da tabela "Eventos da Rota" (info de antecipação na partida).
+    var antecipacaoGaragens = {};
+    try { antecipacaoGaragens = SheetsService.getAntecipacaoGaragens(); } catch (e2) {}
+    return { esquemas: esquemas, motoristas: motoristas, antecipacaoGaragens: antecipacaoGaragens };
   } catch (e) {
     throw new Error("Erro ao carregar dados iniciais: " + e.message);
   }

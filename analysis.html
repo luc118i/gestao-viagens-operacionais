@@ -24,6 +24,103 @@
     var _lastTrip = null;
     var _lastComp = null;
 
+    // ── Antecipação da garagem (aba "Garagens") — só na linha da garagem de
+    //    PARTIDA (1º ponto da viagem) da tabela "Eventos da Rota".
+    var _antecipGaragens = {};       // { "CIDADE - UF": { cidade, uf, antecipacaoMin } }
+    var _partidaGaragemInfo = null;  // resultado de _calcPartidaGaragem p/ o render atual
+    var _firstTripPt = null;         // ref ao 1º ponto do trip do render atual
+
+    /** Recebe o mapa de antecipação por garagem (chamado no boot pelo app.html). */
+    function setAntecipacaoGaragens(map) { _antecipGaragens = map || {}; }
+
+    function _normNomeCli(s) {
+      return String(s == null ? '' : s)
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+    }
+
+    /** Casa nomes (garagem / 1ª rodoviária) contra a config por cidade — chave mais longa vence. */
+    function _matchGaragemCfgCli(nomes) {
+      var alvos = (nomes || []).map(_normNomeCli).filter(function (n) { return !!n; });
+      if (!alvos.length) return null;
+      var melhor = null, melhorLen = -1;
+      Object.keys(_antecipGaragens).forEach(function (k) {
+        var cfg = _antecipGaragens[k];
+        var cidade = _normNomeCli(cfg && cfg.cidade);
+        if (!cidade) return;
+        var re = new RegExp('\\b' + cidade.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b');
+        alvos.forEach(function (a) {
+          if (re.test(a) && cidade.length > melhorLen) { melhor = cfg; melhorLen = cidade.length; }
+        });
+      });
+      return melhor;
+    }
+
+    function _fmtDurMinCli(min) {
+      var t = Math.max(0, Math.round(min || 0));
+      if (t < 60) return t + 'min';
+      return Math.floor(t / 60) + 'h' + ('0' + (t % 60)).slice(-2);
+    }
+
+    /**
+     * Calcula a antecipação da garagem de PARTIDA: quanto o veículo saiu da
+     * garagem antes da partida programada (horário comercial do 1º ponto do
+     * esquema) e se cumpriu a antecipação mínima exigida (aba "Garagens").
+     * Retorna null se não der para calcular (sem garagem no 1º ponto / sem
+     * horário comercial / sem saída).
+     */
+    function _calcPartidaGaragem(enrichedTrip, comparacao) {
+      if (!enrichedTrip || !enrichedTrip.length) return null;
+      var g = enrichedTrip[0];
+      if (!g || !(g.garagem || /GARAGEM/.test(_normNomeCli(g.ponto)))) return null;
+      var saidaG = _extractHHMM(g.saida || g.entrada);
+      if (!saidaG) return null;
+
+      var origem = null;
+      (comparacao || []).some(function (c) {
+        if (c && c.horario_comercial) { origem = c; return true; }
+        return false;
+      });
+      if (!origem) return null;
+      var com = String(origem.horario_comercial).trim();
+
+      // Antecedência real (positivo = saiu antes da partida programada).
+      var d = _diffMin(saidaG, com);
+      if (d == null) return null;
+      var antecedMin = -d;
+
+      var cfg = _matchGaragemCfgCli([origem.nome_ponto, g.ponto]);
+      var exigidoMin = cfg ? cfg.antecipacaoMin : null;
+      return {
+        garagemNome: g.ponto,
+        origemNome: origem.nome_ponto,
+        comercial: com,
+        saidaGaragem: saidaG,
+        antecedMin: antecedMin,
+        exigidoMin: exigidoMin,
+        difMin: (exigidoMin != null) ? Math.round(antecedMin - exigidoMin) : null
+      };
+    }
+
+    /** HTML da sub-linha de antecipação — só para o 1º ponto (garagem de partida). */
+    function _antecipInfoLine(ponto) {
+      if (!_partidaGaragemInfo || ponto !== _firstTripPt) return '';
+      var i = _partidaGaragemInfo;
+      var real = _fmtDurMinCli(Math.max(0, i.antecedMin));
+      var txt, cor;
+      if (i.exigidoMin != null) {
+        var ok = i.difMin >= 0;
+        cor = ok ? 'var(--verde,#22a96a)' : 'var(--vermelho,#d94040)';
+        txt = 'Antecipação: ' + real + ' antes da partida (' + i.comercial + ') · exigido ' +
+              _fmtDurMinCli(i.exigidoMin) + ' · ' +
+              (ok ? 'dentro do prazo' : 'fora do prazo (faltaram ' + _fmtDurMinCli(Math.abs(i.difMin)) + ')');
+      } else {
+        cor = 'var(--text3,#8a8f99)';
+        txt = 'Antecipação: saiu ' + real + ' antes da partida programada (' + i.comercial + ')';
+      }
+      return '<div style="font-size:10px;font-style:normal;margin-top:2px;color:' + cor + ';">' + _escHtml(txt) + '</div>';
+    }
+
     /** Estado de override de um ponto pela seq. */
     function _ovState(seq) {
       return (seq == null) ? undefined : _apoioState[String(seq)];
@@ -171,6 +268,8 @@
       tbody.innerHTML = '';
       _lastTrip = enrichedTrip || null;
       _lastComp = comparacao || null;
+      _firstTripPt = (enrichedTrip && enrichedTrip[0]) || null;
+      _partidaGaragemInfo = _calcPartidaGaragem(enrichedTrip, comparacao);
       _buildGruposMotorista(grupoFiltroIdx);
       _lastGrupoIdx = null;
 
@@ -226,7 +325,7 @@
 
         tr.innerHTML =
           '<td class="seq-cell">' + ponto.seq + '</td>' +
-          '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + _antecipInfoLine(ponto) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(ponto.seq, _isAjustavel(ponto, excessoS), statusTag) +
           '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
@@ -276,7 +375,7 @@
 
         tr.innerHTML =
           '<td class="seq-cell">' + (item.ordem || (idx + 1)) + '</td>' +
-          '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
+          '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + _antecipInfoLine(pr) + '</td>' +
           '<td>' + tipoTag + '</td>' +
           _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
           '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
@@ -385,7 +484,7 @@
 
       tr.innerHTML =
         '<td class="seq-cell">' + (item.ordem || '') + '</td>' +
-        '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + '</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(item.nome_ponto) + '">' + _escHtml(_truncate(item.nome_ponto, 32)) + _antecipInfoLine(pr) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
         '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
@@ -434,7 +533,7 @@
 
       tr.innerHTML =
         '<td class="seq-cell" style="color:var(--text3);">•</td>' +
-        '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + '</td>' +
+        '<td class="ponto-cell" title="' + _escHtml(ponto.ponto) + '">' + _escHtml(_truncate(ponto.ponto, 32)) + _antecipInfoLine(ponto) + '</td>' +
         '<td>' + tipoTag + '</td>' +
         _statusCell(ponto.seq, true, statusTag) +
         '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
@@ -1307,7 +1406,8 @@
       atualizarContadoresComparacao,
       resetUI,
       toggleApoioStatus,
-      getApoioState
+      getApoioState,
+      setAntecipacaoGaragens
     };
   })();
 </script>
