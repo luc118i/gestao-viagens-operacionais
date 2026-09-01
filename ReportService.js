@@ -386,6 +386,8 @@ var ReportService = (() => {
       if (idx === 0 || idx === lastIdx) return;
       if (pt.ignorarManual) return; // ignorado: fora do relatório
       if (!pt.parada_s || pt.parada_s <= 0) return;
+      // Regra unificada: só parada válida (>= 5min ou rodoviária/garagem).
+      if (!AnalysisService.isParadaValida(pt)) return;
       var isApoio = !!pt.apoioManual;
       var tipoKey = String(pt.tipo || '').trim();
       var paradaMin = Math.round((pt.parada_s / 60) * 10) / 10;
@@ -456,6 +458,9 @@ var ReportService = (() => {
       // Inclui segmento se "de" ou "para" está no trecho
       var noTrecho = pontosNoTrecho[seg.de] || pontosNoTrecho[seg.para];
       if (!noTrecho) return;
+      // Só trechos entre paradas válidas (>= 5min ou rodoviária/garagem) — não
+      // atribui evento a ponto que foi só passagem rápida.
+      if (seg.deParadaValida === false || seg.paraParadaValida === false) return;
       seg.alertas.forEach(function (a) {
         var manual = a.alertKey ? justificativas[a.alertKey] : null;
         var reaberto = manual && manual.status === "reaberto";
@@ -1132,10 +1137,10 @@ var ReportService = (() => {
                 '" stroke="' + cor + '" stroke-width="3" stroke-linecap="round"/>';
     }
 
-    // Marcadores de parada (pontos com parada_s > 0)
+    // Marcadores de parada (só paradas válidas — >= 5min ou rodoviária/garagem)
     var stopSvg = '';
     pontos.forEach(function(p) {
-      if (p.parada_s && p.parada_s > 60) {
+      if (AnalysisService.isParadaValida(p)) {
         stopSvg += '<circle cx="' + toX(p.lng).toFixed(1) + '" cy="' + toY(p.lat).toFixed(1) +
                    '" r="4" fill="white" stroke="#444" stroke-width="1.5"/>';
       }
@@ -1220,6 +1225,196 @@ var ReportService = (() => {
   }
 
   /**
+   * Normaliza nome de ponto para casamento por cidade: maiúsculas, sem
+   * acento, só alfanumérico + espaço. Ex.: "Rodoviária São Paulo - SP" →
+   * "RODOVIARIA SAO PAULO SP".
+   */
+  function _normNomePonto(s) {
+    return String(s == null ? "" : s)
+      .normalize("NFD").replace(/[̀-ͯ]/g, "")
+      .toUpperCase()
+      .replace(/[^A-Z0-9]+/g, " ")
+      .trim();
+  }
+
+  /**
+   * Casa uma lista de nomes de ponto (garagem e/ou 1ª rodoviária) contra a
+   * config da aba "Garagens" ({ origemFull: {cidade, uf, antecipacaoMin} }).
+   * Mesma técnica de _matchOrigemAG da tela "Antecipação de Garagens":
+   * testa \bCIDADE\b (fronteira de palavra) e escolhe o casamento de cidade
+   * mais longo. Retorna a config casada ou null.
+   */
+  function _matchGaragemConfig(nomes, garagensMap) {
+    if (!garagensMap) return null;
+    var alvos = (nomes || []).map(_normNomePonto).filter(function (n) { return !!n; });
+    if (!alvos.length) return null;
+    var melhor = null, melhorLen = -1;
+    Object.keys(garagensMap).forEach(function (k) {
+      var cfg = garagensMap[k];
+      var cidade = _normNomePonto(cfg && cfg.cidade);
+      if (!cidade) return;
+      var re = new RegExp("\\b" + cidade.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\b");
+      alvos.forEach(function (alvo) {
+        if (re.test(alvo) && cidade.length > melhorLen) { melhor = cfg; melhorLen = cidade.length; }
+      });
+    });
+    return melhor;
+  }
+
+  /**
+   * Bloco "Partida e Antecipação da Garagem" — só no Relatório Completo.
+   * Determinístico. Mede:
+   *  - atraso de partida = saída real do 1º ponto comercial × horário comercial
+   *    (mesma regra "origem usa saída" da timeline do Diagnóstico);
+   *  - antecipação garagem → rodoviária = quanto o veículo saiu da garagem
+   *    antes da partida programada, comparado à antecipação MÍNIMA exigida
+   *    para aquela origem (aba "Garagens", via params.antecipacaoGaragens);
+   *  - veredito de recuperação = compara o atraso de partida com o atraso
+   *    final da viagem (params.diagnostico.indicadores.atrasoFinalMin).
+   *
+   * @param {Object} payload  — precisa de tripForMap
+   * @param {Object} params   — antecipacaoGaragens, diagnostico
+   * @param {Array}  esqOrd   — esquema ordenado por `ordem`
+   * @param {Object} esqComercialMap — { id_ponto: "HH:MM" }
+   * @returns {string} HTML (ou "" se não houver dados de partida)
+   */
+  function _buildPartidaAntecipacaoHtml(payload, params, esqOrd, esqComercialMap) {
+    var trip = payload.tripForMap || [];
+    if (!trip.length || !esqOrd || !esqOrd.length) return "";
+
+    // 1º ponto comercial do esquema (menor ordem com horário_comercial).
+    var origemEp = null;
+    for (var i = 0; i < esqOrd.length; i++) {
+      var id = String(esqOrd[i].id_ponto || "").trim();
+      if (id && esqComercialMap[id]) { origemEp = esqOrd[i]; break; }
+    }
+    if (!origemEp) return "";
+    var origemId = String(origemEp.id_ponto).trim();
+    var comercialHHMM = esqComercialMap[origemId];
+
+    // Ponto realizado correspondente à origem.
+    var origemTp = null;
+    for (var j = 0; j < trip.length; j++) {
+      if (String(trip[j].codigo || "").trim() === origemId) { origemTp = trip[j]; break; }
+    }
+    if (!origemTp) return "";
+    var origemNome = origemTp.ponto || origemEp.nome_ponto || origemEp.nome || "Origem";
+    var saidaRealHHMM = _extractTime(origemTp.saida || origemTp.entrada);
+    if (!saidaRealHHMM) return "";
+
+    var atrasoPartidaMin = _diffMin(saidaRealHHMM, comercialHHMM);
+
+    // Garagem de saída — 1º ponto da viagem marcado como garagem (ou nome).
+    var garagemTp = null;
+    for (var k = 0; k < trip.length; k++) {
+      var pt = trip[k];
+      if (pt === origemTp) break;
+      if (pt.garagem || /GARAGEM/.test(_normNomePonto(pt.ponto))) { garagemTp = pt; break; }
+    }
+    var garagemNome = garagemTp ? (garagemTp.ponto || "Garagem") : null;
+    var garagemSaidaHHMM = garagemTp ? _extractTime(garagemTp.saida || garagemTp.entrada) : null;
+
+    // Antecedência real garagem → partida programada (positivo = saiu antes).
+    var antecedenciaRealMin = garagemSaidaHHMM
+      ? -_diffMin(garagemSaidaHHMM, comercialHHMM)
+      : null;
+
+    // Config da aba "Garagens" para esta origem.
+    var cfg = _matchGaragemConfig([origemNome, garagemNome], params.antecipacaoGaragens);
+    var exigidoMin = cfg ? cfg.antecipacaoMin : null;
+    var difAntecipMin = (exigidoMin != null && antecedenciaRealMin != null)
+      ? Math.round(antecedenciaRealMin - exigidoMin)
+      : null;
+
+    // Atraso final da viagem (Diagnóstico) → veredito de recuperação.
+    var atrasoFinalMin = null;
+    var diag = params.diagnostico || {};
+    if (diag.indicadores && diag.indicadores.atrasoFinalMin != null) {
+      atrasoFinalMin = Math.round(diag.indicadores.atrasoFinalMin);
+    }
+
+    var TOL = 5;
+    var vermelho = "#d94040", verde = "#22a96a", cinza = "#5a6070";
+
+    // Sem tabela larga (estourava a largura da página no PDF/DOCX) — bloco de
+    // rótulo+valor que quebra sozinho + vereditos em texto.
+    var atrasoCor = atrasoPartidaMin == null ? cinza : atrasoPartidaMin > TOL ? vermelho : atrasoPartidaMin < -TOL ? verde : cinza;
+    var kv = function (rot, val) {
+      return '<div style="margin-bottom:4px;"><span style="display:inline-block;min-width:150px;color:#8a8f99;' +
+             'text-transform:uppercase;font-size:9px;font-weight:700;letter-spacing:.05em;">' + rot + '</span>' + val + '</div>';
+    };
+
+    var h = '';
+    h += '<h4 style="font-size:13px;margin:20px 0 8px;color:#1a1d23;font-weight:800;letter-spacing:0.02em;">' +
+         'Partida e Antecipação da Garagem</h4>';
+    h += '<div style="font-size:11px;line-height:1.5;margin-bottom:10px;">';
+    h += kv('Origem', '<strong>' + _esc(origemNome) + '</strong>');
+    if (garagemNome) {
+      h += kv('Saída da garagem', (garagemSaidaHHMM || '—') +
+              ' <span style="color:#8a8f99;">(' + _esc(garagemNome) + ')</span>');
+    }
+    h += kv('Comercial &#215; Saída real', '<span style="color:#1565c0;">' + (comercialHHMM || '—') +
+            '</span> &nbsp;&#8594;&nbsp; ' + (saidaRealHHMM || '—'));
+    h += kv('Atraso de partida', '<span style="font-weight:700;color:' + atrasoCor + ';">' + _fmtDiff(atrasoPartidaMin) + '</span>');
+    if (exigidoMin != null && antecedenciaRealMin != null) {
+      h += kv('Antecipação (exigida / real)', _fmtMin(exigidoMin) + ' / ' +
+              _fmtMin(Math.max(0, Math.round(antecedenciaRealMin))));
+    } else if (antecedenciaRealMin != null) {
+      h += kv('Antecedência real', _fmtMin(Math.max(0, Math.round(antecedenciaRealMin))));
+    }
+    h += '</div>';
+
+    // ── Vereditos em texto ──
+    var linhas = [];
+
+    if (atrasoPartidaMin != null) {
+      if (atrasoPartidaMin > TOL) {
+        linhas.push('<span style="color:' + vermelho + ';font-weight:700;">Partiu ' + _fmtDiff(atrasoPartidaMin) +
+                    '</span> em relação ao horário comercial (' + comercialHHMM + ').');
+      } else if (atrasoPartidaMin < -TOL) {
+        linhas.push('<span style="color:' + verde + ';font-weight:700;">Partiu ' + _fmtDiff(atrasoPartidaMin) +
+                    '</span> (adiantado) em relação ao horário comercial (' + comercialHHMM + ').');
+      } else {
+        linhas.push('Partiu praticamente no horário comercial (' + comercialHHMM + ').');
+      }
+    }
+
+    if (exigidoMin != null && antecedenciaRealMin != null) {
+      var respeitou = difAntecipMin >= 0;
+      linhas.push('Antecipação garagem &#8594; rodoviária: exigido ' + _fmtMin(exigidoMin) +
+                  ', realizado ' + _fmtMin(Math.max(0, Math.round(antecedenciaRealMin))) + ' — ' +
+                  '<span style="color:' + (respeitou ? verde : vermelho) + ';font-weight:700;">' +
+                  (respeitou ? 'antecipação respeitada' : 'antecipação NÃO respeitada (faltaram ' + Math.abs(difAntecipMin) + 'min)') +
+                  '</span>.');
+    } else if (antecedenciaRealMin != null) {
+      linhas.push('Saiu da garagem ' + _fmtMin(Math.max(0, Math.round(antecedenciaRealMin))) +
+                  ' antes da partida programada. <span style="color:#8a8f99;">Antecipação mínima não cadastrada para esta origem.</span>');
+    }
+
+    if (atrasoPartidaMin != null && atrasoPartidaMin > TOL && atrasoFinalMin != null) {
+      var txt, cor;
+      if (atrasoFinalMin <= TOL) {
+        cor = verde; txt = 'atraso de partida recuperado ao longo da viagem (chegou ' + _fmtDiff(atrasoFinalMin) + ' ao fim).';
+      } else if (atrasoFinalMin < atrasoPartidaMin) {
+        cor = '#e8820a'; txt = 'atraso parcialmente recuperado — de ' + _fmtDiff(atrasoPartidaMin) + ' na partida para ' + _fmtDiff(atrasoFinalMin) + ' ao fim.';
+      } else {
+        cor = vermelho; txt = 'atraso de partida NÃO recuperado — ' + _fmtDiff(atrasoFinalMin) + ' ao fim da viagem.';
+      }
+      linhas.push('<span style="color:' + cor + ';font-weight:700;">Recuperação:</span> ' + txt);
+    }
+
+    if (linhas.length) {
+      h += '<ul style="font-size:11px;margin:0 0 16px;padding-left:18px;line-height:1.6;">';
+      linhas.forEach(function (l) { h += '<li style="margin-bottom:3px;">' + l + '</li>'; });
+      h += '</ul>';
+    } else {
+      h += '<div style="height:8px;"></div>';
+    }
+
+    return h;
+  }
+
+  /**
    * Gera o corpo HTML estruturado do relatório operacional.
    */
   function _buildRelatoHtml(payload, params) {
@@ -1287,17 +1482,23 @@ var ReportService = (() => {
     var tripLastIdx = tripForMap.length - 1;
     var paradasFora = [];
     tripForMap.forEach(function(pt, idx) {
-      if (idx === 0 || idx === tripLastIdx) return;
+      // Extremos da viagem (garagem/terminal ou ponto do esquema) não são
+      // "parada fora" — mas uma parada real NÃO identificada no início/fim
+      // (relatório gerado no meio da viagem) deve aparecer.
+      if ((idx === 0 || idx === tripLastIdx) && (pt.matched || pt.garagem || pt.rodoviaria)) return;
       if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: não é parada fora
-      if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return;
+      if (!pt.parada_s || pt.parada_s <= 0) return;
+      // Regra unificada: só parada válida (>= 5min ou rodoviária/garagem).
+      if (!AnalysisService.isParadaValida(pt)) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
       paradasFora.push({
-        ponto:      pt.ponto,
-        codigo:     pt.codigo || null,
-        entrada:    pt.entrada,
-        saida:      pt.saida,
-        parada_min: Math.round((pt.parada_s / 60) * 10) / 10,
-        proibido:   !!(pt.proibido42),
+        ponto:          pt.ponto,
+        codigo:         pt.codigo || null,
+        entrada:        pt.entrada,
+        saida:          pt.saida,
+        parada_min:     Math.round((pt.parada_s / 60) * 10) / 10,
+        proibido:       !!(pt.proibido42),
+        naoIdentificado: !pt.matched,
       });
     });
 
@@ -1324,6 +1525,13 @@ var ReportService = (() => {
     if (stats.fim)
       h += '<td style="padding:6px 10px;"><strong>Fim</strong><br/>' + stats.fim + "</td>";
     h += "</tr></table>";
+
+    // Partida e Antecipação da Garagem — só no Relatório Completo. Mede se o
+    // veículo partiu no horário, se respeitou a antecipação exigida na
+    // garagem (aba "Garagens") e se o atraso de partida foi recuperado.
+    if (payload.tipo === 'COMPLETO') {
+      h += _buildPartidaAntecipacaoHtml(payload, params, _esqOrd, esqComercialMap);
+    }
 
     // Tripulação — um bloco por motorista: "matrícula · nome · base" e, abaixo, o
     // sub-trecho sob responsabilidade dele. Envolvido em marcador para o template
@@ -1364,7 +1572,9 @@ var ReportService = (() => {
     if (payload.tipo !== 'COMPLETO' && tripForMap.length > 0) {
       var pontosRegistro = tripForMap.filter(function(pt) {
         if (pt.ignorarManual) return false; // ajuste manual: removido do relatório
-        return pt.matched || (pt.parada_s && pt.parada_s > 0);
+        // Identificado, ou parada real não identificada (>= 5min / rodoviária /
+        // garagem) — que não pode sumir do registro do trecho.
+        return pt.matched || AnalysisService.isParadaValida(pt);
       });
       if (pontosRegistro.length > 0) {
         var THR = 'background:#f0f2f8;padding:6px 10px;font-size:9px;font-weight:700;text-transform:uppercase;' +
@@ -1443,9 +1653,10 @@ var ReportService = (() => {
           var chegada = _extractTime(pt.entrada) || '—';
           var saida   = ocultarTempoSaida ? '—' : (_extractTime(pt.saida || pt.entrada) || '—');
           // Comercial (do esquema) × hora real → diferença assinada.
-          // No 1º ponto (origem) compara com a SAÍDA (partida); nos demais, com a chegada.
+          // Compara SEMPRE com a SAÍDA (partida do ponto); `saida` já cai para a
+          // entrada quando não há saída registrada.
           var comercial   = codigo ? (esqComercialMap[codigo] || null) : null;
-          var horaCmp     = isFirst ? saida : chegada;
+          var horaCmp     = saida;
           var difMin      = (horaCmp && horaCmp !== '—' && comercial) ? _diffMin(horaCmp, comercial) : null;
           var comercialCel = comercial
             ? '<span style="color:#1565c0;">' + comercial + '</span>'
@@ -1486,6 +1697,37 @@ var ReportService = (() => {
       h += "</ul>";
     }
 
+    // Paradas fora do esquema — só no Relatório Completo. Lista explícita das
+    // paradas em pontos que não constam no esquema planejado (ex.: parou num
+    // ponto de controle no lugar de um apoio previsto). Separada dos "Pontos
+    // Não Visitados" de propósito — sem inferir substituição entre eles.
+    if (payload.tipo === 'COMPLETO' && paradasFora.length > 0) {
+      h +=
+        '<h4 style="font-size:13px;margin:0 0 8px;color:#c0392b;">Paradas Fora do Esquema (' +
+        paradasFora.length +
+        ")</h4>";
+      h += '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:16px;">';
+      h +=
+        '<thead><tr style="background:#f5f5f5;">' +
+        '<th style="padding:6px 8px;text-align:left;">Ponto</th>' +
+        '<th style="padding:6px 8px;text-align:center;">Entrada</th>' +
+        '<th style="padding:6px 8px;text-align:center;">Saída</th>' +
+        '<th style="padding:6px 8px;text-align:right;">Parada</th></tr></thead><tbody>';
+      paradasFora.forEach(function (p) {
+        h +=
+          '<tr style="border-bottom:1px solid #eee;">' +
+          '<td style="padding:5px 8px;">' + _esc(p.ponto || "—") +
+          (p.proibido ? ' <span style="font-size:9px;background:#c0392b;color:#fff;border-radius:3px;padding:1px 4px;">Proibido</span>' : '') +
+          (p.naoIdentificado ? ' <span style="font-size:9px;background:#8a8f99;color:#fff;border-radius:3px;padding:1px 4px;">Não identificado</span>' : '') +
+          "</td>" +
+          '<td style="padding:5px 8px;text-align:center;font-family:monospace;">' + (_extractTime(p.entrada) || "—") + "</td>" +
+          '<td style="padding:5px 8px;text-align:center;font-family:monospace;">' + (_extractTime(p.saida) || "—") + "</td>" +
+          '<td style="padding:5px 8px;text-align:right;font-weight:700;color:#c0392b;">' + _fmtMin(p.parada_min) + "</td>" +
+          "</tr>";
+      });
+      h += "</tbody></table>";
+    }
+
     // Eventos de velocidade — considera apenas os NÃO justificados para a
     // checagem de "sem ocorrências" abaixo (contexto urbano/garagem ou
     // justificativa manual não são pendências).
@@ -1497,7 +1739,11 @@ var ReportService = (() => {
     var pontosNoTrechoRelato = {};
     tripForMap.forEach(function (pt) { if (pt.ponto) pontosNoTrechoRelato[pt.ponto] = true; });
     var trechoSegmentsVel = (params.segments || []).filter(function (s) {
-      return s.velocidadeKmh != null && (pontosNoTrechoRelato[s.de] || pontosNoTrechoRelato[s.para]);
+      if (s.velocidadeKmh == null) return false;
+      if (!(pontosNoTrechoRelato[s.de] || pontosNoTrechoRelato[s.para])) return false;
+      // Só trechos entre paradas válidas (>= 5min ou rodoviária/garagem).
+      if (s.deParadaValida === false || s.paraParadaValida === false) return false;
+      return true;
     });
     if (trechoSegmentsVel.length > 0) {
       h += _buildVelocidadeChartHtml(trechoSegmentsVel);
@@ -1757,6 +2003,8 @@ var ReportService = (() => {
       if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual: não gera ocorrência
       if (!pt.parada_s || pt.parada_s <= 0) return;
       if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
+      // carve-out Fix 4: bloco só-tipo-42 — qualquer parada em ponto proibido
+      // gera ocorrência, independente da duração (mantém `parada_s > 0`).
       if (!pt.proibido42) return;
       paradasFora.push({ ponto: pt.ponto, codigo: pt.codigo || null, entrada: pt.entrada, saida: pt.saida });
     });

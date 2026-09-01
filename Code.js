@@ -2580,6 +2580,13 @@ function gerarRelatorio(params) {
     // para calcular excesso de parada por ponto (substitui tempo_local do esquema).
     params.temposPermanencia = SheetsService.getTemposPermanencia();
 
+    // Relatório Completo: injeta a antecipação mínima exigida por garagem
+    // (aba "Garagens" — a mesma da tela "Antecipação de Garagens"), usada
+    // pelo ReportService para o bloco "Partida e Antecipação da Garagem".
+    if (params.tipo === "COMPLETO") {
+      params.antecipacaoGaragens = SheetsService.getAntecipacaoGaragens();
+    }
+
     var payload = null;
 
     if (params.tipo === "MOTORISTA") {

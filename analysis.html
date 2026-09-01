@@ -9,6 +9,13 @@
     var TEMPO_ESPERADO_PADRAO = 30 * 60; // fallback 00:30 (fora da aba TEMPO_PERMANENCIA)
     var TOLERANCIA_S = 5 * 60; // margem de segurança antes de marcar excesso
     var APOIO_LIMITE_S = 30 * 60; // teto de permanência mesmo em ponto de apoio (30min)
+    var LIMITE_PARADA_MINIMA_S = 300; // espelha AnalysisService.LIMITE_PARADA_MINIMA_S (5min)
+
+    /** Regra única de "parada válida" — espelha AnalysisService.isParadaValida. */
+    function _isParadaValida(p) {
+      if (!p) return false;
+      return (Number(p.parada_s) || 0) >= LIMITE_PARADA_MINIMA_S || !!p.rodoviaria || !!p.garagem;
+    }
 
     // Ajuste manual de status por ponto (seq → 'apoio' | 'ignorar').
     // 'apoio'  = parada legítima (some das ocorrências/excessos do relatório).
@@ -223,7 +230,7 @@
           '<td>' + tipoTag + '</td>' +
           _statusCell(ponto.seq, _isAjustavel(ponto, excessoS), statusTag) +
           '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
-          _comercialCells('', ponto.entrada, ponto.saida, idx === 0) +
+          _comercialCells('', ponto.entrada, ponto.saida) +
           '<td class="time-cell">' + _fmtDatetime(ponto.saida) + '</td>' +
           '<td class="parada-cell">' + paradaHtml + '</td>' +
           '<td class="excesso-cell">' + excessoHtml + '</td>';
@@ -273,7 +280,7 @@
           '<td>' + tipoTag + '</td>' +
           _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
           '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
-          _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, idx === 0) +
+          _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null) +
           '<td class="time-cell">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
           '<td class="parada-cell">' + paradaHtml + '</td>' +
           '<td class="excesso-cell">' + excessoHtml + '</td>';
@@ -296,12 +303,15 @@
       // Codigos do esquema (para excluir pontos que são do esquema mas aparecem no enrichedTrip)
       var codigosEsquema = new Set(comparacao.map(function(c) { return String(c.id_ponto || ''); }));
 
-      // Paradas fora do esquema: matched, com parada > 0, não já cobertas pelo esquema
+      // Paradas fora do esquema, não já cobertas pelo esquema:
+      //  - identificadas: parada válida (>= 5min / rodoviária / garagem)
+      //  - NÃO identificadas: parada válida → aparecem como "não identificado"
+      //    em vez de sumir (ex.: ponto com nome truncado que não casou)
       var extras = enrichedTrip.filter(function(pt) {
-        if (!pt.matched || !pt.parada_s || pt.parada_s <= 0) return false;
         if (seqsUsados.has(pt.seq)) return false;
         if (pt.codigo && codigosEsquema.has(String(pt.codigo))) return false;
-        return true;
+        if (pt.matched) return _isParadaValida(pt) && pt.parada_s > 0;
+        return _isParadaValida(pt);
       });
 
       if (!extras.length) {
@@ -379,7 +389,7 @@
         '<td>' + tipoTag + '</td>' +
         _statusCell(seq, _isAjustavel(pr, excessoS), statusTag) +
         '<td class="time-cell">' + (pr ? _fmtDatetime(pr.entrada) : '—') + '</td>' +
-        _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null, !!isFirst) +
+        _comercialCells(item.horario_comercial, pr ? pr.entrada : null, pr ? pr.saida : null) +
         '<td class="time-cell">' + (pr ? _fmtDatetime(pr.saida) : '—') + '</td>' +
         '<td class="parada-cell">' + paradaHtml + '</td>' +
         '<td class="excesso-cell">' + excessoHtml + '</td>';
@@ -428,7 +438,7 @@
         '<td>' + tipoTag + '</td>' +
         _statusCell(ponto.seq, true, statusTag) +
         '<td class="time-cell">' + _fmtDatetime(ponto.entrada) + '</td>' +
-        _comercialCells('', ponto.entrada, ponto.saida, false) +
+        _comercialCells('', ponto.entrada, ponto.saida) +
         '<td class="time-cell">' + _fmtDatetime(ponto.saida) + '</td>' +
         '<td class="parada-cell">' + paradaHtml + '</td>' +
         '<td class="excesso-cell">' + excessoHtml + '</td>';
@@ -523,7 +533,11 @@
       var section = document.getElementById('sectionVelChart');
       if (!wrap) return;
 
-      var chartable = (segments || []).filter(function(s) { return s.velocidadeKmh != null; });
+      // Só trechos com velocidade calculada E entre paradas válidas (>= 5min ou
+      // rodoviária/garagem) — não conta trecho cujo extremo foi só passagem.
+      var chartable = (segments || []).filter(function(s) {
+        return s.velocidadeKmh != null && s.deParadaValida !== false && s.paraParadaValida !== false;
+      });
       _setText('countVelChart', chartable.length);
 
       if (section) section.style.display = chartable.length > 0 ? 'block' : 'none';
@@ -1075,8 +1089,8 @@
           // Apenas passou sem parar — irrelevante, mas registrado
           return '<span class="tag tag-nao-visitado" title="Local não cadastrado">Não id.</span>';
         }
-        if (paradaS <= 3 * 60) {
-          // Parada muito curta (sinal, tráfego) — informativo
+        if (paradaS < LIMITE_PARADA_MINIMA_S) {
+          // Abaixo de 5 min — não é parada válida (sinal, tráfego, manobra) — informativo
           return '<span class="tag tag-status-transito" title="Parada breve (' + Math.round(paradaS/60) + ' min) em local não identificado">Parada breve</span>';
         }
         if (paradaS <= 15 * 60) {
@@ -1245,10 +1259,11 @@
     }
 
     // Monta as duas células <td> (Comercial + Dif.).
-    // No 1º ponto (origem) a comparação é com a SAÍDA (partida); nos demais, com a entrada (chegada).
-    function _comercialCells(comercial, entradaReal, saidaReal, usarSaida) {
+    // A comparação é SEMPRE com a SAÍDA (partida do ponto), em todos os pontos;
+    // cai para a entrada (chegada) quando não há saída registrada.
+    function _comercialCells(comercial, entradaReal, saidaReal) {
       var com = comercial ? String(comercial).trim() : '';
-      var real = _extractHHMM(usarSaida ? saidaReal : entradaReal);
+      var real = _extractHHMM(saidaReal || entradaReal);
       var dif = (com && real) ? _diffMin(real, com) : null;
       var comCel = com
         ? '<span class="comercial-value">' + _escHtml(com) + '</span>'

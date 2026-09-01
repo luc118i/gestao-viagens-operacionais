@@ -112,20 +112,15 @@ var DiagnosticoService = (() => {
       return c.visitado && c.ponto_realizado && c.horario_comercial;
     });
 
-    // O primeiro ponto do esquema (comparacao[0], preservado na ordem
-    // original — não no subconjunto filtrado) é a origem/partida da linha:
-    // o horário comercial ali é de SAÍDA, não de chegada. Comparar com a
-    // "entrada" (chegada) mistura conceitos e gera um desvio artificial —
-    // ex: chegar 40min "adiantado" a um horário de PARTIDA, quando na
-    // prática o ônibus sai bem próximo do horário certo (o que de fato
-    // importa na origem).
-    const idOrigem = comparacao.length ? comparacao[0].id_ponto : null;
-
+    // O DIF/atraso compara o horário comercial do ponto com a SAÍDA do veículo
+    // (partida do ponto), não com a entrada — em TODOS os pontos, não só na
+    // origem. Fallback para a entrada quando não há saída registrada (ainda
+    // parado / último ponto). Mesma regra em analysis.html._comercialCells e
+    // ReportService._buildRelatoHtml.
     const items = [];
     let prevAtraso = null;
     visitadosComHorario.forEach(function (c) {
-      const ehOrigem = idOrigem != null && String(c.id_ponto) === String(idOrigem);
-      const horarioRefBruto = ehOrigem ? c.ponto_realizado.saida : c.ponto_realizado.entrada;
+      const horarioRefBruto = c.ponto_realizado.saida || c.ponto_realizado.entrada;
       const realHHMM = _hhmm(horarioRefBruto);
       const atraso = _diffMin(realHHMM, c.horario_comercial);
       if (atraso === null) return;
@@ -156,6 +151,9 @@ var DiagnosticoService = (() => {
     const rows = [];
     segments.forEach(function (s) {
       if (s.distKm == null || s.tempoMin == null || s.tempoMin <= 0 || s.distKm <= 0) return;
+      // Só trechos entre paradas válidas (>= 5min ou rodoviária/garagem) — evita
+      // atribuir trecho/tempo a um ponto que foi só passagem rápida.
+      if (s.deParadaValida === false || s.paraParadaValida === false) return;
       const vel = s.velocidadeKmh != null ? s.velocidadeKmh : Math.round((s.distKm / (s.tempoMin / 60)) * 10) / 10;
       // Trecho curto (dentro da mesma cidade) tem velocidade ideal bem menor que
       // um trecho de rodovia entre cidades — usa o mesmo limiar de distância do
@@ -188,6 +186,8 @@ var DiagnosticoService = (() => {
     const rows = [];
     trip.forEach(function (pt, idx) {
       if (!pt.parada_s || pt.parada_s <= 0) return;
+      // Só parada válida (>= 5min ou rodoviária/garagem) — regra unificada.
+      if (!AnalysisService.isParadaValida(pt)) return;
       // Ajuste manual do usuário: ponto de apoio (parada autorizada) ou ignorado.
       // Mesma regra do relatório operacional (ReportService._calcularParadas).
       if (pt.apoioManual || pt.ignorarManual) return;
@@ -227,7 +227,7 @@ var DiagnosticoService = (() => {
       // inconsistência (mesma lógica das paradas proibidas no ReportService).
       if (pt.apoioManual || pt.ignorarManual) return;
 
-      // Local proibido (tipo 42)
+      // Local proibido (tipo 42) — carve-out Fix 4: qualquer parada conta, não usa a regra dos 5min
       if (pt.matched && /\b42\b/.test(String(pt.tipo || '')) && pt.parada_s > 0) {
         out.push({
           tipo: 'PARADA_PROIBIDA',
@@ -243,8 +243,8 @@ var DiagnosticoService = (() => {
           descricao: 'O ponto "' + pt.ponto + '" não foi encontrado na base de locais.'
         });
       }
-      // Parada fora do esquema (identificado, com parada, mas ausente do esquema)
-      if (temEsquema && pt.matched && pt.codigo && pt.parada_s > 0 &&
+      // Parada fora do esquema (identificado, com parada válida, mas ausente do esquema)
+      if (temEsquema && pt.matched && pt.codigo && AnalysisService.isParadaValida(pt) &&
           !esqIds[String(pt.codigo).trim()]) {
         out.push({
           tipo: 'PARADA_FORA',

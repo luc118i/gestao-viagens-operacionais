@@ -266,6 +266,12 @@ var AnalysisService = (() => {
         distKm:       distKm,
         tempoMin:     tempoMin,
         velocidadeKmh: velocidadeKmh,
+        // Extremos do trecho são parada válida (>= 5min ou rodoviária/garagem)?
+        // Consumido pelo gráfico "Eventos de Velocidade por Trecho" e por
+        // _extrairEventos / _buildTrechos para ignorar trechos cujo extremo
+        // foi só passagem (< 5min), não parada real.
+        deParadaValida:   _isParadaValida(A),
+        paraParadaValida: _isParadaValida(B),
         alertas:      segAlertas
       });
 
@@ -294,6 +300,7 @@ var AnalysisService = (() => {
 
       // Parada em local proibido (tipo 42 — aceita "42", "Local Não Autorizado - 42", etc.)
       const _isTipo42 = (t) => { const s = String(t || '').trim(); if (/\b42\b/.test(s)) return true; return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').includes('nao autorizado'); };
+      // carve-out Fix 4: qualquer parada em ponto proibido conta (não usa a regra dos 5min)
       if (pt.matched && _isTipo42(pt.tipo) && pt.parada_s > 0) {
         pt.proibido42 = true;
         alerts.push(_classificarPtAlerta({
@@ -307,8 +314,8 @@ var AnalysisService = (() => {
         }, pt));
       }
 
-      // Parada longa
-      if (pt.parada_s > 0) {
+      // Parada longa — só avalia excesso sobre paradas válidas (>= 5min ou rodoviária/garagem)
+      if (_isParadaValida(pt) && pt.parada_s > 0) {
         const paradaMin = TimeUtils.toMinutes(pt.parada_s);
         // Limite = aba TEMPO_PERMANENCIA (por código) → fallback 30min.
         const limiteMin = (pt.tempoEsperadoMin != null) ? pt.tempoEsperadoMin : STOP_PADRAO_MIN;
@@ -341,8 +348,9 @@ var AnalysisService = (() => {
       ? Math.round((totalKm / (tempoTotal / 60)) * 10) / 10
       : 0;
 
-    // Ponto onde o veículo permaneceu por mais tempo
+    // Ponto onde o veículo permaneceu por mais tempo (só paradas válidas)
     const ptMaiorParada = enrichedTrip.reduce(function(best, pt) {
+      if (!_isParadaValida(pt)) return best;
       return (pt.parada_s || 0) > ((best && best.parada_s) || 0) ? pt : best;
     }, null);
     const maiorParada = (ptMaiorParada && ptMaiorParada.parada_s > 0)
@@ -524,18 +532,39 @@ var AnalysisService = (() => {
    */
   function _matchLocal(pontoBruto, locaisMap) {
     if (!pontoBruto) return null;
-    const key = _normalize(pontoBruto);
 
-    // Match exato
-    if (locaisMap[key]) return locaisMap[key];
+    // Candidatos, em ordem de preferência:
+    //  1) nome completo normalizado
+    //  2) trecho antes da primeira "/" — o CSV costuma vir "PONTO / CIDADE - UF"
+    //     e a parte após a "/" às vezes chega truncada (ex.: "... / SANTA CRUZ DE GOI...")
+    const candidates = [_normalize(pontoBruto)];
+    const slash = String(pontoBruto).indexOf('/');
+    if (slash > 0) {
+      const pre = _normalize(String(pontoBruto).slice(0, slash));
+      if (pre && candidates.indexOf(pre) === -1) candidates.push(pre);
+    }
 
-    // Match parcial — procura no mapa por chave que está contida no ponto
+    // Match exato de qualquer candidato
+    for (let c = 0; c < candidates.length; c++) {
+      if (candidates[c] && locaisMap[candidates[c]]) return locaisMap[candidates[c]];
+    }
+
+    // Match parcial — para cada candidato, escolhe a chave que casa por substring
+    // (qualquer direção) com o MAIOR comprimento (não a 1ª da ordem de inserção,
+    // que podia devolver um local não relacionado). Nome completo antes do pré-"/".
     const keys = Object.keys(locaisMap);
-    for (let i = 0; i < keys.length; i++) {
-      const k = keys[i];
-      if (k.length > 4 && (key.includes(k) || k.includes(key))) {
-        return locaisMap[k];
+    for (let c = 0; c < candidates.length; c++) {
+      const key = candidates[c];
+      if (!key) continue;
+      let best = null, bestLen = 0;
+      for (let i = 0; i < keys.length; i++) {
+        const k = keys[i];
+        if (k.length > 4 && k.length > bestLen && (key.indexOf(k) !== -1 || k.indexOf(key) !== -1)) {
+          best = locaisMap[k];
+          bestLen = k.length;
+        }
       }
+      if (best) return best;
     }
 
     return null;
@@ -545,7 +574,9 @@ var AnalysisService = (() => {
     if (!str) return '';
     return str.trim().toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // remove acentos
-      .replace(/\s+/g, ' ');
+      .replace(/[\s.…]+$/g, '')  // pontuação/reticências finais: "... goi..." → "... goi"
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   function _detectSeparator(line) {
@@ -708,12 +739,24 @@ var AnalysisService = (() => {
     }
     const cleaned = merged.filter((pt, idx) => {
       if (idx === ultimoIdx || idx === ultimoNaoGaragemIdx) return true;
-      if (pt.rodoviaria || pt.garagem) return true;
       if (!pt.parada_s || pt.parada_s <= 0) return true;
-      return pt.parada_s >= LIMITE_PARADA_MINIMA_S;
+      return _isParadaValida(pt); // >= 5min OU rodoviária/garagem
     });
 
     return cleaned.length ? cleaned : merged;
+  }
+
+  /**
+   * Regra única de "parada válida" — permanência mínima de 5 min OU ponto de
+   * itinerário oficial (rodoviária/garagem, que contam mesmo em passagem
+   * rápida). Fonte da verdade no servidor; espelhada no cliente
+   * (analysis.html / app.html). Usada por _compactTrip, geração de eventos de
+   * velocidade por trecho, cálculo de paradas/excessos e inconsistências.
+   * NÃO se aplica a PARADA_PROIBIDA (tipo 42): lá qualquer parada é violação.
+   */
+  function _isParadaValida(pt) {
+    if (!pt) return false;
+    return (Number(pt.parada_s) || 0) >= LIMITE_PARADA_MINIMA_S || !!pt.rodoviaria || !!pt.garagem;
   }
 
   function _isSameOperationalPoint(a, b) {
@@ -739,5 +782,5 @@ var AnalysisService = (() => {
     return false;
   }
 
-  return { processReport, analyzeTrip };
+  return { processReport, analyzeTrip, isParadaValida: _isParadaValida, LIMITE_PARADA_MINIMA_S: LIMITE_PARADA_MINIMA_S };
 })();

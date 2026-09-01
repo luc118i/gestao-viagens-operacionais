@@ -820,6 +820,32 @@
     //  CÁLCULO DE COMPARAÇÃO
     // ============================================================
 
+    var LIMITE_PARADA_MINIMA_S = 300; // espelha AnalysisService.LIMITE_PARADA_MINIMA_S (5min)
+
+    /** Regra única de "parada válida" — espelha AnalysisService.isParadaValida. */
+    function _isParadaValida(p) {
+      if (!p) return false;
+      return (Number(p.parada_s) || 0) >= LIMITE_PARADA_MINIMA_S || !!p.rodoviaria || !!p.garagem;
+    }
+
+    /**
+     * Relatório gerado no meio da viagem: remove da comparação os pontos do
+     * esquema À FRENTE do último ponto alcançado (maior `ordem` visitada) — não
+     * são "não visitados", ainda não foram realizados. Espelha o corte de
+     * ComparisonService.compararRota. Só aplica quando há fronteira (>= 1 visitado).
+     */
+    function _dropAdiante(comparacao) {
+      if (!comparacao || !comparacao.length) return comparacao;
+      var visitadas = comparacao.filter(function (c) { return c.visitado; });
+      if (!visitadas.length) return comparacao;
+      var fronteira = visitadas.reduce(function (mx, c) {
+        return (c.ordem != null && c.ordem > mx) ? c.ordem : mx;
+      }, -Infinity);
+      return comparacao.filter(function (c) {
+        return c.visitado || c.ordem == null || c.ordem <= fronteira;
+      });
+    }
+
     function _calcularComparacao() {
       if (!_esquemaPontos.length || !_enrichedTrip.length) {
         _comparacao = null;
@@ -850,6 +876,9 @@
           status: visitado ? "Realizado" : "Não visitado",
         });
       });
+
+      // Esconde pontos à frente do último alcançado (viagem em andamento)
+      _comparacao = _dropAdiante(_comparacao);
 
       // Re-renderiza tabela e mapa
       if (_analysis) {
@@ -890,9 +919,8 @@
         var codigosEsquema = new Set(
           _esquemaPontos.map(function(ep) { return String(ep.id_ponto); })
         );
-        var TOLERANCIA_NAO_AUT_S = 5 * 60;
         _enrichedTrip.forEach(function(pt) {
-          if (!pt.matched || !pt.parada_s || pt.parada_s <= TOLERANCIA_NAO_AUT_S) return;
+          if (!pt.matched || !_isParadaValida(pt)) return; // só parada válida (>= 5min)
           if (pt.codigo && codigosEsquema.has(String(pt.codigo))) return; // está no esquema
           alertsFiltrados.push({
             tipo: "PARADA_PROIBIDA",
@@ -969,6 +997,8 @@
 
           _enrichedTrip.forEach(function(pt) {
             if (pt.proibido42) return;
+            // carve-out Fix 4: parada em ponto proibido é violação em qualquer
+            // duração — usa piso de 60s (ruído GPS), não a regra dos 5min.
             if (!pt.parada_s || pt.parada_s < MIN_PARADA_S) return;
             if (!pt.lat || !pt.lng) return;
 
@@ -2650,6 +2680,7 @@
         if (pt.apoioManual || pt.ignorarManual) return; // ajuste manual
         if (!pt.parada_s || pt.parada_s <= 0) return;
         if (pt.codigo && esquemaIdSet[String(pt.codigo).trim()]) return;
+        // carve-out Fix 4: bloco só-tipo-42 — qualquer parada em ponto proibido conta
         if (!pt.proibido42) return;
         count++;
       });
@@ -3260,6 +3291,8 @@
             status:          visitado ? 'Realizado' : 'Não visitado'
           });
         });
+        // Esconde pontos à frente do último alcançado (viagem em andamento)
+        comparacaoView = _dropAdiante(comparacaoView);
       }
 
       // No modo "Por Motorista" a tabela já está filtrada a um único motorista;

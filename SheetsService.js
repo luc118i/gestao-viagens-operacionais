@@ -244,6 +244,73 @@ var SheetsService = (() => {
   }
 
   /**
+   * Lê a aba "Garagens" — a MESMA base usada pela tela "Antecipação de
+   * Garagens" (projeto PC NAO AUTORIZADO / BI_PC.gs → getGaragens): a
+   * cobrança de tempo de liberação garagem → rodoviária.
+   *
+   * Layout da aba:
+   *   Col A → ORIGEM no formato "CIDADE - UF" (cidade da rodoviária de
+   *           referência — é contra ela que o 1º ponto comercial do relatório
+   *           é casado, por nome de cidade).
+   *   Col B → duração "HH:MM" = antecipação MÍNIMA exigida, em minutos
+   *           (não é horário de relógio).
+   *
+   * Fonte da planilha: se a própria planilha ativa já tem a aba "Garagens"
+   * (os dois projetos podem apontar pro mesmo Sheet), usa ela; senão, abre
+   * pelo Script Property GARAGENS_SPREADSHEET_ID (ID da planilha ligada ao
+   * projeto PC NAO AUTORIZADO). Sem nenhum dos dois → {} (feature inativa).
+   *
+   * @returns {Object<string, {origemFull:string, cidade:string, uf:string, antecipacaoMin:number}>}
+   *          indexado por origemFull ("CIDADE - UF").
+   */
+  function getAntecipacaoGaragens() {
+    var CACHE_KEY = 'antecip_garagens_v1';
+    try {
+      var cached = CacheService.getScriptCache().get(CACHE_KEY);
+      if (cached) return JSON.parse(cached);
+    } catch (e) { /* segue sem cache */ }
+
+    var map = {};
+    try {
+      var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Garagens');
+      if (!sheet) {
+        var extId = PropertiesService.getScriptProperties().getProperty('GARAGENS_SPREADSHEET_ID');
+        if (extId) {
+          sheet = SpreadsheetApp.openById(extId).getSheetByName('Garagens');
+        }
+      }
+      if (sheet) {
+        var lastRow = sheet.getLastRow();
+        if (lastRow >= 2) {
+          // getDisplayValues → duração já vem como "00:45" (sem dor de cabeça de Date/fuso).
+          var rows = sheet.getRange(2, 1, lastRow - 1, 2).getDisplayValues();
+          rows.forEach(function (r) {
+            var origemFull = String(r[0] || '').trim();
+            if (!origemFull) return;
+            var partes = origemFull.split('-').map(function (s) { return s.trim(); });
+            var min = _parseHHMMtoMin(r[1]);
+            if (min <= 0) return;
+            map[origemFull] = {
+              origemFull:     origemFull,
+              cidade:         partes[0] || origemFull,
+              uf:             partes.length > 1 ? partes[partes.length - 1] : '',
+              antecipacaoMin: min
+            };
+          });
+        }
+      }
+    } catch (e) {
+      // Planilha inacessível / sem permissão — feature inativa, não quebra o relatório.
+      map = {};
+    }
+
+    try {
+      CacheService.getScriptCache().put(CACHE_KEY, JSON.stringify(map), CACHE_TTL_LOCAIS);
+    } catch (e) { /* não crítico */ }
+    return map;
+  }
+
+  /**
    * Interpreta flags booleanas do CSV exportado.
    * O sistema usa 'T' (True), 'S' (Sim), '1' e 'Y' como verdadeiro.
    * Usa 'F', 'N', '0', '' como falso.
@@ -372,5 +439,5 @@ var SheetsService = (() => {
     return false;
   }
 
-  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, getTemposPermanencia, saveMotorista, updateMotoristaIbutton, invalidateLocaisCache };
+  return { getLocais, getMotoristas, getLocaisSimples, getLocaisParaManager, getTemposPermanencia, getAntecipacaoGaragens, saveMotorista, updateMotoristaIbutton, invalidateLocaisCache };
 })();

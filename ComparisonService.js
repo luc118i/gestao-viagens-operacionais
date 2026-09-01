@@ -56,7 +56,7 @@ var ComparisonService = (() => {
       }
     });
 
-    return esquemaPontos.map(function(ep) {
+    var comparacao = esquemaPontos.map(function(ep) {
       var chave = String(ep.id_ponto).trim();
       var pontoRealizado = realizadosMap[chave] || null;
       var visitado = pontoRealizado !== null;
@@ -72,6 +72,24 @@ var ComparisonService = (() => {
         status:            visitado ? 'Realizado' : 'Não visitado'
       };
     });
+
+    // Relatório gerado no meio da viagem: pontos do esquema À FRENTE do último
+    // ponto efetivamente alcançado (maior `ordem` visitada) ainda não foram
+    // realizados — não são "não visitados", são "ainda não alcançados". Remove-os
+    // por completo da comparação (some de contagem, lista, alertas e mapa).
+    // Pulos reais no meio da rota (ordem <= fronteira) continuam como não visitados.
+    // Só aplica quando há fronteira determinável (>= 1 ponto visitado).
+    var visitadas = comparacao.filter(function(c) { return c.visitado; });
+    if (visitadas.length) {
+      var fronteira = visitadas.reduce(function(mx, c) {
+        return (c.ordem != null && c.ordem > mx) ? c.ordem : mx;
+      }, -Infinity);
+      comparacao = comparacao.filter(function(c) {
+        return c.visitado || c.ordem == null || c.ordem <= fronteira;
+      });
+    }
+
+    return comparacao;
   }
 
   /**
