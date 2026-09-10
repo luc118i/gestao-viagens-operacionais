@@ -209,6 +209,31 @@ var ReportService = (() => {
     params._resolvedTripId    = _trip.tripId;
     params._resolvedTripTime  = _trip.tripTime;
 
+    // Resolve o motorista na API (cria/atualiza pelo código) pra gravar o
+    // vínculo por driver_id. Sem isso a ocorrência fica com occurrence_drivers
+    // só inline (name/registry) e mudar a tratativa pra Advertência/Suspensão/
+    // Vale/Registro estoura no backend (occurrence_measures.driver_id NOT NULL).
+    var _mot = (payload && payload.motorista) || {};
+    if (_mot.matricula || _mot.nome) {
+      try {
+        var _dr = UrlFetchApp.fetch(baseUrl + "/drivers/upsert", {
+          method: "post",
+          contentType: "application/json",
+          payload: JSON.stringify({
+            code: _mot.matricula || _mot.nome,
+            name: _mot.nome || _mot.matricula,
+            base: _mot.base || null,
+          }),
+          muteHttpExceptions: true,
+        });
+        if (_dr.getResponseCode() === 200) {
+          params._resolvedDriverId = (JSON.parse(_dr.getContentText()) || {}).id || null;
+        }
+      } catch (e) {
+        // Segue sem driverId — o backend faz fallback pro vínculo inline.
+      }
+    }
+
     // ── Passo 1: monta o payload de ocorrência ──────────────────────
     var occPayload = _buildOccurrencePayload(payload, params);
 
@@ -672,7 +697,11 @@ var ReportService = (() => {
         // Relatório por motorista: um único condutor no cabeçalho.
         var m = payload.motorista || {};
         if (m.nome || m.matricula) {
-          return [{ position: 1, name: m.nome || '', registry: m.matricula || '', baseCode: m.base || '' }];
+          var d = { position: 1, name: m.nome || '', registry: m.matricula || '', baseCode: m.base || '' };
+          // driverId resolvido em enviarParaAPI via /drivers/upsert — grava o
+          // vínculo forte (evita occurrence_drivers.driver_id NULL).
+          if (params._resolvedDriverId) d.driverId = params._resolvedDriverId;
+          return [d];
         }
         // Relatório por trecho: os responsáveis (com sub-trecho) são renderizados
         // no bloco "Responsáveis pelo Trecho" dentro do relato — não duplicar aqui.
