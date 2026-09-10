@@ -2511,6 +2511,111 @@ function analyzeTrip(enrichedTrip) {
 }
 
 /**
+ * Analisa a (não) utilização do iButton por trecho, a partir da viagem
+ * enriquecida e dos vínculos motorista↔trecho montados pelo usuário.
+ * A base de motoristas (aba MOTORISTAS) é lida aqui e repassada ao módulo
+ * puro IbuttonAnalysis. Devolve alertas no mesmo formato dos demais, para
+ * o cliente somá-los à lista e reusar o fluxo "Questionar".
+ *
+ * @param {{enrichedTrip:Array, vinculos:Array}} payload
+ * @returns {{ ok:boolean, alerts?:Array, resumo?:Object, erro?:string }}
+ */
+function analisarIbutton(payload) {
+  try {
+    payload = payload || {};
+    var trip = payload.enrichedTrip || [];
+    if (!trip.length) return { ok: true, alerts: [], resumo: {} };
+    var motoristas = [];
+    try { motoristas = SheetsService.getMotoristas(); } catch (e2) {}
+    var res = IbuttonAnalysis.analisar(trip, payload.vinculos || [], motoristas);
+    return { ok: true, alerts: res.alerts, resumo: res.resumo };
+  } catch (e) {
+    Logger.log('[analisarIbutton] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Cadastra/atualiza o número do iButton de um motorista (usado pelo modal
+ * aberto quando o CSV traz "Não cadastrado (XXXXX)"). Reaproveita
+ * atualizarIbuttonMotorista (aba MOTORISTAS col. IBUTTON + sync com a API).
+ *
+ * @param {{matricula:string, nome:string, ibutton:string}} dados
+ * @returns {{ ok:boolean, erro?:string }}
+ */
+function registrarCadastroIbutton(dados) {
+  try {
+    dados = dados || {};
+    var ib = String(dados.ibutton || '').trim().toUpperCase();
+    if (!ib) return { ok: false, erro: 'Número do iButton ausente.' };
+    if (!String(dados.matricula || '').trim() && !String(dados.nome || '').trim()) {
+      return { ok: false, erro: 'Informe matrícula ou nome do motorista.' };
+    }
+    var ok = atualizarIbuttonMotorista(dados.matricula || '', dados.nome || '', ib);
+    if (!ok) return { ok: false, erro: 'Motorista não encontrado na base.' };
+    return { ok: true };
+  } catch (e) {
+    Logger.log('[registrarCadastroIbutton] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
+ * Resolve o trecho de um vínculo em formato de SIGLA (aba "Siglas" da
+ * planilha Levantamento IButton), para encorpar a mensagem de cobrança.
+ * Nunca lança — sem match devolve { ok:false } e o cliente segue com o
+ * nome do ponto.
+ *
+ * @param {{pontoInicio:string, pontoFim:string}} payload
+ * @returns {{ ok:boolean, sigla:string, siglaInicio:string, siglaFim:string }}
+ */
+function getSiglasTrecho(payload) {
+  try {
+    return SiglasService.trechoEmSigla(payload || {});
+  } catch (e) {
+    Logger.log('[getSiglasTrecho] ' + (e.stack || e.message || e));
+    return { ok: false, sigla: '', siglaInicio: '', siglaFim: '' };
+  }
+}
+
+/**
+ * Reincidência de não utilização de iButton de um motorista: total de
+ * cobranças IBUTTON_NAO_UTILIZADO já registradas e, se `desdeISO` vier,
+ * quantas caem na janela [desdeISO, agora]. IBUTTON_VERIFICACAO (pergunta
+ * neutra) NÃO entra na conta.
+ *
+ * @param {{matricula:string, desdeISO?:string}} payload
+ * @returns {{ ok:boolean, total?:number, naJanela?:number,
+ *             ultimos?:Array, erro?:string }}
+ */
+function getReincidenciaIbutton(payload) {
+  try {
+    payload = payload || {};
+    var mat = String(payload.matricula || '').trim();
+    if (!mat) return { ok: true, total: 0, naJanela: 0, ultimos: [] };
+    var itens = QuestionamentoStore.listForMotorista(mat, ['IBUTTON_NAO_UTILIZADO']);
+    var desde = String(payload.desdeISO || '').trim();
+    var naJanela = desde
+      ? itens.filter(function (i) { return String(i.criado_em) >= desde; }).length
+      : itens.length;
+    return {
+      ok: true,
+      total: itens.length,
+      naJanela: naJanela,
+      ultimos: itens.slice(0, 10).map(function (i) {
+        return {
+          criado_em: i.criado_em, trecho: i.trecho, linha: i.linha,
+          veiculo: i.veiculo, status: i.status, resposta: i.resposta
+        };
+      })
+    };
+  } catch (e) {
+    Logger.log('[getReincidenciaIbutton] ' + (e.stack || e.message || e));
+    return { ok: false, erro: String(e.message || e) };
+  }
+}
+
+/**
  * Calcula o bounding box para fitBounds no mapa.
  * @param {Array<{lat: number, lng: number}>} points
  * @returns {Object}
@@ -2848,6 +2953,10 @@ function getQuestionamentoDraft(payload) {
       evento_label:   payload.eventoLabel,
       ponto:          payload.ponto,
       trecho:         payload.trecho,
+      trechoSigla:    payload.trechoSigla,
+      linha:          payload.linha,
+      veiculo:        payload.veiculo,
+      dataHoraInicio: payload.dataHoraInicio,
       descricao:      payload.descricao,
       velocidadeKmh:  payload.velocidadeKmh,
       velEsperadaMin: payload.velEsperadaMin,

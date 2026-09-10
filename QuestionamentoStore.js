@@ -86,6 +86,37 @@ var QuestionamentoStore = (() => {
   }
 
   /**
+   * Questionamentos de um motorista (por matrícula), opcionalmente filtrados
+   * por lista de `evento_tipo`. Mais recentes primeiro. Usado no controle de
+   * reincidência (ex.: quantas cobranças de IBUTTON_NAO_UTILIZADO o motorista
+   * já recebeu numa janela).
+   * @param {string} matricula
+   * @param {Array<string>} [tipos]  ex.: ['IBUTTON_NAO_UTILIZADO']
+   * @returns {Array<Object>}
+   */
+  function listForMotorista(matricula, tipos) {
+    const sheet = _getSheet(false);
+    if (!sheet) return [];
+    const last = sheet.getLastRow();
+    if (last < 2) return [];
+    const data = sheet.getRange(2, 1, last - 1, HEADER.length).getValues();
+    const alvo = String(matricula || '').trim();
+    if (!alvo) return [];
+    const filtroTipos = (tipos && tipos.length)
+      ? tipos.map(function (t) { return String(t).trim().toUpperCase(); })
+      : null;
+    const out = [];
+    data.forEach(function (row) {
+      const o = _rowToObj(row);
+      if (String(o.motorista_matricula).trim() !== alvo) return;
+      if (filtroTipos && filtroTipos.indexOf(String(o.evento_tipo).trim().toUpperCase()) === -1) return;
+      out.push(o);
+    });
+    out.sort(function (a, b) { return String(b.criado_em).localeCompare(String(a.criado_em)); });
+    return out;
+  }
+
+  /**
    * Insere um novo questionamento. Gera `id` e `criado_em`; status inicial
    * "Aguardando resposta" e envio_status "pendente" (a menos que o chamador
    * passe outro).
@@ -155,6 +186,7 @@ var QuestionamentoStore = (() => {
     STATUS: { AGUARDANDO: ST_AGUARDANDO, RESPONDIDO: ST_RESPONDIDO, SEM_RESPOSTA: ST_SEM },
     computeHash: computeHash,
     listForTrip: listForTrip,
+    listForMotorista: listForMotorista,
     insert:      insert,
     update:      update
   };

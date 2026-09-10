@@ -161,7 +161,7 @@
     align-items: center;
     flex: 1;
     min-width: 0;
-    max-width: 560px;
+    max-width: 640px;
     /* Em telas estreitas o conteúdo interno (combobox + chip) não pode
        nunca vazar por cima do header-right — corta em vez de sobrepor. */
     overflow: hidden;
@@ -307,6 +307,60 @@
     transition: transform 0.15s;
   }
   .esquema-combobox.open .esquema-combobox-chevron { transform: rotate(180deg); }
+
+  /* ── Rótulo estruturado da linha selecionada ──
+     Fica por cima do input (que continua guardando o texto de busca) e some
+     no momento em que o combobox entra em modo de edição (.open). */
+  .esquema-current {
+    display: none;
+    position: absolute;
+    inset: 0;
+    align-items: center;
+    gap: 8px;
+    padding: 0 32px 0 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg2);
+    overflow: hidden;
+    pointer-events: none; /* clique atravessa e foca o input -> abre a busca */
+  }
+  .esquema-current.show { display: flex; }
+  .esquema-combobox.open .esquema-current.show { display: none; }
+  .esquema-combobox:hover .esquema-current.show { border-color: var(--laranja); }
+
+  .esquema-current-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -0.1px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .esquema-current-meta {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .esquema-current-meta:empty { display: none; }
+  .esquema-current-meta .m-hor { color: var(--laranja); font-variant-numeric: tabular-nums; }
+  .esquema-current-meta .m-sent {
+    color: var(--text2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    padding: 1px 5px;
+  }
+  /* Em telas mais estreitas o horário/sentido saem primeiro — o nome da
+     linha (com reticências) é o que importa manter visível. */
+  @media (max-width: 1200px) {
+    .esquema-current-meta { display: none; }
+  }
 
   .esquema-dropdown {
     position: absolute;
@@ -468,6 +522,29 @@
   .app-wrapper.has-guide .section-guide { display: block; }
   .app-wrapper.has-guide { padding-left: 208px; }
 
+  /* Guia recolhido: rail some e o app (navbar + conteúdo) ocupa a largura toda */
+  .app-wrapper.has-guide.guide-collapsed { padding-left: 0; }
+  .app-wrapper.has-guide.guide-collapsed .section-guide { display: none; }
+
+  /* Botão de recolher/expandir — mora na navbar, só aparece quando há guia */
+  .header-guide-toggle {
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: transparent;
+    color: var(--text3);
+    cursor: pointer;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+  }
+  .app-wrapper.has-guide .header-guide-toggle { display: inline-flex; }
+  .header-guide-toggle:hover { color: var(--laranja); border-color: var(--laranja); }
+  .app-wrapper.guide-collapsed .header-guide-toggle { color: var(--text); background: var(--bg2); }
+
   .guide-title {
     font-size: 10px;
     font-weight: 700;
@@ -581,6 +658,8 @@
   @media (max-width: 1099px) {
     .app-wrapper.has-guide { padding-left: 0; }
     .app-wrapper.has-guide .section-guide { display: none; }
+    /* Nessa faixa o rail já não existe — o botão de recolher não tem função */
+    .app-wrapper.has-guide .header-guide-toggle { display: none; }
   }
 
   /* ============================================================
@@ -2743,10 +2822,10 @@
   footer {
     background: var(--surface);
     border-top: 1px solid var(--border);
-    height: 52px;
+    min-height: 52px;
     display: flex;
     align-items: center;
-    padding: 0 24px;
+    padding: 10px 24px;
     flex-shrink: 0;
     margin-top: auto;
   }
@@ -2783,6 +2862,47 @@
     font-size: 10px;
     color: var(--text3);
   }
+
+  /* Controle de conta ("Analisado por") — mora no rodapé, separado das
+     ações do topo. Chip claramente clicável. */
+  .footer-account {
+    align-self: flex-start;
+    margin-top: 5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg2);
+    color: var(--text2);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.6;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .footer-account:hover {
+    border-color: var(--laranja);
+    color: var(--laranja);
+    background: var(--laranja4);
+  }
+  .footer-account svg { flex-shrink: 0; opacity: 0.7; }
+  .footer-account-label { font-weight: 500; color: var(--text3); }
+  .footer-account-name { color: var(--text); }
+  .footer-account:hover .footer-account-label,
+  .footer-account:hover .footer-account-name { color: inherit; }
+  .footer-account-action {
+    font-weight: 600;
+    color: var(--laranja);
+    margin-left: 2px;
+    padding-left: 7px;
+    border-left: 1px solid var(--border);
+  }
+  /* Deslogado: mostra só "Entrar" */
+  .footer-account:not(.is-logado) .footer-account-label,
+  .footer-account:not(.is-logado) .footer-account-action { display: none; }
 
   /* ============================================================
      MODO DE VISUALIZAÇÃO
@@ -2830,7 +2950,8 @@
     .report-screen,
     .toast-container,
     .btn,
-    footer .footer-right {
+    footer .footer-right,
+    .footer-account {
       display: none !important;
     }
 

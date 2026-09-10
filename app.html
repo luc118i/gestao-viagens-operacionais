@@ -175,7 +175,10 @@
     function _atualizarBotaoUsuarioAtual() {
       var el = document.getElementById("btnUsuarioAtualNome");
       if (!el) return;
-      el.textContent = _authLogado() ? (_authSession.nome || _authSession.email) : "Entrar";
+      var logado = _authLogado();
+      el.textContent = logado ? (_authSession.nome || _authSession.email) : "Entrar";
+      var btn = document.getElementById("btnUsuarioAtual");
+      if (btn) btn.classList.toggle("is-logado", logado);
     }
 
     function _renderModalUsuario() {
@@ -254,6 +257,33 @@
       _renderModalUsuario();
     }
 
+    // ── Guia lateral: recolher / expandir (navbar full-width) ───────
+    var GUIDE_COLLAPSE_KEY = "guideCollapsed";
+
+    function _initGuideToggle() {
+      var wrap = document.querySelector(".app-wrapper");
+      var btn  = document.getElementById("btnToggleGuide");
+      if (!wrap || !btn) return;
+
+      var collapsed = false;
+      try { collapsed = localStorage.getItem(GUIDE_COLLAPSE_KEY) === "1"; } catch (e) {}
+      _aplicarGuiaRecolhido(wrap, btn, collapsed);
+
+      btn.addEventListener("click", function () {
+        var novo = !wrap.classList.contains("guide-collapsed");
+        _aplicarGuiaRecolhido(wrap, btn, novo);
+        try { localStorage.setItem(GUIDE_COLLAPSE_KEY, novo ? "1" : "0"); } catch (e) {}
+        // Recalcula o scroll-spy após a mudança de largura
+        if (typeof SectionGuide !== "undefined" && SectionGuide.refresh) SectionGuide.refresh();
+      });
+    }
+
+    function _aplicarGuiaRecolhido(wrap, btn, collapsed) {
+      wrap.classList.toggle("guide-collapsed", collapsed);
+      btn.setAttribute("aria-expanded", String(!collapsed));
+      btn.setAttribute("aria-label", collapsed ? "Expandir guia lateral" : "Recolher guia lateral");
+    }
+
     // ============================================================
     //  INICIALIZAÇÃO
     // ============================================================
@@ -308,6 +338,9 @@
       // Combobox pesquisável de esquema (navbar + upload)
       _initEsquemaSearch();
       _initUploadEsquemaSearch();
+
+      // Botão de recolher/expandir o guia lateral
+      _initGuideToggle();
 
       // Listener de radio tipoRelatorio (na seção de config, inline)
       document
@@ -513,11 +546,13 @@
       var dropdown = document.getElementById('esquemaDropdown');
       if (!wrap || !input || !dropdown) return;
 
-      // Abre ao clicar no input
+      // Abre ao clicar no input — seleciona o texto pra digitar já substituir,
+      // e lista tudo (a busca recomeça do zero)
       input.addEventListener('focus', function() {
         wrap.classList.add('open');
         input.classList.add('open');
-        _renderEsquemaOpts(input.value);
+        input.select();
+        _renderEsquemaOpts('');
       });
 
       // Filtra enquanto digita
@@ -635,32 +670,64 @@
       if (hidden) hidden.value = idEsquema || '';
 
       var esqObj = _esquemas.find(function(e) { return String(e.id_esquema) === String(idEsquema); });
-      if (input) {
-        if (esqObj) {
-          var label = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
-          if (esqObj.horario) label += '  ·  ' + esqObj.horario;
-          if (esqObj.sentido) label += '  ·  ' + esqObj.sentido;
-          input.value = label;
-        } else {
-          input.value = '';
-        }
-      }
+      var nomeLinha = esqObj ? (esqObj.nome_linha || esqObj.id_esquema) : '';
+      // O input guarda só "código — nome" (busca); horário/sentido vão pro rótulo
+      if (input) input.value = esqObj ? (esqObj.id_esquema + ' — ' + nomeLinha) : '';
+      _renderEsquemaCurrent(esqObj);
 
       // Sincroniza o mini combobox do upload
       var uploadInput = document.getElementById('uploadEsquemaSearch');
       if (uploadInput && esqObj) {
-        uploadInput.value = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+        uploadInput.value = esqObj.id_esquema + ' — ' + nomeLinha;
       }
 
       _fecharEsquemaDropdown();
       _onEsquemaChanged();
     }
 
+    // Preenche (ou limpa) o rótulo estruturado da linha selecionada no header
+    function _renderEsquemaCurrent(esqObj) {
+      var box = document.getElementById('esquemaCurrent');
+      if (!box) return;
+      var name = document.getElementById('esquemaCurrentName');
+      var meta = document.getElementById('esquemaCurrentMeta');
+
+      if (!esqObj) {
+        box.classList.remove('show');
+        if (name) { name.textContent = ''; name.removeAttribute('title'); }
+        if (meta) meta.innerHTML = '';
+        return;
+      }
+
+      var nomeLinha = esqObj.nome_linha || esqObj.id_esquema;
+      if (name) {
+        name.textContent = nomeLinha;
+        name.title = nomeLinha +
+          (esqObj.horario ? '  ·  ' + esqObj.horario : '') +
+          (esqObj.sentido ? '  ·  ' + esqObj.sentido : '');
+      }
+      if (meta) {
+        var h = '';
+        if (esqObj.horario) h += '<span class="m-hor">' + _escHtml(esqObj.horario) + '</span>';
+        if (esqObj.sentido) h += '<span class="m-sent">' + _escHtml(esqObj.sentido) + '</span>';
+        meta.innerHTML = h;
+      }
+      box.classList.add('show');
+    }
+
     function _fecharEsquemaDropdown() {
       var wrap  = document.getElementById('esquemaCombobox');
       var input = document.getElementById('esquemaSearch');
       if (wrap)  wrap.classList.remove('open');
-      if (input) input.classList.remove('open');
+      if (input) {
+        input.classList.remove('open');
+        // Descarta uma busca não confirmada: restaura o rótulo da linha ativa
+        var hidden = document.getElementById('selectEsquema');
+        var esqObj = hidden && hidden.value
+          ? _esquemas.find(function(e) { return String(e.id_esquema) === String(hidden.value); })
+          : null;
+        if (esqObj) input.value = esqObj.id_esquema + ' — ' + (esqObj.nome_linha || esqObj.id_esquema);
+      }
     }
 
     // Mini combobox de esquema dentro do card de upload
@@ -1158,6 +1225,8 @@
       // Alertas (render imediato; justificativas salvas chegam em seguida)
       _renderAlertas();
       _loadJustificativas();
+      _ibSig = '';            // força reanálise do iButton com o novo enrichedTrip
+      _reanalisarIbutton();
 
       // Exibe e habilita botões no header (Relatório e Motorista)
       var btnVincular = document.getElementById("btnVincularMotorista");
@@ -1717,9 +1786,46 @@
       _renderIbuttonAviso();
     }
 
+    // ── Análise de (não) utilização do iButton ────────────────────────────
+    // Reroda no servidor sempre que os vínculos motorista↔trecho mudam e
+    // funde os alertas IBUTTON_* / MOTORISTA_AUSENTE em _analysis.alerts.
+    var _ibSig = '';
+    var _ibDebounce = null;
+    var _IB_TIPOS = ['IBUTTON_NAO_UTILIZADO', 'IBUTTON_VERIFICACAO', 'IBUTTON_NAO_CADASTRADO', 'MOTORISTA_AUSENTE'];
+
+    function _reanalisarIbutton() {
+      if (!_enrichedTrip.length || !_analysis) return;
+      var sig = JSON.stringify((_vinculos || []).map(function (v) {
+        return [v.matricula, v.nome, v.seqMin, v.seqMax];
+      }));
+      if (sig === _ibSig) return;
+      _ibSig = sig;
+      clearTimeout(_ibDebounce);
+      _ibDebounce = setTimeout(_ibRun, 200);
+    }
+
+    function _ibRun() {
+      if (!_analysis) return;
+      var base = (_analysis.alerts || []).filter(function (a) { return _IB_TIPOS.indexOf(a.tipo) === -1; });
+      if (!_vinculos.length) {
+        if ((_analysis.alerts || []).length !== base.length) { _analysis.alerts = base; _renderAlertas(); }
+        return;
+      }
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res || !res.ok) return;
+          _analysis.alerts = base.concat(res.alerts || []);
+          _renderAlertas();
+        })
+        .withFailureHandler(function () { /* silencioso */ })
+        .analisarIbutton({ enrichedTrip: _enrichedTrip, vinculos: _vinculos });
+    }
+
     function _renderVinculadosList() {
       var container   = document.getElementById('motoristaVinculadosList');
       var listaInline = document.getElementById('listaVinculosInline');
+
+      _reanalisarIbutton();
 
       if (!_vinculos.length) {
         if (container)   container.innerHTML = '';
@@ -2826,6 +2932,7 @@
       if (selEsquema) selEsquema.value = "";
       var searchInput = document.getElementById("esquemaSearch");
       if (searchInput) searchInput.value = "";
+      _renderEsquemaCurrent(null);
       _fecharEsquemaDropdown();
       var infoEl = document.getElementById("esquemaInfo");
       if (infoEl) {
@@ -3955,6 +4062,74 @@
       return { categoria: 'Outro', placeholder: 'Descreva o motivo da justificativa' };
     }
 
+    // ── Modal: cadastrar nº de iButton (alerta IBUTTON_NAO_CADASTRADO) ─────
+    function _ibModalEl() {
+      var el = document.getElementById('modalCadastroIbuttonDyn');
+      if (el) return el;
+      el = document.createElement('div');
+      el.id = 'modalCadastroIbuttonDyn';
+      el.className = 'modal-overlay';
+      el.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);display:none;align-items:center;justify-content:center;z-index:1200;';
+      el.innerHTML =
+        '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:20px;width:min(420px,92vw);box-shadow:0 20px 60px rgba(0,0,0,0.3);">' +
+          '<div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:4px;">🔑 Cadastrar nº do iButton</div>' +
+          '<div style="font-size:11px;color:var(--text3);margin-bottom:14px;">O iButton foi lido nesta viagem, mas o código não está vinculado a nenhum motorista.</div>' +
+          '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;">Matrícula</div>' +
+          '<input id="ibDyn_mat" type="text" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);margin-bottom:8px;" />' +
+          '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;">Nome</div>' +
+          '<input id="ibDyn_nome" type="text" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);margin-bottom:8px;" />' +
+          '<div style="font-size:10px;color:var(--text3);margin-bottom:3px;">Código do iButton</div>' +
+          '<input id="ibDyn_cod" type="text" maxlength="8" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid var(--border);border-radius:6px;font-size:12px;background:var(--bg);color:var(--text);text-transform:uppercase;margin-bottom:16px;" />' +
+          '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+            '<button id="ibDyn_cancel" style="padding:6px 14px;border-radius:6px;border:1px solid var(--border);background:transparent;color:var(--text2);font-size:12px;cursor:pointer;">Cancelar</button>' +
+            '<button id="ibDyn_ok" style="padding:6px 14px;border-radius:6px;border:none;background:#22a96a;color:#fff;font-size:12px;font-weight:600;cursor:pointer;">Cadastrar</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(el);
+      el.addEventListener('click', function (e) { if (e.target === el) el.style.display = 'none'; });
+      el.querySelector('#ibDyn_cancel').addEventListener('click', function () { el.style.display = 'none'; });
+      el.querySelector('#ibDyn_ok').addEventListener('click', _ibCadastrarConfirmar);
+      return el;
+    }
+
+    function abrirCadastroIbutton(btn) {
+      var card = btn && btn.closest ? btn.closest('.op-alert-card') : null;
+      if (!card) return;
+      var el = _ibModalEl();
+      var codigos = String(card.dataset.alertCodigos || '').split(',').filter(Boolean);
+      el.querySelector('#ibDyn_mat').value  = card.dataset.alertMotMat  || '';
+      el.querySelector('#ibDyn_nome').value = card.dataset.alertMotNome || '';
+      el.querySelector('#ibDyn_cod').value  = codigos[0] || '';
+      el.style.display = 'flex';
+      setTimeout(function () { el.querySelector('#ibDyn_cod').focus(); }, 50);
+    }
+
+    function _ibCadastrarConfirmar() {
+      var el = document.getElementById('modalCadastroIbuttonDyn');
+      if (!el) return;
+      var mat  = (el.querySelector('#ibDyn_mat').value || '').trim();
+      var nome = (el.querySelector('#ibDyn_nome').value || '').trim();
+      var cod  = (el.querySelector('#ibDyn_cod').value || '').trim().toUpperCase();
+      if (!cod) { UIModule.showToast('Informe o código do iButton.', 'error'); return; }
+      if (!mat && !nome) { UIModule.showToast('Informe matrícula ou nome do motorista.', 'error'); return; }
+      var ok = el.querySelector('#ibDyn_ok');
+      if (ok) { ok.disabled = true; ok.textContent = 'Salvando…'; }
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (ok) { ok.disabled = false; ok.textContent = 'Cadastrar'; }
+          if (!res || !res.ok) { UIModule.showToast((res && res.erro) || 'Falha ao cadastrar.', 'error'); return; }
+          el.style.display = 'none';
+          UIModule.showToast('iButton ' + cod + ' vinculado a ' + (nome || mat) + '.', 'success', 3500);
+          _ibSig = '';           // relê a base de motoristas / reclassifica
+          _reanalisarIbutton();
+        })
+        .withFailureHandler(function (e) {
+          if (ok) { ok.disabled = false; ok.textContent = 'Cadastrar'; }
+          UIModule.showToast('Erro: ' + (e && e.message ? e.message : String(e)), 'error');
+        })
+        .registrarCadastroIbutton({ matricula: mat, nome: nome, ibutton: cod });
+    }
+
     /** Abre o modal Justificar para o alerta do card do botão clicado. */
     function abrirModalJustificar(btn) {
       var card = btn && btn.closest ? btn.closest('.op-alert-card') : null;
@@ -4083,6 +4258,8 @@
       { key: 'LONGA',     ico: '⏱️', titulo: 'Permanência acima do previsto',   tipos: { PARADA_LONGA: 1 } },
       { key: 'NAO_VIS',   ico: '📍', titulo: 'Ponto de controle não visitado',  tipos: { PONTO_NAO_VISITADO: 1 } },
       { key: 'NAO_ID',    ico: '❓', titulo: 'Parada em local não previsto',    tipos: { LOCAL_NAO_IDENTIFICADO: 1 } },
+      { key: 'IB_NAO',    ico: '🔑', titulo: 'Não utilização do iButton',       tipos: { IBUTTON_NAO_UTILIZADO: 1 } },
+      { key: 'IB_VER',    ico: '❔', titulo: 'Confirmação de iButton',           tipos: { IBUTTON_VERIFICACAO: 1 } },
       { key: 'OUTRO',     ico: '▫️', titulo: 'Outras inconsistências',          tipos: null }
     ];
 
@@ -4102,6 +4279,13 @@
       if (m < 60) return m + ' min';
       var h = Math.floor(m / 60), mm = m % 60;
       return h + 'h' + (mm ? ('0' + mm).slice(-2) : '');
+    }
+
+    /** "DD/MM/AAAA HH:MM" a partir de "YYYY-MM-DD HH:MM:SS". */
+    function _qFmtDataHora(s) {
+      var t = String(s || '').trim().replace('T', ' ');
+      var m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ ]?(\d{2}:\d{2})?/);
+      return m ? (m[3] + '/' + m[2] + '/' + m[1] + (m[4] ? ' ' + m[4] : '')) : '';
     }
 
     function _qPrimNome(nome) {
@@ -4147,7 +4331,23 @@
       var faixa = (ev.velEsperadaMin != null && ev.velEsperadaMax != null)
         ? (ev.velEsperadaMin + '–' + ev.velEsperadaMax + ' km/h') : '';
       var tempo = _qFmtMin(ev.tempoMin);
+      var quando = _qFmtDataHora(ev.dataHoraInicio);
+      var trechoSig = String(ev.trechoSigla || ev.trecho || ev.ponto || '').trim();
       switch (tipo) {
+        case 'IBUTTON_NAO_UTILIZADO':
+          return 'foi identificada a *não utilização do iButton*' +
+            (quando ? ' na viagem iniciada em ' + quando : '') +
+            (trechoSig ? ', trecho ' + trechoSig : '') +
+            '. A utilização do iButton é obrigatória durante toda a operação';
+        case 'IBUTTON_VERIFICACAO':
+          return 'não consta iButton vinculado ao seu cadastro' +
+            (quando ? ' e a viagem iniciada em ' + quando : '') +
+            (trechoSig ? ' (trecho ' + trechoSig + ')' : '') +
+            ' não registrou identificação; precisamos confirmar se você possui o dispositivo';
+        case 'MOTORISTA_AUSENTE':
+          return 'a viagem' + (trechoSig ? ' no trecho ' + trechoSig : '') +
+            (quando ? ', iniciada em ' + quando + ',' : '') +
+            ' não teve motorista identificado em nenhum ponto de controle';
         case 'PONTO_NAO_VISITADO':
           return 'o veículo não passou pelo ponto de controle ' + (local || 'previsto') + ', obrigatório no itinerário da linha';
         case 'LOCAL_NAO_IDENTIFICADO':
@@ -4198,6 +4398,25 @@
       var pn = _qPrimNome(meta && meta.motoristaNome);
       var f = _qFato(ev);
       f = f.charAt(0).toUpperCase() + f.slice(1);
+
+      var tIb = String(ev.tipo || '').toUpperCase();
+      if (tIb === 'IBUTTON_NAO_UTILIZADO' || tIb === 'IBUTTON_VERIFICACAO' || tIb === 'MOTORISTA_AUSENTE') {
+        var corpo = _Q_TITULO + '\n\n' + _qBlocoDados(meta) +
+          'Prezado(a) *' + (pn || 'condutor(a)') + '*,\n\n> ' + f + '.\n\n';
+        if (tIb === 'IBUTTON_NAO_UTILIZADO') {
+          corpo += 'A ocorrência está sendo *registrada*. Informe, por favor, o *motivo* pelo qual o iButton não foi utilizado nesta viagem.\n\n' +
+            '_A reincidência poderá resultar na aplicação de medidas disciplinares, conforme os procedimentos da empresa._\n' +
+            'O retorno deve ser enviado por esta conversa.';
+        } else if (tIb === 'IBUTTON_VERIFICACAO') {
+          corpo += 'Você possui iButton? Caso *sim*, informe o *código* gravado na parte metálica do dispositivo (os *5 últimos números*), para regularizarmos seu cadastro; caso *não*, responda também por esta conversa.\n' +
+            'O retorno deve ser enviado por esta conversa.';
+        } else {
+          corpo += 'Confirme quem foi o condutor responsável por este trecho.\n' +
+            'O retorno deve ser enviado por esta conversa.';
+        }
+        return corpo + _qAssinatura();
+      }
+
       return _Q_TITULO + '\n\n' + _qBlocoDados(meta) +
         'Prezado(a) *' + (pn || 'condutor(a)') + '*, identificamos a seguinte falha operacional' +
         (ev.trecho ? ' no trecho *' + ev.trecho + '*' : '') + ', que *exige justificativa*:\n\n' +
@@ -4278,21 +4497,43 @@
       });
     }
 
+    var Q_CONNECT_TIMEOUT_MS = 15000; // até 15s tentando iniciar/confirmar a sessão antes de desistir
+    var Q_CONNECT_POLL_MS = 1200;
+
+    /** Confere `/whatsapp/status` repetidamente até 'connected' (ou desistir). Usado
+     *  logo após disparar `/whatsapp/connect` — a sessão do WhatsApp Web leva alguns
+     *  segundos pra restaurar. */
+    function _qEsperarConexao(inicio) {
+      return fetch(AGENT_URL + '/whatsapp/status').then(function (r) { return r.json(); }).then(function (st) {
+        if (st && st.status === 'connected') return { ok: true };
+        if (st && st.status === 'qr') return { ok: false, erro: 'WhatsApp pede leitura de QR Code. Abra o RIZER Agent e escaneie pra conectar.' };
+        if (st && st.status === 'error') return { ok: false, erro: 'RIZER Agent reportou erro ao conectar' + (st.error ? (': ' + st.error) : '.') };
+        if (Date.now() - inicio >= Q_CONNECT_TIMEOUT_MS) {
+          return { ok: false, erro: 'Não consegui iniciar a sessão do WhatsApp a tempo (aguardei ' + Math.round(Q_CONNECT_TIMEOUT_MS / 1000) + 's). Abra o RIZER Agent, confira a conexão e tente de novo.' };
+        }
+        return new Promise(function (res) { setTimeout(res, Q_CONNECT_POLL_MS); }).then(function () { return _qEsperarConexao(inicio); });
+      });
+    }
+
     /**
      * Envia a cobrança pelo RIZER Agent. Resolve sempre com {ok, erro}.
      * `capa` = legenda curta usada quando `message` não cabe na legenda da imagem.
+     * `banner` = capa a anexar (default 'questionamento'); iButton usa 'ibutton'.
+     * Se a sessão não estiver conectada, TENTA iniciá-la (`/whatsapp/connect`) e
+     * aguarda até ~15s antes de desistir — evita falha só porque o app não tinha
+     * reconectado ainda. Se pedir QR ou não conectar a tempo, devolve erro claro.
      */
-    function _qSendWhatsApp(phone, message, capa) {
+    function _qSendWhatsApp(phone, message, capa, banner) {
       var tel = _qNormalizarTelefone(phone);
       if (!tel) return Promise.resolve({ ok: false, erro: 'Telefone ausente' });
       return fetch(AGENT_URL + '/whatsapp/status')
         .then(function (r) { return r.json(); })
         .then(function (st) {
-          if (!st || !st.connected) {
-            // dispara a conexão pra facilitar (QR aparece no RIZER Agent)
-            _qAgentPost('/whatsapp/connect', {});
-            return { ok: false, erro: 'WhatsApp não conectado no RIZER Agent. Abra o app, conecte (leia o QR se pedir) e tente de novo.' };
-          }
+          if (st && st.status === 'connected') return { ok: true };
+          return _qAgentPost('/whatsapp/connect', {}).then(function () { return _qEsperarConexao(Date.now()); });
+        })
+        .then(function (conn) {
+          if (!conn.ok) return conn;
           var longo = String(message || '').length > Q_CAPTION_LIMIT;
           var capaMsg = capa || ('*⚠️ MONITORAMENTO OPERACIONAL CATEDRAL*\n\n'
             + 'Prezado(a), registramos falhas operacionais que exigem justificativa. '
@@ -4303,7 +4544,7 @@
             phone: tel,
             message: longo ? capaMsg : message,
             attachBanner: true,
-            banner: 'questionamento'
+            banner: banner || 'questionamento'
           };
           return _qAgentPost('/whatsapp/send', primeira).then(function (r1) {
             if (!r1.ok || !longo) return r1;
@@ -4677,10 +4918,44 @@
         velEsperadaMax: full ? full.velEsperadaMax : _qNum(card.dataset.alertVelMax),
         tempoMin:      full ? full.tempoMin : _qNum(card.dataset.alertTempoMin),
         distKm:        full ? full.distKm : _qNum(card.dataset.alertDistKm),
-        descricao:     full ? full.descricao : (card.dataset.alertDescricao || '')
+        descricao:     full ? full.descricao : (card.dataset.alertDescricao || ''),
+        // Campos do fluxo iButton (vêm do alerta em _analysis.alerts).
+        dataHoraInicio:     full ? full.dataHoraInicio : (card.dataset.alertDtInicio || ''),
+        veiculo:            full ? full.veiculo : (card.dataset.alertVeiculo || ''),
+        motoristaNome:      full ? full.motoristaNome : (card.dataset.alertMotNome || ''),
+        motoristaMatricula: full ? full.motoristaMatricula : (card.dataset.alertMotMat || ''),
+        pontoInicio:        full ? full.pontoInicio : '',
+        pontoFim:           full ? full.pontoFim : '',
+        trechoSigla:        ''
       };
       _qOpen(ev, '');
+      _qTentarSigla(ev);
     }
+
+    /**
+     * Best-effort: resolve o trecho do alerta iButton em SIGLA (aba "Siglas")
+     * e re-renderiza a mensagem. Silencioso — sem match fica o nome do ponto.
+     */
+    function _qTentarSigla(ev) {
+      var t = String(ev && ev.tipo || '').toUpperCase();
+      if (t.indexOf('IBUTTON') !== 0 && t !== 'MOTORISTA_AUSENTE') return;
+      if (ev.trechoSigla || ev._siglaTried) return;
+      ev._siglaTried = true;
+      google.script.run
+        .withSuccessHandler(function (res) {
+          if (!res || !res.ok || !res.sigla) return;
+          ev.trechoSigla = res.sigla;
+          if (_qCtx && _qCtx.ev === ev) { _qCtx._autofilled = true; _qLoadDraft(); }
+        })
+        .withFailureHandler(function () {})
+        .getSiglasTrecho({
+          pontoInicio: ev.pontoInicio || _qTrechoIni(ev.trecho),
+          pontoFim:    ev.pontoFim    || _qTrechoFim(ev.trecho)
+        });
+    }
+
+    function _qTrechoIni(s) { return String(s || '').split('→')[0].trim(); }
+    function _qTrechoFim(s) { var p = String(s || '').split('→'); return (p[1] || '').trim(); }
 
     function qAbrirAvulso() {
       if (!_authLogado()) {
@@ -4872,7 +5147,9 @@
             return;
           }
           var id = res.item.id;
-          _qSendWhatsApp(tel, msg, _qCtx && _qCtx.capa).then(function (sr) {
+          var tipoEv = String((_qCtx && _qCtx.ev && _qCtx.ev.tipo) || '').toUpperCase();
+          var bannerEv = (tipoEv.indexOf('IBUTTON') === 0 || tipoEv === 'MOTORISTA_AUSENTE') ? 'ibutton' : undefined;
+          _qSendWhatsApp(tel, msg, _qCtx && _qCtx.capa, bannerEv).then(function (sr) {
             google.script.run
               .withSuccessHandler(function () {
                 _btnModalLoading(btn, false);
@@ -4903,7 +5180,9 @@
       var tel = _qNormalizarTelefone(it.telefone);
       if (!tel) { UIModule.showToast('Sem telefone salvo neste questionamento.', 'error'); return; }
       UIModule.showToast('Reenviando…', 'info', 1500);
-      _qSendWhatsApp(tel, it.mensagem).then(function (sr) {
+      var tipoIt = String(it.evento_tipo || '').toUpperCase();
+      var bannerIt = (tipoIt.indexOf('IBUTTON') === 0 || tipoIt === 'MOTORISTA_AUSENTE') ? 'ibutton' : undefined;
+      _qSendWhatsApp(tel, it.mensagem, null, bannerIt).then(function (sr) {
         google.script.run
           .withSuccessHandler(function () {
             if (window.QuestionamentosModule) QuestionamentosModule.reload();
@@ -5186,6 +5465,7 @@
       criarParadaIrregularInline: criarParadaIrregularInline,
       criarExcessoPermanenciaInline: criarExcessoPermanenciaInline,
       abrirModalJustificar: abrirModalJustificar,
+      abrirCadastroIbutton: abrirCadastroIbutton,
       salvarJustificativa: salvarJustificativa,
       fecharModalJustificar: _fecharModalJustificar,
       reabrirAlerta: reabrirAlerta,

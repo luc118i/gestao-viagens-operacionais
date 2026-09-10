@@ -38,6 +38,14 @@ var QuestionamentoTemplates = (() => {
     return hh + 'h' + (mm ? ('0' + mm).slice(-2) : '');
   }
 
+  /** "DD/MM/AAAA HH:MM" a partir de "YYYY-MM-DD HH:MM:SS" (ou '' se vazio). */
+  function _fmtDataHora(s) {
+    var t = String(s || '').trim().replace('T', ' ');
+    var m = t.match(/^(\d{4})-(\d{2})-(\d{2})[ ]?(\d{2}:\d{2})?/);
+    if (!m) return '';
+    return m[3] + '/' + m[2] + '/' + m[1] + (m[4] ? ' ' + m[4] : '');
+  }
+
   /** Descrição factual da falha (minúscula) — usada na mensagem de 1 evento. */
   function _fato(ev) {
     var tipo  = String(ev.tipo || '').toUpperCase();
@@ -47,7 +55,26 @@ var QuestionamentoTemplates = (() => {
       ? (ev.velEsperadaMin + '–' + ev.velEsperadaMax + ' km/h') : '';
     var tempo = _fmtMin(ev.tempoMin);
 
+    var quando = _fmtDataHora(ev.dataHoraInicio);
+    var trechoTxt = String(ev.trechoSigla || ev.trecho || ev.ponto || '').trim();
+
     switch (tipo) {
+      case 'IBUTTON_NAO_UTILIZADO':
+        return 'foi identificada a *não utilização do iButton*' +
+          (quando ? ' na viagem iniciada em ' + quando : '') +
+          (trechoTxt ? ', trecho ' + trechoTxt : '') +
+          (ev.linha ? ', linha ' + ev.linha : '') +
+          (ev.veiculo ? ', prefixo ' + ev.veiculo : '') +
+          '. A utilização do iButton é obrigatória durante toda a operação';
+      case 'IBUTTON_VERIFICACAO':
+        return 'não consta iButton vinculado ao seu cadastro' +
+          (quando ? ' e a viagem iniciada em ' + quando : '') +
+          (trechoTxt ? ' (trecho ' + trechoTxt + ')' : '') +
+          ' não registrou identificação. Precisamos confirmar se você possui o dispositivo';
+      case 'MOTORISTA_AUSENTE':
+        return 'a viagem' + (trechoTxt ? ' no trecho ' + trechoTxt : '') +
+          (quando ? ', iniciada em ' + quando + ',' : '') +
+          ' não teve motorista identificado em nenhum ponto de controle';
       case 'PONTO_NAO_VISITADO':
         return 'o veículo não passou pelo ponto de controle ' + (local || 'previsto') +
           ', obrigatório no itinerário da linha';
@@ -84,6 +111,8 @@ var QuestionamentoTemplates = (() => {
     { m: function (t) { return t === 'PARADA_LONGA'; },                                     ico: '⏱️', titulo: 'Permanência acima do previsto' },
     { m: function (t) { return t === 'PONTO_NAO_VISITADO'; },                               ico: '📍', titulo: 'Ponto de controle não visitado' },
     { m: function (t) { return t === 'LOCAL_NAO_IDENTIFICADO'; },                           ico: '❓', titulo: 'Parada em local não previsto' },
+    { m: function (t) { return t === 'IBUTTON_NAO_UTILIZADO'; },                            ico: '🔑', titulo: 'Não utilização do iButton' },
+    { m: function (t) { return t === 'IBUTTON_VERIFICACAO'; },                              ico: '❔', titulo: 'Confirmação de iButton' },
     { m: function () { return true; },                                                     ico: '▫️', titulo: 'Outras inconsistências' }
   ];
 
@@ -115,6 +144,28 @@ var QuestionamentoTemplates = (() => {
   function montarMensagem(ev) {
     ev = ev || {};
     var nome = _primeiroNome(ev.motoristaNome);
+
+    // iButton tem texto próprio (tom de cobrança para não utilização;
+    // pergunta neutra para confirmação de posse do dispositivo).
+    var tIb = String(ev.tipo || '').toUpperCase();
+    if (tIb === 'IBUTTON_NAO_UTILIZADO' || tIb === 'IBUTTON_VERIFICACAO' || tIb === 'MOTORISTA_AUSENTE') {
+      var fatoIb = _fato(ev);
+      fatoIb = fatoIb.charAt(0).toUpperCase() + fatoIb.slice(1);
+      var corpo = TITULO + '\n\nPrezado(a) *' + (nome || 'condutor(a)') + '*,\n\n> ' + fatoIb + '.\n\n';
+      if (tIb === 'IBUTTON_NAO_UTILIZADO') {
+        corpo += 'A ocorrência está sendo *registrada*. Informe, por favor, o *motivo* pelo qual o iButton não foi utilizado nesta viagem.\n\n' +
+          '_A reincidência poderá resultar na aplicação de medidas disciplinares, conforme os procedimentos da empresa._\n' +
+          'O retorno deve ser enviado por esta conversa.';
+      } else if (tIb === 'IBUTTON_VERIFICACAO') {
+        corpo += 'Você possui iButton? Caso *sim*, informe o *código* gravado na parte metálica do dispositivo (os *5 últimos números*), para regularizarmos seu cadastro; caso *não*, responda também por esta conversa.\n' +
+          'O retorno deve ser enviado por esta conversa.';
+      } else {
+        corpo += 'Confirme quem foi o condutor responsável por este trecho.\n' +
+          'O retorno deve ser enviado por esta conversa.';
+      }
+      return corpo + _assinatura(ev.monitorNome);
+    }
+
     var fato = _fato(ev);
     fato = fato.charAt(0).toUpperCase() + fato.slice(1);
     return TITULO + '\n\n' +

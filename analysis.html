@@ -773,23 +773,32 @@
       PARADA_PROIBIDA:        'Parada em Local Proibido',
       PARADA_LONGA:           'Parada Prolongada',
       LOCAL_NAO_IDENTIFICADO: 'Local Não Identificado',
-      PONTO_NAO_VISITADO:     'Ponto Não Visitado'
+      PONTO_NAO_VISITADO:     'Ponto Não Visitado',
+      IBUTTON_NAO_UTILIZADO:  'Não Utilização do iButton',
+      IBUTTON_VERIFICACAO:    'Confirmação de iButton',
+      IBUTTON_NAO_CADASTRADO: 'iButton Não Cadastrado',
+      MOTORISTA_AUSENTE:      'Motorista Não Identificado'
     };
 
     function _sevFromTipo(tipo) {
       if (tipo === 'VELOCIDADE_EXCESSIVA' || tipo === 'PARADA_PROIBIDA') return 'critico';
       if (tipo === 'LOCAL_NAO_IDENTIFICADO' || tipo === 'PONTO_NAO_VISITADO') return 'revisar';
+      if (tipo === 'IBUTTON_NAO_UTILIZADO') return 'atencao';
+      if (tipo === 'IBUTTON_VERIFICACAO' || tipo === 'IBUTTON_NAO_CADASTRADO') return 'revisar';
+      if (tipo === 'MOTORISTA_AUSENTE') return 'revisar';
       return 'atencao';
     }
 
     // Agrupa os alertas pendentes por categoria (para as subseções).
-    var _GRUPO_ORDEM = ['velocidade', 'parada_irregular', 'parada_longa', 'nao_visitado', 'nao_id', 'outros'];
+    var _GRUPO_ORDEM = ['velocidade', 'parada_irregular', 'parada_longa', 'nao_visitado', 'nao_id', 'ibutton', 'outros'];
     function _grupoAlerta(tipo) {
       if (String(tipo).indexOf('VELOCIDADE') === 0) return { key: 'velocidade',       label: 'Velocidade' };
       if (tipo === 'PARADA_PROIBIDA')               return { key: 'parada_irregular', label: 'Paradas Irregulares' };
       if (tipo === 'PARADA_LONGA')                  return { key: 'parada_longa',     label: 'Paradas Prolongadas' };
       if (tipo === 'PONTO_NAO_VISITADO')            return { key: 'nao_visitado',     label: 'Pontos Não Visitados' };
       if (tipo === 'LOCAL_NAO_IDENTIFICADO')        return { key: 'nao_id',           label: 'Locais Não Identificados' };
+      if (String(tipo).indexOf('IBUTTON') === 0 || tipo === 'MOTORISTA_AUSENTE')
+                                                   return { key: 'ibutton',          label: 'Utilização do iButton' };
       return { key: 'outros', label: 'Outros' };
     }
 
@@ -952,6 +961,12 @@
       if (a.tempoMin != null)       card.dataset.alertTempoMin = a.tempoMin;
       if (a.distKm != null)         card.dataset.alertDistKm   = a.distKm;
       if (a.descricao)              card.dataset.alertDescricao = a.descricao;
+      if (a.codigosNaoCadastrados && a.codigosNaoCadastrados.length)
+                                    card.dataset.alertCodigos  = a.codigosNaoCadastrados.join(',');
+      if (a.motoristaNome)          card.dataset.alertMotNome   = a.motoristaNome;
+      if (a.motoristaMatricula)     card.dataset.alertMotMat    = a.motoristaMatricula;
+      if (a.dataHoraInicio)         card.dataset.alertDtInicio  = a.dataHoraInicio;
+      if (a.veiculo)                card.dataset.alertVeiculo   = a.veiculo;
 
       var html = ''
         + '<div class="op-alert-head">'
@@ -990,7 +1005,13 @@
       }
 
       var actions = [];
-      if (sev !== 'justificado') {
+      if (sev !== 'justificado' && a.tipo === 'IBUTTON_NAO_CADASTRADO') {
+        actions.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.abrirCadastroIbutton(this)">🔑 Cadastrar iButton</button>');
+      } else if (sev !== 'justificado' && a.tipo === 'MOTORISTA_AUSENTE') {
+        // Registro interno — sem cobrança, sem ações.
+      } else if (sev !== 'justificado' && (a.tipo === 'IBUTTON_NAO_UTILIZADO' || a.tipo === 'IBUTTON_VERIFICACAO')) {
+        actions.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.abrirModalQuestionar(this)">💬 Questionar</button>');
+      } else if (sev !== 'justificado') {
         actions.push('<button type="button" class="op-btn-sm primary" onclick="AppModule.abrirModalJustificar(this)">📝 Justificar</button>');
         actions.push('<button type="button" class="op-btn-sm" onclick="AppModule.abrirModalQuestionar(this)">💬 Questionar</button>');
         if (a.tipo === 'PARADA_PROIBIDA' && a.seq != null) {
