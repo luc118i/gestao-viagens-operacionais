@@ -10,11 +10,19 @@
     --bg2: #eef0f4;
     --surface: #ffffff;
     --surface-raised: #ffffff;
+    --card: #ffffff;
     --border: #e4e7ec;
     --border-strong: #d6dae2;
     --text: #14161b;
     --text2: #565c6b;
     --text3: #9aa0ad;
+    --scrollbar-track: #f0f1f3;
+    --scrollbar-thumb: #d0d3d9;
+    --scrollbar-thumb-hover: #b8bcc5;
+    --overlay-scrim: rgba(0, 0, 0, 0.4);
+    --loading-scrim: rgba(245, 246, 248, 0.8);
+    /* Filtro aplicado aos tiles do mapa no tema escuro (nenhum no claro) */
+    --map-tile-filter: none;
 
     /* ---- Identidade (laranja Catedral, dessaturado p/ uso amplo) ---- */
     --laranja: #f47920;
@@ -59,6 +67,76 @@
     --font-mono: "IBM Plex Mono", "SFMono-Regular", ui-monospace, Menlo, Consolas, monospace;
   }
 
+  /* ============================================================
+     TEMA ESCURO · versão noturna
+     Ativado por data-theme="dark" no <html> (toggle no header,
+     persistido em localStorage; 1ª visita segue o SO).
+     Remapeia os design tokens — o resto do CSS herda daqui.
+     ============================================================ */
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+
+    --bg: #0f1216;
+    --bg2: #161a20;
+    --surface: #191d24;
+    --surface-raised: #1f242d;
+    --card: #191d24;
+    --border: #2b313b;
+    --border-strong: #3b434f;
+    --text: #e7e9ee;
+    --text2: #a6adba;
+    --text3: #6f7784;
+
+    --laranja: #f6852e;
+    --laranja2: #ffa25c;
+    --laranja3: rgba(246, 133, 46, 0.16);
+    --laranja4: rgba(246, 133, 46, 0.08);
+
+    --verde: #34c088;
+    --verde-bg: rgba(52, 192, 136, 0.14);
+    --verde-border: rgba(52, 192, 136, 0.30);
+    --vermelho: #e56a62;
+    --vermelho-bg: rgba(229, 106, 98, 0.14);
+    --vermelho-border: rgba(229, 106, 98, 0.32);
+    --amarelo: #e0a944;
+    --amarelo-bg: rgba(224, 169, 68, 0.15);
+    --amarelo-border: rgba(224, 169, 68, 0.32);
+    --azul: #5b8def;
+    --azul-bg: rgba(91, 141, 239, 0.14);
+    --azul-border: rgba(91, 141, 239, 0.30);
+    --cinza: #9aa1ad;
+    --cinza-bg: rgba(154, 161, 173, 0.14);
+    --cinza-border: rgba(154, 161, 173, 0.28);
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --shadow: 0 2px 8px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.35);
+
+    --scrollbar-track: #1a1f27;
+    --scrollbar-thumb: #363d49;
+    --scrollbar-thumb-hover: #454e5c;
+    --overlay-scrim: rgba(0, 0, 0, 0.62);
+    --loading-scrim: rgba(10, 12, 16, 0.78);
+    --map-tile-filter: invert(1) hue-rotate(180deg) brightness(0.92) contrast(0.9);
+  }
+
+  /* --- Ajustes pontuais onde havia cor fixa (não tokenizada) --- */
+  :root[data-theme="dark"] .btn-primary:disabled {
+    background: var(--bg2);
+    color: var(--text3);
+  }
+  :root[data-theme="dark"] .btn-secondary { background: var(--bg2); }
+  :root[data-theme="dark"] .btn-secondary:hover { background: var(--surface-raised); }
+  :root[data-theme="dark"] .op-alert-card.sev-justificado { background: var(--verde-bg); }
+  :root[data-theme="dark"] .sev-revisar .op-sev-pill { color: var(--amarelo); }
+  :root[data-theme="dark"] .q-status.q-aguardando { color: var(--amarelo); }
+  :root[data-theme="dark"] .q-status.q-respondido { color: var(--verde); }
+  :root[data-theme="dark"] .q-agent-ok { color: var(--verde); }
+  :root[data-theme="dark"] .q-resp { background: var(--verde-bg); }
+
+  /* Mapa: tiles raster ganham um passe escuro; marcadores/linhas ficam */
+  :root[data-theme="dark"] .leaflet-tile-pane { filter: var(--map-tile-filter); }
+  :root[data-theme="dark"] .leaflet-container { background: #10131a; }
+
   *,
   *::before,
   *::after {
@@ -82,14 +160,14 @@
     height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #f0f1f3;
+    background: var(--scrollbar-track);
   }
   ::-webkit-scrollbar-thumb {
-    background: #d0d3d9;
+    background: var(--scrollbar-thumb);
     border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #b8bcc5;
+    background: var(--scrollbar-thumb-hover);
   }
 
   /* ============================================================
@@ -204,6 +282,13 @@
     transition: color 0.15s, border-color 0.15s;
   }
   .header-icon-btn:hover { color: var(--laranja); border-color: var(--laranja); }
+
+  /* Toggle de tema — mostra o ícone do tema para o qual o clique leva:
+     no claro aparece a lua (→ escuro); no escuro aparece o sol (→ claro). */
+  .theme-toggle .theme-ico-sun { display: none; }
+  .theme-toggle .theme-ico-moon { display: inline; }
+  :root[data-theme="dark"] .theme-toggle .theme-ico-sun { display: inline; }
+  :root[data-theme="dark"] .theme-toggle .theme-ico-moon { display: none; }
 
   .header-right {
     display: flex;
@@ -1219,7 +1304,7 @@
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    background: #f8f9fb;
+    background: var(--bg2);
     color: var(--text3);
     gap: 10px;
     padding: 40px;
@@ -2498,7 +2583,7 @@
   .modal-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: var(--overlay-scrim);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -2714,7 +2799,7 @@
   .loading-overlay {
     position: fixed;
     inset: 0;
-    background: rgba(245, 246, 248, 0.8);
+    background: var(--loading-scrim);
     display: flex;
     flex-direction: column;
     align-items: center;

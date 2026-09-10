@@ -787,11 +787,21 @@ var ReportService = (() => {
       tripTime: params._resolvedTripTime || params.horario || startTime || null,
       reportTitle: titulo,
       relatoHtml: relatoHtml,
-      // place = trecho analisado (exibido em DADOS DA VIAGEM para ANALISE_OP)
+      // place = trecho analisado (exibido em DADOS DA VIAGEM para ANALISE_OP).
+      // Mostra a SIGLA de cada ponta (aba "Siglas") quando houver match; sen\u00e3o
+      // cai pro nome do ponto e, por \u00faltimo, pro c\u00f3digo cru do v\u00ednculo.
       place: (function() {
         var t = payload.trecho || {};
         if (!t.ponto_inicio || !t.ponto_fim) return '';
-        return t.ponto_inicio + ' \u2192 ' + t.ponto_fim + ' (' + (t.total_pontos || 0) + ' pontos)';
+        var nomeIni = firstPt.ponto || t.ponto_inicio;
+        var nomeFim = lastPt.ponto  || t.ponto_fim;
+        var ini = nomeIni, fim = nomeFim;
+        try {
+          var s = SiglasService.trechoEmSigla({ pontoInicio: nomeIni, pontoFim: nomeFim });
+          if (s.siglaInicio) ini = s.siglaInicio;
+          if (s.siglaFim)    fim = s.siglaFim;
+        } catch (e) {}
+        return ini + ' \u2192 ' + fim + ' (' + (t.total_pontos || 0) + ' pontos)';
       })(),
       showSectionTripulacao: !!(payload.motorista && (payload.motorista.nome || payload.motorista.matricula)),
       showSectionPassageiros: false,

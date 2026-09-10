@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Análise Operacional · Viação Catedral</title>
 
+    <!-- Tema (claro/escuro): aplica antes da 1ª pintura para não piscar -->
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem('vc_theme');
+          if (t !== 'dark' && t !== 'light') {
+            t = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }
+          document.documentElement.setAttribute('data-theme', t);
+        } catch (e) {}
+      })();
+    </script>
+
     <!-- Leaflet CSS -->
     <link
       rel="stylesheet"
@@ -86,6 +99,16 @@
         </div>
 
         <div class="header-right">
+          <button
+            id="btnToggleTema"
+            class="header-icon-btn theme-toggle"
+            type="button"
+            title="Alternar tema claro / escuro"
+            aria-label="Alternar tema claro / escuro"
+          >
+            <svg class="theme-ico-sun" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="15" height="15"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+            <svg class="theme-ico-moon" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="15" height="15"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
           <div class="header-actions">
             <button
               id="btnRelatorio"
@@ -1010,5 +1033,34 @@
     <?!= include('diagnostico') ?>
     <?!= include('questionamentos') ?>
     <?!= include('massa') ?>
+
+    <!-- Toggle de tema claro/escuro -->
+    <script>
+      (function () {
+        var btn = document.getElementById('btnToggleTema');
+        if (!btn) return;
+        var root = document.documentElement;
+
+        function apply(theme, persist) {
+          root.setAttribute('data-theme', theme);
+          if (persist) { try { localStorage.setItem('vc_theme', theme); } catch (e) {} }
+          btn.setAttribute('aria-pressed', String(theme === 'dark'));
+        }
+
+        btn.addEventListener('click', function () {
+          var atual = root.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+          apply(atual === 'dark' ? 'light' : 'dark', true);
+        });
+
+        // Enquanto o usuário não escolher manualmente, acompanha o SO
+        try {
+          window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function (e) {
+            var escolhido = null;
+            try { escolhido = localStorage.getItem('vc_theme'); } catch (err) {}
+            if (escolhido !== 'dark' && escolhido !== 'light') apply(e.matches ? 'dark' : 'light', false);
+          });
+        } catch (e) {}
+      })();
+    </script>
   </body>
 </html>
