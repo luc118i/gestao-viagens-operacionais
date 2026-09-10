@@ -259,29 +259,79 @@
 
     // ── Guia lateral: recolher / expandir (navbar full-width) ───────
     var GUIDE_COLLAPSE_KEY = "guideCollapsed";
+    var GUIDE_HINT_KEY     = "guideHintSeen";
+    var _dicaGuiaTimer = null;
 
     function _initGuideToggle() {
       var wrap = document.querySelector(".app-wrapper");
       var btn  = document.getElementById("btnToggleGuide");
       if (!wrap || !btn) return;
 
-      var collapsed = false;
-      try { collapsed = localStorage.getItem(GUIDE_COLLAPSE_KEY) === "1"; } catch (e) {}
-      _aplicarGuiaRecolhido(wrap, btn, collapsed);
+      // Começa recolhido — até o usuário escolher o contrário (respeita "0")
+      var stored = null;
+      try { stored = localStorage.getItem(GUIDE_COLLAPSE_KEY); } catch (e) {}
+      _aplicarGuiaRecolhido(wrap, btn, stored === null ? true : stored === "1");
 
       btn.addEventListener("click", function () {
         var novo = !wrap.classList.contains("guide-collapsed");
         _aplicarGuiaRecolhido(wrap, btn, novo);
         try { localStorage.setItem(GUIDE_COLLAPSE_KEY, novo ? "1" : "0"); } catch (e) {}
+        _descartarDicaGuia();
         // Recalcula o scroll-spy após a mudança de largura
         if (typeof SectionGuide !== "undefined" && SectionGuide.refresh) SectionGuide.refresh();
       });
+
+      var hintClose = document.getElementById("guideHintClose");
+      if (hintClose) {
+        hintClose.addEventListener("click", function (e) {
+          e.stopPropagation();
+          _descartarDicaGuia();
+        });
+      }
+
+      // A dica ("aqui fica o guia") só aparece quando o guia passa a existir
+      // (análise carregada) e ainda não foi vista.
+      var jaViu = false;
+      try { jaViu = localStorage.getItem(GUIDE_HINT_KEY) === "1"; } catch (e) {}
+      if (!jaViu) {
+        if (wrap.classList.contains("has-guide")) {
+          _mostrarDicaGuia();
+        } else {
+          var mo = new MutationObserver(function () {
+            if (wrap.classList.contains("has-guide")) {
+              mo.disconnect();
+              _mostrarDicaGuia();
+            }
+          });
+          mo.observe(wrap, { attributes: true, attributeFilter: ["class"] });
+        }
+      }
     }
 
     function _aplicarGuiaRecolhido(wrap, btn, collapsed) {
       wrap.classList.toggle("guide-collapsed", collapsed);
       btn.setAttribute("aria-expanded", String(!collapsed));
       btn.setAttribute("aria-label", collapsed ? "Expandir guia lateral" : "Recolher guia lateral");
+    }
+
+    function _mostrarDicaGuia() {
+      // Sem sentido abaixo de 1100px (rail e botão ficam escondidos)
+      if (window.matchMedia && window.matchMedia("(max-width: 1099px)").matches) return;
+      var btn  = document.getElementById("btnToggleGuide");
+      var hint = document.getElementById("guideHint");
+      if (btn)  btn.classList.add("hint");
+      if (hint) hint.classList.add("show");
+      clearTimeout(_dicaGuiaTimer);
+      _dicaGuiaTimer = setTimeout(_descartarDicaGuia, 12000);
+    }
+
+    function _descartarDicaGuia() {
+      clearTimeout(_dicaGuiaTimer);
+      var btn  = document.getElementById("btnToggleGuide");
+      var hint = document.getElementById("guideHint");
+      if (btn)  btn.classList.remove("hint");
+      if (hint) hint.classList.remove("show");
+      try { localStorage.setItem(GUIDE_HINT_KEY, "1"); } catch (e) {}
     }
 
     // ============================================================
