@@ -2889,6 +2889,11 @@
                 var fname = _buildPdfFilename(tipo, params.motorista, params.formato);
                 _downloadPdf(_body.url, fname);
                 UIModule.showToast((params.formato === 'docx' ? 'Documento Word' : 'PDF') + " pronto para download.", "success", 4000);
+                if (_body.driveUrl) {
+                  UIModule.showToast("Cópia salva no Drive.", "success", 4000);
+                } else if (_body.driveWarning) {
+                  UIModule.showToast("Não foi possível salvar no Drive — " + _body.driveWarning, "error", 8000);
+                }
               } else {
                 var _fmt = (params.formato === 'docx') ? 'DOCX' : 'PDF';
                 UIModule.showToast(
@@ -3901,6 +3906,11 @@
               var fname2 = _buildPdfFilename(tipo, params.motorista, params.formato);
               _downloadPdf(_body2.url, fname2);
               UIModule.showToast((params.formato === 'docx' ? 'Documento Word' : 'PDF') + ' pronto para download.', 'success', 4000);
+              if (_body2.driveUrl) {
+                UIModule.showToast('Cópia salva no Drive.', 'success', 4000);
+              } else if (_body2.driveWarning) {
+                UIModule.showToast('Não foi possível salvar no Drive — ' + _body2.driveWarning, 'error', 8000);
+              }
             } else {
               var _fmt2 = (params.formato === 'docx') ? 'DOCX' : 'PDF';
               UIModule.showToast(

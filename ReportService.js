@@ -327,12 +327,30 @@ var ReportService = (() => {
     var signed = (d.pdf && d.pdf.signedUrl) || (d.docx && d.docx.signedUrl) ||
                  (d.file && d.file.signedUrl) || null;
 
+    // ── Passo 3: salva uma cópia permanente no Google Drive ─────────
+    // A URL da API é assinada e expira (REPORTS_PDF_TTL). Baixa o arquivo
+    // agora e guarda numa pasta do Drive. Não-fatal: se falhar, o relatório
+    // segue disponível pela URL assinada enquanto ela durar.
+    var driveInfo = null;
+    var driveWarning = null;
+    if (signed) {
+      try {
+        driveInfo = _salvarNoDrive(signed, formato, payload, params);
+      } catch (e) {
+        driveWarning = "Falha ao salvar no Drive: " + (e.message || e);
+        Logger.log("[enviarParaAPI] " + driveWarning);
+      }
+    }
+
     return {
       status: 200,
       body: {
         id: occurrenceId,
         url: signed,
         formato: formato,
+        driveUrl: driveInfo ? driveInfo.url : null,
+        driveFileId: driveInfo ? driveInfo.id : null,
+        driveWarning: driveWarning,
       },
     };
   }
@@ -340,6 +358,93 @@ var ReportService = (() => {
   // ============================================================
   //  HELPERS PRIVADOS
   // ============================================================
+
+  /**
+   * Baixa o arquivo gerado (via URL assinada da API) e salva no Google Drive.
+   *
+   * Pasta de destino:
+   *   - Script Property REPORTS_DRIVE_FOLDER_ID, se configurada;
+   *   - senão, uma pasta "Relatórios Operacionais" na raiz do Drive
+   *     (criada na primeira execução; o ID fica cacheado em
+   *     REPORTS_DRIVE_FOLDER_ID pra execuções seguintes).
+   *
+   * @param {string} signedUrl  — URL assinada retornada pela API
+   * @param {string} formato    — 'pdf' | 'docx'
+   * @param {Object} payload    — payload estruturado (metadados p/ o nome)
+   * @param {Object} params     — params originais (nomeLinha, horario, etc.)
+   * @returns {{ id: string, url: string, name: string }}
+   */
+  function _salvarNoDrive(signedUrl, formato, payload, params) {
+    var props = PropertiesService.getScriptProperties();
+
+    // ── Resolve a pasta de destino ────────────────────────────────
+    var folderId = (props.getProperty("REPORTS_DRIVE_FOLDER_ID") || "").trim();
+    var folder = null;
+    if (folderId) {
+      try {
+        folder = DriveApp.getFolderById(folderId);
+      } catch (e) {
+        throw new Error(
+          "REPORTS_DRIVE_FOLDER_ID inválida ou sem acesso (" + folderId + "): " +
+          (e.message || e),
+        );
+      }
+    } else {
+      var it = DriveApp.getRootFolder().getFoldersByName("Relatórios Operacionais");
+      folder = it.hasNext() ? it.next()
+                            : DriveApp.createFolder("Relatórios Operacionais");
+      props.setProperty("REPORTS_DRIVE_FOLDER_ID", folder.getId());
+    }
+
+    // ── Baixa o arquivo pela URL assinada ─────────────────────────
+    var resp = UrlFetchApp.fetch(signedUrl, { muteHttpExceptions: true });
+    var code = resp.getResponseCode();
+    if (code < 200 || code > 299) {
+      throw new Error("download da URL assinada retornou HTTP " + code);
+    }
+    var ext = formato === "docx" ? "docx" : "pdf";
+    var mime = ext === "docx"
+      ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      : "application/pdf";
+    var blob = resp.getBlob().setName(_nomeArquivoRelatorio(payload, params, ext));
+    blob.setContentType(mime);
+
+    // ── Cria o arquivo e libera leitura por link ──────────────────
+    var file = folder.createFile(blob);
+    try {
+      file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    } catch (e) {
+      // Domínio pode bloquear compartilhamento aberto — mantém o arquivo mesmo assim.
+    }
+
+    return { id: file.getId(), url: file.getUrl(), name: file.getName() };
+  }
+
+  /**
+   * Monta o nome do arquivo de relatório: TIPO_LINHA_DATA[_MOTORISTA].ext
+   * Sanitiza caracteres inválidos pro Drive e limita o tamanho.
+   */
+  function _nomeArquivoRelatorio(payload, params, ext) {
+    payload = payload || {};
+    params = params || {};
+    var tipo = String(payload.tipo || params.tipo || "RELATORIO").toUpperCase();
+    var linha = payload.nome_linha || params._resolvedLineLabel ||
+                params.nomeLinha || params.codLinha || "";
+    var data = Utilities.formatDate(new Date(), "America/Sao_Paulo", "yyyy-MM-dd_HH'h'mm");
+    var motorista = (payload.motorista && payload.motorista.nome) || "";
+
+    var partes = [tipo, linha, data];
+    if (motorista) partes.push(motorista);
+
+    var nome = partes
+      .join("_")
+      .replace(/[\\/:*?"<>|]+/g, "-")   // proibidos no Drive/Windows
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+
+    return nome + "." + ext;
+  }
 
   /**
    * Filtra os pontos do esquema para o intervalo entre idPontoA e idPontoB.
