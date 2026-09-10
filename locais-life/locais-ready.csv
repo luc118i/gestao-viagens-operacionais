@@ -1,0 +1,422 @@
+nome,sigla,codigo,tipo,vel_max_kmh,raio_m,ativo,pedagio,rodoviaria,garagem,lat,lng
+ALVORADA DO NORTE - GO /CHURRACARIA BEIRA RIO,BEIRA RIO,50,Ponto de Controle - 12,10,25,false,false,false,false,-14.490464,-46.502394
+CHURRASCARIA 2 IRMAOS - CAPIM GROSSO - BA,2 IRM CAP,165,Ponto de Controle - 12,0,45,false,false,false,false,-11.38318,-40.002807
+RESTAURANTE 2 IRMAOS JEQUIE BA,2 IRM JQE,151,Ponto de Controle - 12,0,50,false,false,false,false,-13.860564,-40.114129
+CHURRASCARIA 2 IRMÃOS - JUAZEIRO BA,2 IRM JUAZ,163,Ponto de Controle - 12,0,100,false,false,false,false,-9.48259,-40.473457
+REST 2 IRMÃOS MILAGRES BA,2 IRM MLGS,150,Ponto de Controle - 12,0,50,false,false,false,false,-12.877102,-39.858188
+CHURRASCARIA ITAMARATY - 2 IRMAOS - SALGUEIRO PE,2 IRM SALG,159,Ponto de Controle - 12,0,100,false,false,false,false,-8.067108,-39.136022
+RODOVIARIA DE ABADIANIA - GO,ABADIANIA,207,Ponto de Controle - 12,10,20,false,false,true,false,-16.194976,-48.708946
+RODOVIARIA DE ABREU E LIMA,ABREU E LI,208,Ponto de Controle - 12,10,50,false,false,true,false,-7.921368,-34.895272
+RODOVIARIA DE ACARI - RN,ACARI - RN,209,Ponto de Controle - 12,10,20,false,false,true,false,-6.431966,-36.641037
+RODOVIARIA - APODI - RN,AGENCIA,388,Ponto Auxiliar - 2,10,12,false,false,false,false,-5.663956,-37.798842
+RODOVIARIA DE AGRESTINA - PE,AGRESTINA,210,Ponto de Controle - 12,10,12,false,false,true,false,-8.455531,-35.944957
+RODOVIARIA DE AGUA BRANCA,AGUA BRANC,211,Ponto de Controle - 12,0,50,false,false,true,false,-5.881472,-42.63977
+RODOVIARIA DE AGUAS LINDAS DE GOIAS,AGUAS LIND,212,Ponto de Controle - 12,10,45,false,false,true,false,-15.714656,-48.288516
+RODOVIARIA DE ALAGOINHAS - BA,ALAGOINHAS,213,Ponto de Controle - 12,10,130,false,false,true,false,-12.150509,-38.400408
+REST. ALBERTAO - GUIMARANIA - MG,ALBERTA,191,Local Não Autorizado - 42,5,100,false,false,false,false,-18.7978,-46.746123
+RODOVIARIA DE ALEM PARAIBA - MG,ALEM PARAI,214,Ponto de Controle - 12,10,50,false,false,true,false,-21.881718,-42.693793
+RODOVIARIA DE ALEXANIA - GO,ALEXANIA,215,Ponto de Controle - 12,10,25,false,false,true,false,-16.088433,-48.501017
+RODOVIARIA DE ALTOS - PI,ALTOS - PI,216,Ponto de Controle - 12,10,60,false,false,true,false,-5.034075,-42.442119
+Estação Rodoviária de Alvorada / Alvorada - TO,AlvoradaTO,465,Ponto de Controle - 12,20,50,false,false,true,false,-12.484208,-49.118336
+RODOVIARIA DE AMARANTE - PI,AMARANTE,217,Ponto de Controle - 12,10,30,false,false,true,false,-6.246846,-42.841085
+RODOVIARIA DE AMERICANA - SP,AMERICANA,218,Ponto de Controle - 12,10,100,false,false,true,false,-22.734253,-47.310984
+RODOVIARIA DE APARECIDA DE GOIANIA - GO,APA - GO,220,Ponto de Controle - 12,10,50,false,false,true,false,-16.833939,-49.246396
+RODOVIARIA DE ARACAJU - SE,ARACAJU,19,Ponto de Controle - 12,10,100,false,false,true,false,-10.917032,-37.088186
+RODOVIARIA DE ARACATI - CE,ARACATI,11,Ponto de Controle - 12,10,50,false,false,true,false,-4.571442,-37.774531
+RODOVIARIA DE ARACI - BA,ARACI - BA,221,Ponto de Controle - 12,10,25,false,false,true,false,-11.3418,-38.960984
+RODOVIARIA ARAGUARI - MG,ARAGUARI,61,Ponto de Controle - 12,20,50,false,false,true,false,-18.63954,-48.174921
+RODOVIARIA DE ARAPORA - MG,ARAPORÃ,222,Ponto de Controle - 12,10,50,false,false,true,false,-18.42979,-49.191688
+RODOVIARIA DE ARARAS - SP,ARARAS SP,223,Ponto de Controle - 12,10,50,false,false,true,false,-22.35963,-47.39163
+RODOVIARIA DE ARARIPINA - PE,ARARIPINA,224,Ponto de Controle - 12,10,50,false,false,true,false,-7.57518,-40.510572
+RODOVIARIA DE ARUJA - SP,ARUJA - SP,225,Ponto de Controle - 12,10,50,false,false,true,false,-23.394452,-46.324102
+POSTO ALTO DA BOA VISTA / SANTA CRUZ DE GOIAS - GO,ATBOAVISTA,442,Local Não Autorizado - 42,0,50,false,false,false,false,-17.469884,-48.757826
+POSTO AUXILIAR BARREIRAS - BA,AUX TANQUE,429,Ponto Auxiliar - 2,0,40,false,false,false,false,-12.129371,-45.019177
+REST. MAURO BAGATINE - LEME,BAGATINI,149,Local Não Autorizado - 42,0,100,false,false,false,false,-22.2174,-47.391568
+RODOVIARIA DE BARBALHA - CE,BARBALHA,226,Ponto de Controle - 12,10,25,false,false,true,false,-7.309754,-39.301841
+RODOVIARIA DE BARRA MANSA - RJ,BARRAMANSA,227,Ponto de Controle - 12,10,50,false,false,true,false,-22.545987,-44.168736
+RODOVIARIA DE BARREIRAS - BA,BES,38,Ponto de Controle - 12,0,150,false,false,true,false,-12.126181,-45.017921
+RODOVIARIA DE BETIM - MG,BETIM-MG,229,Ponto de Controle - 12,10,80,false,false,true,false,-19.96323,-44.162484
+RODOVIARIA DE BEZERROS - PE,BEZERROS,230,Ponto de Controle - 12,10,60,false,false,true,false,-8.237479,-35.744633
+RODOVIARIA DE BRAGANCA PAULISTA - SP,BGP,233,Ponto de Controle - 12,10,75,false,false,true,false,-22.940596,-46.538983
+RODOVIARIA DE BURITI DOS LOPES - PI,BIL,234,Ponto de Controle - 12,10,50,false,false,true,false,-3.173466,-41.868377
+Americana - SP / Churrascaria BO,BO,475,Local Não Autorizado - 42,0,50,false,false,false,false,-22.719065,-47.294267
+BREJOES - BA - CHURR. BOIBÃO,BOIBÃO,401,Local Não Autorizado - 42,10,80,false,false,false,false,-12.983518,-39.941257
+RODOVIARIA DE BOM JESUS - PI,BOMJESUS,231,Ponto de Controle - 12,10,50,false,false,true,false,-9.079261,-44.360309
+CRISTIANOPOLIS - GO / LOCAL DESCONHECIDO,BR-050,479,Local Não Autorizado - 42,0,50,false,false,false,false,-16.730653,-47.625025
+VITORIA DA CONQUISTA - BA  - REST. BRASA QUENTE,Brasa Qt,421,Local Não Autorizado - 42,0,45,false,false,false,false,-11.516005,-37.512031
+INDIAROBA - SE / CHURR. BRASA QUENTE,BRASA QUEN,459,Local Não Autorizado - 42,30,50,false,false,false,false,-11.516205,-37.51114
+POSTO E RESTAURANTE BRASILEIRÃO,BRASILEIR,193,Ponto de Controle - 12,10,150,false,false,false,false,-18.661831,-48.161401
+RODOVIARIA DE BREJO SANTO - CE,BRE.STO,158,Ponto de Controle - 12,0,50,false,false,true,false,-7.479387,-38.980832
+RODOVIARIA DE BRASILIA - BSB,BSB,14,Ponto de Controle - 12,10,100,false,false,true,false,-15.830449,-47.949158
+RODOVIARIA DE CAJAZEIRAS-PB,CAJAZEIRAS,155,Ponto de Controle - 12,0,75,false,false,true,false,-6.887235,-38.553877
+ALHANDRA - PB / Coxinhas Matuta & Churr. Do Cajuei,CAJUEI,469,Local Não Autorizado - 42,0,20,false,false,false,false,-7.325464,-34.946723
+RODOVIARIA DE CALDAS NOVAS - GO,CALDAS NOV,169,Ponto de Controle - 12,0,65,false,false,true,false,-17.756566,-48.630475
+OLIVEIRA DOS BREJINHOS - BA - REST. CAMILA,CAMILA,395,Local Não Autorizado - 42,10,66,false,false,false,false,-12.312515,-42.599081
+RODOVIARIA CAMPINAS - SP,CAMPINAS,20,Ponto de Controle - 12,10,100,false,false,true,false,-22.906056,-47.072563
+RODOVIARIA DE CAMACARI - BA,CAR,242,Ponto de Controle - 12,10,40,false,false,true,false,-12.701791,-38.319168
+SAO FRANCISCO - BA / CHURRASCARIA CARNE ASSADA,CARNE ASSA,474,Local Não Autorizado - 42,0,50,false,false,false,false,-12.199964,-43.673732
+RODOVIARIA DE CARUARU-PE,CARUARU,173,Ponto de Controle - 12,0,80,false,false,true,false,-8.294227,-35.988368
+POSTO JK - CATALÃO - GO,CATALÃO,62,Ponto de Controle - 12,20,80,false,false,false,false,-18.180986,-47.942106
+RODOVIARIA DE CABO DE SANTO AGOSTINHO - PE,CBO,235,Ponto de Controle - 12,10,75,false,false,true,false,-8.285122,-35.032494
+CHURRASCARIA CACHOREIRA GRILL ESTÂNCIA 1 - SE,CCG EST,60,Ponto de Controle - 12,0,60,false,false,false,false,-11.284441,-37.45041
+CHURRASCARIA CHIMARRÃO LAJES,CCLAJES,64,Ponto de Controle - 12,20,100,false,false,false,false,-5.705384,-36.225834
+CHURRASCARIA CHIMARRAO MATARACA SENTIDO FOR,CCMTRAFOR,59,Ponto de Controle - 12,10,30,false,false,false,false,-6.628234,-35.125996
+CHURRASCARIA CHIMARRAO MATARACA SENTIDO REC,CCMTRAREC,4,Ponto de Controle - 12,10,90,false,false,false,false,-6.559671,-35.137179
+RODOVIARIA CANDIDO SALES - BA,CDS,48,Ponto de Controle - 12,10,60,false,false,true,false,-15.501969,-41.235999
+RODOVIARIA DE CAMANDUCAIA - MG,CDU,243,Ponto de Controle - 12,10,35,false,false,true,false,-22.739525,-46.132021
+"POSTO CERRADAO, MONTES CLAROS - MG",CERRADAO,37,Ponto de Controle - 12,10,50,false,false,false,false,-16.769036,-43.87168
+RODOVIARIA DE CAFARNAUM - BA,CFM,240,Ponto de Controle - 12,10,23,false,false,true,false,-11.691655,-41.469498
+RODOVIARIA DE CAMPO FORMOSO - BA,CFS,245,Ponto de Controle - 12,10,23,false,false,true,false,-10.509751,-40.327444
+RODOVIARIA DE CARATINGA - MG,CGA,250,Ponto de Controle - 12,10,50,false,false,true,false,-19.796807,-42.13874
+RODA VELHA - BA / CHURRASCARIA POTENCIAL SUL,CH. P. SUL,100,Ponto de Controle - 12,5,100,false,false,false,false,-12.755135,-45.943028
+BEZERRA - GO / CH.STILLUS,CH.STILLUS,105,Ponto de Controle - 12,5,50,false,false,false,false,-15.482476,-47.10125
+RESTAURANTE CHICAO CRISTINO CASTRO,CHICAO,125,Ponto de Controle - 12,0,30,false,false,false,false,-8.807234,-44.216248
+POSTO CHIMARRAO - JOAO PESSOA,CHIMA JOAO,467,Ponto de Controle - 12,10,50,false,false,false,false,-7.17345,-34.897803
+CHURRASCARIA CHIMARRÃO BAYEUX,CHIMA.BAYE,197,Ponto de Controle - 12,10,90,false,false,false,false,-7.133737,-34.930732
+CHURRASCARIA CHIMARRÃO - MOSSORÓ 2,CHIMA.MOSS,194,Ponto de Controle - 12,10,50,false,false,false,false,-5.224987,-37.342979
+MORRO DO CHAPÉU - BA - CHURR. CHIMARRÃO 24,CHIMARRÃO,398,Local Não Autorizado - 42,10,50,false,false,false,false,-8.395987,-35.261256
+CHURRASCARIA CHIMARRÃO - MAMANGUAPE - PB,CHIMARRÃO2,441,Ponto de Controle - 12,0,50,false,false,false,false,-6.627877,-35.126048
+RODOVIARIA DE CACHOEIRAS DE MACACU - RJ,CHM,239,Ponto de Controle - 12,10,35,false,false,true,false,-22.465864,-42.654346
+RODOVIARIA DE CARMO DA CACHOEIRA - MG,CHO,252,Ponto de Controle - 12,10,25,false,false,true,false,-21.460258,-45.222175
+RODOVIARIA DE CACHOEIRA PAULISTA - SP,CHP,238,Ponto de Controle - 12,10,50,false,false,true,false,-22.671541,-45.004168
+VILA FIRMEZA - PE - CHURR. CARNE E QUEIJO,CHU.CARQUE,200,Local Não Autorizado - 42,10,200,false,false,false,false,-6.701266,-35.114821
+UBERABA - MG / CHURR. CAVION,CHU.CAVION,203,Local Não Autorizado - 42,10,50,false,false,false,false,-19.441272,-48.065226
+CHURRASCARIA GUAIBA,CHU.GUAIBA,198,Ponto de Controle - 12,10,80,false,false,false,false,-5.704751,-36.25246
+CHURRASCARIA 2 IRMAOS IBOTIRAMA BA,CHUR 2IRMA,143,Ponto de Controle - 12,0,200,false,false,false,false,-12.173194,-43.202201
+CHURRASCARIA CHIMARRAO - MORRO DO CHAPEU-BA,CHUR CHAPE,167,Ponto de Controle - 12,0,80,false,false,false,false,-11.557146,-41.157434
+ITABERABA - BA / CHURR. BOM DEMAIS,CHURR BDM,383,Local Não Autorizado - 42,10,120,false,false,false,false,-12.51773,-40.285448
+RODOVIARIA DE CAICO - RN,CIC,241,Ponto de Controle - 12,10,50,false,false,true,false,-6.444022,-37.07254
+RODOVIARIA DE CANTO DO BURITI - PI,CII,247,Ponto de Controle - 12,10,30,false,false,true,false,-8.110769,-42.941293
+POSTO CINQUENTÃO,CINQUENTAO,196,Ponto de Controle - 12,10,200,false,false,false,false,-18.828736,-46.79465
+GURUPI - TO / RESTAURANTE COMETA,COMETA,452,Local Não Autorizado - 42,0,50,false,false,false,false,-11.696416,-49.072307
+RODOVIARIA DE CABROBO - PE,COO,236,Ponto de Controle - 12,10,35,false,false,true,false,-8.508877,-39.309874
+RODOVIARIA DE COTEGIPE - BA,COTEGIPE,182,Ponto de Controle - 12,0,25,false,false,true,false,-12.038364,-44.265211
+RODOVIARIA DE CAÇAPAVA-SP,CPV,237,Ponto de Controle - 12,10,50,false,false,true,false,-23.11007,-45.70823
+RODOVIARIA DE CAMPO MAIOR - PI,CRA,246,Ponto de Controle - 12,10,30,false,false,true,false,-4.829979,-42.170068
+RODOVIARIA DE CORONEL FABRICIANO - MG,CRF,254,Ponto de Controle - 12,10,50,false,false,true,false,-19.528876,-42.623045
+RODOVIARIA DE CRISTALINA,CRISTALINA,73,Ponto de Controle - 12,10,50,false,false,true,false,-16.764631,-47.613911
+RODOVIÁRIA DE CRISTOPOLIS - BA,CRISTOP,181,Ponto de Controle - 12,0,40,false,false,true,false,-12.233238,-44.41378
+QUIPAPÁ - PE  - CHURR. CASA BRANCA,CSA BRANC,396,Local Não Autorizado - 42,10,50,false,false,false,false,-8.811468,-36.012813
+RODOVIARIA DE CURRAIS NOVOS - RN,CSS,258,Ponto de Controle - 12,10,50,false,false,true,false,-6.260238,-36.519544
+RODOVIARIA DE CATALAO - GO,CTL,253,Ponto de Controle - 12,10,50,false,false,true,false,-18.171858,-47.926462
+RODOVIARIA DE CRISTINAPOLIS - SE,CTN,377,Ponto de Controle - 12,10,15,false,false,true,false,-11.478131,-37.754258
+RODOVIARIA DE CRATO - CE,CTO,255,Ponto de Controle - 12,10,35,false,false,true,false,-7.229171,-39.397614
+RODOVIARIA DE CUPIRA - PE,CUP,257,Ponto de Controle - 12,10,50,false,false,true,false,-8.612958,-35.956496
+RODOVIARIA DE CRISTINO CASTRO - PI,CYT,256,Ponto de Controle - 12,10,50,false,false,true,false,-8.806513,-44.215783
+POSTO DDD 242,DDD.242,199,Ponto de Controle - 12,10,135,false,false,false,false,-12.419105,-41.83866
+ECO POSTO DETRAN RECIFE - DESEMBARQUE,DETRAN DES,180,Ponto de Controle - 12,0,50,false,false,true,false,-8.042357,-34.943826
+ECO POSTO DETRAN RECIFE - EMBARQUE,DETRAN EMB,179,Ponto de Controle - 12,0,25,false,false,false,false,-8.033239,-34.941661
+CAMPO ALEGRE - AL / RESTAURANTE DIVINO SABOR,DIVINO SAB,453,Local Não Autorizado - 42,0,50,false,false,false,false,-9.778603,-36.353153
+IPUTINGA - PB - DOM PAULIS,DOM PAULIS,201,Local Não Autorizado - 42,10,50,false,false,false,false,-8.691189,-35.601221
+MOSSORÓ - RN - POST. DOMINGOS,DOMINGOS,403,Local Não Autorizado - 42,10,50,false,false,false,false,-5.088306,-37.335638
+QUIPAPÁ - PE  - REST. DONA MARTA,DONA MARTA,397,Local Não Autorizado - 42,10,50,false,false,false,false,-9.897761,-36.439734
+RODOVIARIA DE EUCLIDES DA CUNHA - BA,ECN,272,Ponto de Controle - 12,10,50,false,false,true,false,-10.50289,-39.010533
+BR 101 - PE / ECOPOSTO,ECOPOSTO,428,Local Não Autorizado - 42,0,50,false,false,true,false,-7.792677,-34.928006
+POSTO ELITE 2 - AMELIA RODRIGUES BA,ELITE 2,44,Ponto de Controle - 12,0,150,false,false,false,false,-12.361132,-38.835973
+CAPIM GROSSO - BA -  POSTO ELITE 03,ELITE3-CG,425,Ponto de Controle - 12,0,65,false,false,false,false,-11.384899,-39.994756
+RODOVIARIA DE ELISEU MARTINS - PI,ELS,259,Ponto de Controle - 12,10,50,false,false,true,false,-8.104206,-43.660123
+RODOVIARIA DE ESPLANADA - BA,ESP,261,Ponto de Controle - 12,10,50,false,false,true,false,-11.787566,-37.950234
+VITORIA DA CONQUISTA - BA - REST. ESPETÃO GAUCHO,ESPETÃO GA,470,Local Não Autorizado - 42,0,50,false,false,false,false,-14.8071,-40.784318
+ROD. DE ESTANCIA,ESTANCIA,437,Ponto de Controle - 12,0,50,false,false,true,false,-11.274062,-37.447313
+GRAAL ESTIVA  - ESTIVA MG,ESTIVA,175,Ponto de Controle - 12,0,99,false,false,false,false,-22.457715,-46.007634
+RODOVIARIA DE ESTIVA - MG,ESV,271,Ponto de Controle - 12,10,18,false,false,true,false,-22.464535,-46.015902
+RODOVIARIA DE ENTRE RIOS - BA,ETR,260,Ponto de Controle - 12,10,55,false,false,true,false,-11.94634,-38.068983
+CHURRASCARIA ESTRELA DO SUL / SANTO ESTEVÃO - BA,ETREL.SUL2,443,Ponto de Controle - 12,0,50,false,false,false,false,-12.461978,-39.27188
+EXPRESSO 060 - BSB,EX060,49,Ponto de Controle - 12,10,70,false,false,false,false,-16.00812,-48.245772
+RODOVIARIA DE EXTREMA - MG,EXM,273,Ponto de Controle - 12,10,35,false,false,true,false,-22.856498,-46.324807
+RODOVIARIA  FRANCISCO SA - MG,FCS,45,Ponto de Controle - 12,100,25,false,false,true,false,-16.476542,-43.496237
+RODOVIARIA FORTALEZA - CE,FOR,8,Ponto de Controle - 12,0,80,false,false,true,false,-3.757727,-38.530662
+RODOVIARIA DE FORMOSA - GO,FORMOSA,31,Ponto de Controle - 12,0,50,false,false,true,false,-15.550783,-47.337516
+GARAGEM BARREIRAS BA,GAR BES,116,Ponto de Fechamento - 1,5,50,false,false,false,true,-12.133253,-45.015509
+GARAGEM BELO HORIZONTE,GAR BHZ,117,Ponto de Fechamento - 1,0,70,false,false,false,true,-19.907835,-43.898221
+GARAGEM COCOS BA,GAR COX,112,Ponto de Fechamento - 1,5,200,false,false,false,true,-14.177356,-44.530529
+GARAGEM DE ITACARAMBI MG,GAR ITA,137,Ponto de Fechamento - 1,0,200,false,false,false,true,-15.095656,-44.099347
+GARAGEM DE PALMAS,GAR PLM,84,Ponto de Fechamento - 1,0,50,false,false,false,true,-10.250427,-48.314161
+GARAGEM SALVADOR BA,GAR SALVAD,145,Ponto de Fechamento - 1,0,90,false,false,false,true,-12.977267,-38.46751
+GARAGEM TABOCAS DO B.VELHO,GAR TBCAS,111,Ponto de Fechamento - 1,5,40,false,false,false,true,-12.703413,-44.006736
+GARAGEM TERESINA PI,GAR THE,130,Ponto de Fechamento - 1,0,50,false,false,false,true,-5.131895,-42.789439
+GARAGEM DE UBERLANDIA,GAR UDI,136,Ponto de Fechamento - 1,0,30,false,false,false,true,-18.899537,-48.276685
+JARDIM INGA - GO / GARAGEM CATEDRAL,GARAGEM VP,463,Ponto de Controle - 12,20,135,false,false,false,true,-16.161608,-47.973377
+APARECIDA - GO - CHURRASCARIA DO GAUCHINHA,Gauchinha,135,Ponto de Controle - 12,0,50,false,false,false,false,-16.805169,-49.240004
+UBERLANDIA - MG / REST. GAUCHINHO,GAUCHINHO,457,Local Não Autorizado - 42,0,30,false,false,false,false,-18.870977,-48.256583
+GARAGEM VIACAO CETRO SALVADOR,GCETROSSA,65,Ponto de Fechamento - 1,20,200,false,false,false,true,-12.90853,-38.451571
+GRAAL CORAL PIRASSUNUNGA - SP,GCPIR,23,Ponto de Controle - 12,10,200,false,false,false,false,-22.002473,-47.445263
+RODOVIARIA DE GILBUES - PI,GLU,274,Ponto de Controle - 12,10,30,false,false,true,false,-9.841887,-45.34714
+RODOVIARIA DE GOIANINHA - RN,GOH,276,Ponto de Controle - 12,10,35,false,false,true,false,-6.269933,-35.209692
+RODOVIARIA DE GOIANA - PE,GOI,275,Ponto de Controle - 12,10,75,false,false,true,false,-7.559759,-35.010551
+GARAGEM MATRIZ BRASILIA - BSB,GPBSB,2,Ponto de Fechamento - 1,10,65,false,false,false,true,-15.820196,-47.954673
+GARAGEM DE GOIANIA - GO,GPGYN,39,Ponto de Fechamento - 1,0,50,false,false,false,true,-16.662461,-49.330095
+GARAGEM NATAL,GPNAT,67,Ponto de Fechamento - 1,20,200,false,false,false,true,-5.815859,-35.246111
+GARAGEM DE RECIFE - PE,GPREC,41,Ponto de Fechamento - 1,0,60,false,false,false,true,-8.072408,-34.98662
+GARAGEM DE SAO PAULO - SP,GPSAO,40,Ponto de Fechamento - 1,10,50,false,false,false,true,-23.515801,-46.700805
+GARAGEM DE GUARULHOS - SP,GR.GRS,427,Ponto de Fechamento - 1,0,230,false,false,false,true,-23.489609,-46.557237
+GRAAL ANTARERS UBERABA - MG,GRAAL-URA,26,Ponto de Controle - 12,10,100,false,false,false,false,-19.764209,-47.975107
+GRAAL 67 JUNDIAI SP,GRAAL67,152,Ponto de Controle - 12,10,75,false,false,false,false,-23.129223,-46.950277
+Grill Sul Churrascaria / Leme - SP,GRILLER,422,Ponto de Controle - 12,0,50,false,false,false,false,-22.188939,-47.399805
+RODOVIARIA DE GUARULHOS - SP,GRS,280,Ponto de Controle - 12,10,100,false,false,true,false,-23.448518,-46.496872
+RODOVIARIA DE GUARATINGUETA - SP,GTA,279,Ponto de Controle - 12,10,50,false,false,true,false,-22.819977,-45.19528
+GARAGEM FORTALEZA - CE,GTFOR,42,Ponto de Fechamento - 1,10,35,false,false,false,true,-3.740764,-38.53513
+GUARÁ - SP - REST.E GUARA,GUARA SP,148,Local Não Autorizado - 42,40,200,false,false,false,false,-20.45881,-47.836178
+GRUPO 2 IRMÃOS DIVISA GO/BA - GUARANI DE GOIAS,GUARANI,183,Ponto de Controle - 12,0,200,false,false,false,false,-14.010551,-46.214533
+RODOVIARIA DE GOVERNADOR VALADARES - MG,GVS,277,Ponto de Controle - 12,10,50,false,false,true,false,-18.859093,-41.946258
+RODOVIARIA DE GRAVATA - PE,GVT,278,Ponto de Controle - 12,10,50,false,false,true,false,-8.196288,-35.56899
+RODOVIARIA DE GOIANIA - GO,GYN,24,Ponto de Controle - 12,10,130,false,false,true,false,-16.659379,-49.259684
+RODOVIARIA DE HIDROLANDIA - GO,HDD,281,Ponto de Controle - 12,10,35,false,false,true,false,-16.961573,-49.230347
+RODOVIARIA DE IBIPEBA - BA,IBB,282,Ponto de Controle - 12,10,50,false,false,true,false,-11.644014,-42.009144
+RODOVIARIA IBOTIRAMA -BA,IBM,58,Ponto de Controle - 12,10,50,false,false,false,false,-12.181139,-43.207854
+RODOVIARIA DE ICO - CE,ICO,283,Ponto de Controle - 12,10,50,false,false,true,false,-6.406143,-38.863804
+RODOVIARIA  ITABERABA - BA,IEB,7,Ponto de Controle - 12,10,20,false,false,true,false,-12.531134,-40.303805
+RODOVIARIA DE IGARAPAVA - SP,IGA,284,Ponto de Controle - 12,10,50,false,false,true,false,-20.043472,-47.762685
+RODOVIARIA DE IPATINGA - MG,IIG,287,Ponto de Controle - 12,10,50,false,false,true,false,-19.480711,-42.523761
+RODOVIARIA DE ITAPORANGA DAJUDA,IJD,291,Ponto de Controle - 12,10,50,false,false,true,false,-10.997016,-37.30649
+RODOVIARIA DE INHAPIM - MG,INP,286,Ponto de Controle - 12,10,50,false,false,true,false,-19.549103,-42.123519
+RODOVIARIA DE ITAOBIM - MG,IOM,290,Ponto de Controle - 12,10,25,false,false,true,false,-16.561492,-41.503894
+RODOVIARIA DE ITABORAI - RJ,IOY,289,Ponto de Controle - 12,10,50,false,false,true,false,-22.744092,-42.856592
+RODOVIARIA DE IRECE - BA,IRE,288,Ponto de Controle - 12,10,45,false,false,true,false,-11.302807,-41.848562
+RODOVIARIA DE IGARASSU - PE,ISS,285,Ponto de Controle - 12,10,95,false,false,true,false,-7.833059,-34.911917
+PONTO DE APOIO ITAPEMIRIM - ANAPOLIS GO,ITAPEMIRIM,168,Local Não Autorizado - 42,0,110,false,false,false,false,-16.355302,-48.927469
+RODOVIARIA DE ITAUIERA PI,ITAUEIRA,464,Ponto de Controle - 12,10,35,false,false,true,false,-7.603104,-43.02721
+RODOVIARIA DE ITUMBIARA - GO,ITM,292,Ponto de Controle - 12,10,95,false,false,true,false,-18.402974,-49.210994
+RODOVIARIA DE ITUVERAVA - SP,ITV,293,Ponto de Controle - 12,10,38,false,false,true,false,-20.339397,-47.776046
+JABOATÃO DOS GUARARAPES - PE,JABOATAO,466,Ponto de Controle - 12,10,80,false,false,false,false,-8.094693,-35.045021
+RODOVIARIA DE JACOBINA-BA,JACOBINA,166,Ponto de Controle - 12,0,60,false,false,true,false,-11.184665,-40.520863
+RODOVIARIA DE JAGUAQUARA - BA,JGQ,294,Ponto de Controle - 12,10,50,false,false,true,false,-13.526083,-39.971393
+RODOVIARIA DE JOAO MONLEVADE - MG,JML,296,Ponto de Controle - 12,10,50,false,false,true,false,-19.840214,-43.196541
+PORÇÕES - BA - POST. JORGINHO,JORGINHO,413,Local Não Autorizado - 42,10,50,false,false,false,false,-14.56803,-40.419272
+RODOVIARIA JOÃO PESSOA- PB,JPA,6,Ponto de Controle - 12,10,100,false,false,true,false,-7.118322,-34.891108
+RODOVIARIA DE JARAGUA - GO,JRG,295,Ponto de Controle - 12,10,50,false,false,true,false,-15.75665,-49.33003
+RODOVIARIA DE JUAZEIRO DO NORTE - CE,JUAZEIRO,157,Ponto de Controle - 12,0,50,false,false,true,false,-7.22653,-39.322537
+RODOVIARIA DE JUAZEIRO-BA,JUAZEIROBA,162,Ponto de Controle - 12,0,50,false,false,true,false,-9.437257,-40.496876
+RODOVIARIA DE JUNDIAI-SP,JUNDIAI,172,Ponto de Controle - 12,0,65,false,false,true,false,-23.207289,-46.895503
+LEME - SP - CHURR KAMBUI,KAMBUI,477,Local Não Autorizado - 42,0,50,false,false,false,false,-22.134075,-47.409577
+ORLANDIA - SP / Kambui Restaurante,Kambui Res,389,Ponto de Controle - 12,10,150,false,false,false,false,-20.698716,-47.893183
+CHURRASCARIA GAUCHA LABRESCIA  PATOS DE MINAS - MG,LABRESCIA,34,Ponto de Controle - 12,10,20,false,false,false,false,-18.641958,-46.497602
+RODOVIARIA DE LAJE - BA,LAJ,297,Ponto de Controle - 12,10,12,false,false,true,false,-13.180334,-39.417111
+RODOVIARIA DE LEME-SP,LEME,171,Ponto de Controle - 12,0,50,false,false,true,false,-22.189869,-47.396082
+RODOVIARIA DE LAURO DE FREITAS - BA,LFS,298,Ponto de Controle - 12,10,50,false,false,true,false,-12.897531,-38.333006
+RODOVIARIA DE LORENA - SP,LNA,301,Ponto de Controle - 12,10,50,false,false,true,false,-22.740256,-45.119554
+RODOVIARIA DE LEOPOLDINA - MG,LPD,299,Ponto de Controle - 12,10,60,false,false,true,false,-21.532174,-42.634679
+RODOVIARIA DE LIMEIRA - SP,LRA,300,Ponto de Controle - 12,10,50,false,false,true,false,-22.565034,-47.398133
+RODOVIARIA DE LUIS EDUARDO MAGALHAES,LUIS E MAG,68,Ponto de Controle - 12,30,90,false,false,true,false,-12.095564,-45.810791
+RODOVIARIA DE LUZIANIA - GO,LZA,302,Ponto de Controle - 12,10,50,false,false,true,false,-16.25885,-47.95945
+RODOVIARIA DE MISSAO VELHA - CE,MAH,311,Ponto de Controle - 12,10,50,false,false,true,false,-7.249475,-39.141552
+REST. & LANCHONETE DA MAINHA / CATALÃO - GO,MAINHA,436,Local Não Autorizado - 42,0,25,false,false,false,false,-18.243316,-47.991465
+MARCOPLO BRASILIA,MARCPLO BS,415,Ponto de Fechamento - 1,30,100,false,false,false,false,-15.869239,-48.034795
+RODOVIARIA DE MAIRIPORA - SP,MARI,304,Ponto de Controle - 12,10,50,false,false,true,false,-23.31679,-46.584
+RESTAURANTE MARISTELA - ITAUEIRA PI,MARISTELA,126,Ponto de Controle - 12,0,20,false,false,false,false,-7.603206,-43.027698
+MARZAGAO - GO - Postos Shell,MARZAGAO,438,Local Não Autorizado - 42,0,50,false,false,false,false,-17.969095,-48.641627
+POSTO MATINHA UBERLANDIA,MATINH_UDI,70,Ponto de Controle - 12,10,25,false,false,false,false,-18.898808,-48.243357
+RODOVIARIA DE MACAIBA - RN,MCI,303,Ponto de Controle - 12,10,50,false,false,true,false,-5.859337,-35.349349
+RODOVIARIA DE MACEIO - AL,MCZ,17,Ponto de Controle - 12,10,90,false,false,true,false,-9.645924,-35.725563
+RODOVIARIA DE MEDINA - MG,MDA,307,Ponto de Controle - 12,10,50,false,false,true,false,-16.23218,-41.476426
+VITORIA DA CONQUISTA - BA /CHURR. MEGA GRILL,MEGA GRILL,382,Ponto de Controle - 12,10,80,false,false,false,false,-14.883109,-40.85915
+RODOVIARIA MESSEJANA CE,MESS,10,Ponto de Controle - 12,10,60,false,false,false,false,-3.831219,-38.500679
+RODOVIARIA DE MIGUEL CALMON - BA,MGN,308,Ponto de Controle - 12,10,50,false,false,true,false,-11.425775,-40.592949
+RODOVIARIA DE MILAGRES - CE,MGS,310,Ponto de Controle - 12,10,50,false,false,true,false,-7.311624,-38.937746
+RODOVIARIA DE MILAGRES - BA /  R S SILVA,MLG,309,Ponto de Controle - 12,10,50,false,false,true,false,-12.878656,-39.857324
+RODOVIARIA DE MAMANGUAPE - PB,MME,305,Ponto de Controle - 12,10,50,false,false,true,false,-6.836687,-35.123022
+RODOVIARIA DE MANOEL EMIDIO - PI,MMI,306,Ponto de Controle - 12,10,50,false,false,true,false,-8.00682,-43.872918
+RODOVIARIA MONTES CLAROS - MG,MOCC,43,Ponto de Controle - 12,10,50,false,false,true,false,-16.742924,-43.868341
+RODOVIARIA DE MORRINHOS - GO,MOR,312,Ponto de Controle - 12,10,50,false,false,true,false,-17.734389,-49.101451
+RODOVIARIA MOSSORO - RN,MOSSORO,12,Ponto de Controle - 12,10,50,false,false,true,false,-5.185308,-37.373808
+RODOVIARIA DE MURIAE - MG,MRE,313,Ponto de Controle - 12,10,50,false,false,true,false,-21.128382,-42.370014
+RODOVIARIA DE MURICI - AL,MRI,314,Ponto de Controle - 12,10,50,false,false,true,false,-9.31258,-35.934361
+QUIPAPÁ - PE - POST. PETROBRAS / CHURR. NA BRASA,NA BRASA,402,Local Não Autorizado - 42,10,50,false,false,false,false,-9.898918,-36.440063
+RODOVIARIA DE NATAL - RN,NAT,3,Ponto de Controle - 12,10,115,false,false,true,false,-5.819507,-35.23514
+RODOVIARIA DE NOVA IGUACU - RJ,NIU,318,Ponto de Controle - 12,10,50,false,false,true,false,-22.757408,-43.455855
+RODOVIARIA DE NOVA FRIBURGO - RJ,NOF,317,Ponto de Controle - 12,10,50,false,false,true,false,-22.308355,-42.522535
+Restaurante & Lanchonete da Nona - ORLANDIA - SP,Nona 3,440,Local Não Autorizado - 42,0,50,false,false,false,false,-20.682077,-47.887633
+RIACHÃO DAS NEVES - BA / REST. NOSSO RESTAURENTE,NOSSO REST,455,Local Não Autorizado - 42,5,35,false,false,false,false,-11.745068,-44.900318
+RODOVIARIA DE NITEROI - RJ,NRI,315,Ponto de Controle - 12,10,50,false,false,true,false,-22.885286,-43.121766
+RODOVIARIA DE NOSSA SENHORA DO SOCORRO - SE,NRO,316,Ponto de Controle - 12,10,50,false,false,true,false,-10.847426,-37.064556
+OFICINA SILVA EM TRINDADE GOIAS,OF. SILVA,460,Ponto de Fechamento - 1,30,100,false,false,false,false,-16.631531,-49.418752
+GRAAL OLIVEIRA - OLIVEIRA MG,OLIVEIRA,174,Ponto de Controle - 12,0,200,false,false,false,false,-20.691032,-44.74541
+RODOVIARIA DE OLIVEIRA - MG,OLV,319,Ponto de Controle - 12,10,50,false,false,true,false,-20.696669,-44.82307
+RODOVIARIA DE ORLANDIA - SP,ORL,320,Ponto de Controle - 12,10,50,false,false,true,false,-20.72708,-47.88459
+RODOVIARIA DE OURICURI - PE,OUI,321,Ponto de Controle - 12,10,50,false,false,true,false,-7.880217,-40.077923
+AMELIA RODRIGUES - BA - POSTO SÃO GONÇALO4,P.GONCALO4,386,Ponto de Controle - 12,10,30,false,false,false,false,-12.339437,-38.845468
+CHURRASCARIA GARROTE CRISTALINA,PA-GARROTE,63,Ponto de Controle - 12,10,60,false,false,false,true,-16.74138,-47.614512
+RESTAURANTE RECANTUS CRISTALINA,PA-RECANTU,75,Ponto de Controle - 12,10,35,false,false,false,false,-16.566811,-47.790907
+PANELAS - PE / REST.PAIS & FILHOS,PAIS&FILHO,433,Local Não Autorizado - 42,5,50,false,false,false,false,-8.657535,-36.015115
+RODOVIARIA DE PARACATU-MG,PARACATU,74,Ponto de Controle - 12,10,25,false,false,true,false,-17.217375,-46.881648
+REST CHURRASC PARAIBAO - PIRAPORA MG,PARAIBAO,147,Ponto de Controle - 12,0,200,false,false,false,false,-17.346276,-44.904474
+POSTO PATAGONIA 2 IRMAOS/ROD.  - BARRO - CE,PATAGONIA,156,Ponto de Controle - 12,0,80,false,false,true,false,-7.181624,-38.781568
+RODOVIARIA PAU DOS FERROS - RN,PAU FERRO,154,Ponto de Controle - 12,0,25,false,false,true,false,-6.121196,-38.205428
+RODOVIARIA DE POMBAL - PB,PBL,335,Ponto de Controle - 12,10,50,false,false,true,false,-6.766075,-37.794399
+RODOVIARIA DE LUIZILANDIA-MG,PC LZA,82,Ponto de Controle - 12,5,200,false,false,true,false,-16.15442,-44.537842
+POSTO CHIMARRAO 2 MOSSORO - RN,PCMOS,13,Ponto de Controle - 12,10,20,false,false,false,false,-5.225592,-37.33243
+RODOVIARIA DE PIRACURUCA - PI,PCR,329,Ponto de Controle - 12,10,50,false,false,true,false,-3.93522,-41.710835
+RODOVIARIA DE PADRE PARAISO - MG,PDP,322,Ponto de Controle - 12,10,50,false,false,true,false,-17.078029,-41.486112
+RODOVIARIA DE PERDOES - MG,PDS,328,Ponto de Controle - 12,10,50,false,false,true,false,-21.104838,-45.091088
+RODOVIARIA DE PANELAS - PE,PES,323,Ponto de Controle - 12,10,50,false,false,true,false,-8.663755,-36.009186
+CAMPIONORTE - GO / POSTO PETROBRAS,PETROBRAS,187,Local Não Autorizado - 42,5,30,false,false,false,false,-14.314727,-49.150582
+RODOVIARIA DE PETROLINA-PE,PETROLINA,161,Ponto de Controle - 12,0,50,false,false,true,false,-9.392158,-40.508973
+RODOVIARIA DE PARNAIBA - PI,PHB,325,Ponto de Controle - 12,10,50,false,false,true,false,-2.928134,-41.753214
+REST. PICA PAU - STA CRUZ DA CONCEIÇÃO,PICA PAU,177,Ponto de Controle - 12,0,100,false,false,false,false,-22.079404,-47.423381
+POSTO PICA PAU,PICA PAU2,414,Ponto de Controle - 12,10,60,false,false,false,false,-22.150184,-47.400529
+CHURRASCARIA PORTAL DO SOL ITABERABA - BA,PIEB,56,Ponto de Controle - 12,10,30,false,false,true,false,-12.510607,-40.310588
+RODOVIARIA DE PARNAMIRIM - PE,PIM,326,Ponto de Controle - 12,10,50,false,false,true,false,-8.090413,-39.57572
+RODOVIARIA DE PIRIPIRI - PI,PIP,330,Ponto de Controle - 12,10,50,false,false,true,false,-4.27266,-41.770846
+RODOVIARIA DE PIRASSUNUNGA-SP,PIRASSUNUN,170,Ponto de Controle - 12,0,200,false,false,true,false,-21.996264,-47.43103
+RODOVIARIA DE PARAISO DO TOCANTINS - TO,PIT,324,Ponto de Controle - 12,10,50,false,false,true,false,-10.16887,-48.8844
+RODOVIARIA DE POJUCA - BA,PJC,334,Ponto de Controle - 12,10,50,false,false,true,false,-12.427438,-38.327629
+RODOVIARIA DE PLANALTO - BA,PLT,333,Ponto de Controle - 12,10,100,false,false,true,false,-14.671935,-40.481003
+POSTO MAGNOLIA,PO MAGNOLI,435,Local Não Autorizado - 42,0,50,false,false,false,false,-5.124736,-42.797605
+RODOVIARIA POÇOES - BA,POCOES,53,Ponto de Controle - 12,10,30,false,false,true,false,-14.524474,-40.376474
+POSTO ROSARIO DIVISA,PORTO ROSA,106,Ponto de Controle - 12,5,110,false,false,false,false,-13.953017,-46.198667
+POSTO RIBEIRAO -SP,POS RIBEIR,430,Local Não Autorizado - 42,0,50,false,false,false,false,-21.103042,-47.788333
+SÃO DESIDÉRIO - BA / POSTO PETOBRAS,POST PRA,462,Local Não Autorizado - 42,0,50,false,false,false,false,-13.011663,-45.99894
+JACOBINA - BA / POSTO SHELL,POST.SHEL,461,Local Não Autorizado - 42,0,50,false,false,false,false,-11.157802,-40.561972
+POSTO 020 - LUIS EDUARDO MAGALHAES - BA,POSTO 020,468,Local Não Autorizado - 42,0,70,false,false,false,false,-12.139868,-45.816985
+POSTO PRECISO,POSTO COR,478,Ponto de Controle - 12,0,50,false,false,false,false,-13.35131,-44.642268
+POSTO REVISE - NATAL RN,POSTO REVI,473,Ponto de Controle - 12,10,50,false,false,false,false,-5.822875,-35.229972
+PORÇÕES - BA - POSTO SHELL,POSTO SHEL,385,Local Não Autorizado - 42,10,80,false,false,false,false,-14.527419,-40.378903
+PORÇÕES - BA - POSTO UNIÃO,POSTO UNIÃ,69,Local Não Autorizado - 42,80,200,false,false,false,false,-16.26296,-42.583636
+JEQUIÉ - BA - POSTO POTIGUAR,POTIGUAR,381,Ponto de Controle - 12,10,50,false,false,false,false,-13.860441,-40.112577
+RODOVIARIA DE POTIM - SP,POTM,339,Ponto de Controle - 12,10,50,false,false,true,false,-22.842467,-45.230899
+RODOVIARIA DE PONTO DOS VOLANTES - MG,POVS,336,Ponto de Controle - 12,10,50,false,false,true,false,-16.722902,-41.504767
+POSTO PICHILAU PIONEIRO-AL,PPPMS,22,Ponto de Controle - 12,10,100,false,false,false,false,-9.409356,-35.839622
+RESTAURANTE POSTO PRESIDENTE,PRES PGT,97,Ponto de Controle - 12,0,70,false,false,false,false,-13.451589,-49.136058
+RODOVIARIA DE PIRITIBA - BA,PRI,331,Ponto de Controle - 12,10,50,false,false,true,false,-11.73369,-40.559717
+RODOVIARIA DE POUSO ALEGRE - MG,PSA,340,Ponto de Controle - 12,10,50,false,false,true,false,-22.23658,-45.935645
+POSTO JAVI MUQUEM DE SAO FRANCISCO - BA,PSJ,52,Ponto de Controle - 12,10,50,false,false,false,false,-12.199688,-43.676495
+SEABRA - BA / POSTO GUARANI,PST. GUARA,471,Local Não Autorizado - 42,0,50,false,false,false,false,-12.418748,-41.842225
+CRISTIANOPOLIS - GO / POSTO TOTAL ENERGIES,PT TOTAL E,456,Local Não Autorizado - 42,5,45,false,false,false,false,-17.19159,-48.715786
+RODOVIARIA DE PORTO FERREIRA - SP,PTF,337,Ponto de Controle - 12,10,50,false,false,true,false,-21.85789,-47.487549
+RODOVIARIA PATROCIONIO - MG,PTRO,33,Ponto de Controle - 12,10,40,false,false,true,false,-18.928163,-47.000679
+RODOVIARIA DE PLANALTINA - GO,PWL,332,Ponto de Controle - 12,10,50,false,false,true,false,-15.434881,-47.610828
+RODOVIARIA DE PARNAMIRIM - RN,PWM,327,Ponto de Controle - 12,10,50,false,false,true,false,-5.889936,-35.192387
+RODOVIARIA DE QUIPAPA - PE,QPA,342,Ponto de Controle - 12,10,50,false,false,true,false,-8.826607,-36.011699
+RODOVIARIA DE ALVORADA DO NORTE - GO,RD-AVN,36,Ponto de Controle - 12,10,50,false,false,true,false,-14.487983,-46.497139
+PROPRIA - SE / ROD. CHURR. GRUPO DOIS IRMAOS,RD. PPI,18,Ponto de Controle - 12,10,30,false,false,false,false,-10.228437,-36.837949
+RODOVIARIA RECIFE-PE,REC,9,Ponto de Controle - 12,10,110,false,false,true,false,-8.064496,-34.981926
+REST. REDENCAO - REDENCAO DO GURGUEIA - PI,REDENCAO,439,Local Não Autorizado - 42,0,50,false,false,false,false,-9.46315,-44.598658
+RODOVIARIA DE REDENCAO DO GURGUEIA - PI,REDG,343,Ponto de Controle - 12,10,50,false,false,true,false,-9.490017,-44.585733
+RODOVIARIA DE RESENDE - RJ,RES,344,Ponto de Controle - 12,10,50,false,false,true,false,-22.4598,-44.43931
+POSTO E RESTAURANTE JEQUITAI,RES JEQUIT,432,Local Não Autorizado - 42,0,100,false,false,false,false,-17.194517,-44.433295
+RESTAURANTE PAIS E FILHOS - PE,RES PAIS,431,Local Não Autorizado - 42,0,30,false,false,false,false,-8.657539,-36.014972
+RESTAURANTE E LANHONETE SANTA RITA,RES S.RITA,434,Local Não Autorizado - 42,0,60,false,false,false,false,-20.643783,-47.880012
+CHURRASCARIA ESTRELA DO SUL 1,RESJARAGUA,99,Ponto de Controle - 12,5,50,false,false,false,false,-15.75892,-49.314092
+LUIZILANDIA - MG / RESTAURANTE E HOTEL 040,REST 040,123,Ponto de Controle - 12,0,50,false,false,true,false,-17.985218,-45.609892
+RESTAURANTE BOM LUGAR - FLORIANO PI,REST BLG,131,Ponto de Controle - 12,0,110,false,false,false,true,-6.789746,-42.987237
+REST CHURRASCARIA BELA VISTA,REST CBLVT,98,Ponto de Controle - 12,0,40,false,false,false,false,-14.476736,-49.155632
+RESTAURANTE CABANA DO MAQUINE CAETANOPOLIS MG,REST MAQNE,119,Ponto de Controle - 12,0,50,false,false,true,false,-19.30194,-44.378469
+RESTAURANTE MENEGON - ARAGUARI MG,REST MENEG,144,Ponto de Controle - 12,0,50,false,false,false,false,-18.680533,-48.179424
+REST RARA COXINHA - PEDRA DE FOGO PB,REST RARA,140,Ponto de Controle - 12,0,50,false,false,false,false,-7.395297,-34.956333
+REST E POUSADA SEABRA,REST SEABR,142,Ponto de Controle - 12,0,40,false,false,false,false,-12.427702,-41.772935
+RESTAURANTE VILA SAO VICENTE - SANTO ESTEVAO,REST SVIC,141,Ponto de Controle - 12,0,70,false,false,false,false,-12.444414,-39.236825
+JEQUIÉ - BA - REST. COPERTAI,REST.COPER,205,Local Não Autorizado - 42,10,50,false,false,false,false,-13.857024,-40.114005
+CHURRASCARIA DO GAUCHO - ALIANÇA TO,REST.GAUCH,103,Ponto de Controle - 12,5,70,false,false,false,false,-11.311936,-48.942794
+RESTAURANTE OASIS CAETANOPOLIS MG,REST.OASIS,120,Ponto de Controle - 12,0,50,false,false,false,false,-19.300526,-44.379322
+SANTA MARIA DA VITOR-BA / REST. E LANCHONETE PRIME,REST.PRIME,206,Ponto de Controle - 12,10,50,false,false,false,false,-13.387384,-44.204838
+PATOS DE MINAS - MG - REST. RIVALCINO,REST.RIVAL,204,Local Não Autorizado - 42,10,25,false,false,false,false,-18.631488,-46.430592
+RODOVIARIA RIBEIRAO PRETO - SP,RIB,25,Ponto de Controle - 12,10,110,false,false,true,false,-21.173927,-47.814647
+RODOVIARIA DE RIO DE JANEIRO - RJ,RIO,346,Ponto de Controle - 12,10,100,false,false,true,false,-22.89933,-43.20876
+RODOVIARIA DE RIALMA - GO,RMA,345,Ponto de Controle - 12,10,50,false,false,true,false,-15.316149,-49.581807
+RODOVIARIA DE PLANALTINA - DF,ROD,101,Ponto de Controle - 12,0,70,false,false,true,false,-15.618378,-47.654241
+RODOVIARIA DE CAMBUI - MG,ROD - CBI,244,Ponto de Controle - 12,10,35,false,false,true,false,-22.607471,-46.058056
+RODOVIARIA DE TRES MARIAS,ROD 3MAR,122,Ponto de Controle - 12,0,50,false,false,true,false,-18.202345,-45.232837
+RODOVIARIA DE SETE LAGOAS,ROD 7LG,118,Ponto de Controle - 12,0,70,false,false,true,false,-19.467503,-44.244154
+RODOVIARIA DE ALIANÇA TO,ROD ALIA,93,Ponto de Controle - 12,5,50,false,false,true,false,-11.305383,-48.940079
+RODOVIARIA DE ARAPIRACA-AL,ROD ARAPIR,146,Ponto de Controle - 12,0,70,false,false,true,false,-9.758106,-36.645734
+RODOVIARIA DE BELO HORIZONTE - MG,ROD BHZ,83,Ponto de Controle - 12,0,90,false,false,true,false,-19.913862,-43.941897
+RODOVIARIA DE CANGUARETAMA-RN,ROD CANG,139,Ponto de Controle - 12,0,50,false,false,true,false,-6.380509,-35.128309
+RODOVIARIA DE COCOS BA,ROD COX,113,Ponto de Controle - 12,5,30,false,false,true,false,-14.182152,-44.537091
+RODOVIARIA DE CAMPINORTE,ROD CPNT,87,Ponto de Controle - 12,5,60,false,false,true,false,-14.319642,-49.155332
+RODOVIARIA DE CORIBE BA,ROD CRB,114,Ponto de Controle - 12,5,50,false,false,true,false,-13.821786,-44.47043
+RODOVIARIA DE CORRENTE-PI,ROD CRT,132,Ponto de Controle - 12,0,50,false,false,true,false,-10.432319,-45.162335
+RODOVIARIA DE CORRENTINA BA,ROD CRTNA,107,Ponto de Controle - 12,5,15,false,false,true,false,-13.34606,-44.63827
+RODOVIARIA DE CURVELO MG,ROD CURV,121,Ponto de Controle - 12,0,70,false,false,true,false,-18.760699,-44.427402
+RODOVIARIA DE FIGUEIROPOLIS,ROD FIG,91,Ponto de Controle - 12,5,50,false,false,true,false,-12.139063,-49.170567
+RODOVIARIA FLORIANO PI,ROD FLOR,127,Ponto de Controle - 12,0,70,false,false,true,false,-6.78665,-42.992153
+RODOVIARIA FORMOSA DO RIO PRETO BA,ROD FPRETO,134,Ponto de Controle - 12,0,50,false,false,true,false,-11.047733,-45.204948
+RODOVIARIA FEIRA DE SANTANA - BA,ROD FST,27,Ponto de Controle - 12,10,70,false,false,true,false,-12.259505,-38.958
+RODOVIARIA DE GURUPI,ROD GRP,92,Ponto de Controle - 12,5,50,false,false,true,false,-11.736492,-49.068751
+RODOVIARIA DO GUARÁ,ROD GUA,186,Ponto de Controle - 12,5,80,false,false,false,false,-15.835045,-47.978958
+RODOVIARIA DE ITACARAMBI MG,ROD ITC,72,Ponto de Controle - 12,0,65,false,false,true,false,-15.104269,-44.095356
+RODOVIARIA DE JABORANDI BA,ROD JBRD,115,Ponto de Controle - 12,5,50,false,false,true,false,-13.616143,-44.478267
+RODOVIARIA DE JANUARIA  - MG,ROD JNA,77,Ponto de Controle - 12,5,50,false,false,true,false,-15.478391,-44.368789
+RODOVIARIA DE JOAO PINHEIRO MG,ROD JPIN,138,Ponto de Controle - 12,0,50,false,false,true,false,-17.740824,-46.175876
+RODOVIARIA DE LONTRA - MG,ROD LOT,79,Ponto de Controle - 12,5,50,false,false,true,false,-15.904598,-44.301403
+RODOVIARIA MORRO DO CHAPEU - BA,ROD MDC,185,Ponto de Controle - 12,5,50,false,false,true,false,-11.548633,-41.159465
+RODOVIARIA DE MIRABELA-MG,ROD MIR,81,Ponto de Controle - 12,5,50,false,false,true,false,-16.25553,-44.165338
+RODOVIARIA PATOS DE MINAS - MG,ROD PATOS,35,Ponto de Controle - 12,10,50,false,false,true,false,-18.60429,-46.520074
+RODOVIARIA DE PORANGATU,ROD PGTU,88,Ponto de Controle - 12,5,50,false,false,true,false,-13.445386,-49.138409
+RODOVIARIA DE PALMAS,ROD PLM,96,Ponto de Controle - 12,5,70,false,false,true,false,-10.256785,-48.312936
+RODOVIARIA DE PEDRAS DE MARIA DA CRUZ - MG,ROD PMC,78,Ponto de Controle - 12,5,50,false,false,true,false,-15.60656,-44.391923
+RODOVIARIA DE PORTO NACIONAL,ROD PNAC,95,Ponto de Controle - 12,5,60,false,false,true,false,-10.728438,-48.40905
+RODOVIARIA DE PALMARES-PE,ROD PRE,176,Ponto de Controle - 12,5,50,false,false,true,false,-8.681554,-35.584712
+RODOVIARIA PIRAPORA - MG,ROD PRR,15,Ponto de Controle - 12,10,20,false,false,false,false,-17.347803,-44.944752
+RODOVIARIA RIACHAO DAS NEVES BA,ROD RCHAO,133,Ponto de Controle - 12,0,50,false,false,true,false,-11.75305,-44.913774
+RODOVIARIA DE REGENERAÇÃO PI,ROD REGEN,128,Ponto de Controle - 12,0,50,false,false,true,false,-6.228901,-42.686139
+RODOVIARIA DE SANTANA BA,ROD SANTNA,109,Ponto de Controle - 12,5,50,false,false,true,false,-12.982114,-44.056376
+RODOVIARIA DE STA MARIA DA VITORIA,ROD SMVT,108,Ponto de Controle - 12,5,50,false,false,true,false,-13.387351,-44.205785
+RODOVIARIA DE SOBRADINHO - DF,ROD SOB,102,Ponto de Controle - 12,0,70,false,false,true,false,-15.64994,-47.786154
+RODOVIARIA DE TABOCAS DO BREJO BA,ROD TABOC,110,Ponto de Controle - 12,5,50,false,false,true,false,-12.704462,-44.0085
+RODOVIARIA DE TERESINA,ROD THE,129,Ponto de Controle - 12,0,70,false,false,true,false,-5.119211,-42.784594
+RODOVIARIA DE TALISMA,ROD TLM,89,Ponto de Controle - 12,5,50,false,false,true,false,-12.80493,-49.095791
+RODOVIARIA DE URUAÇU,ROD URU,86,Ponto de Controle - 12,5,50,false,false,true,false,-14.533076,-49.150562
+RODOVIARIA DE VALPARAISO GO,ROD VALP,85,Ponto de Controle - 12,5,70,false,false,true,false,-16.075948,-47.986241
+RODOVIARIA DE ANAPOLIS - GO,"ROD,ANS",28,Ponto de Controle - 12,0,120,false,false,true,false,-16.322828,-48.946161
+RODOVIARIA DE OSASCO-SP,ROD-OSASCO,76,Ponto de Controle - 12,5,100,false,false,true,false,-23.527556,-46.77566
+SALVADOR - BA / NOVO TERMINAL,ROD. SSA,480,Ponto de Controle - 12,0,90,false,false,true,false,-12.897428,-38.444717
+RODOVIARIA DE TRINDADE,ROD.TDD,104,Ponto de Controle - 12,5,70,false,false,true,false,-16.651002,-49.489685
+RODOPOSTO - PALMAS TO,RODOPOSTO,178,Ponto de Controle - 12,0,50,false,false,false,false,-10.248132,-48.311496
+CAMPINAS - SP / ROUTE CAFE,ROUTE CAFE,390,Local Não Autorizado - 42,20,90,false,false,false,false,-23.031073,-47.071153
+PONTES DE APOIO R S SILVA JEQUIE-BA,RS SILVA,55,Ponto de Controle - 12,10,1,false,false,false,false,-12.878598,-39.856069
+RODOVIARIA JEQUIE - BA,RSSJEQ,54,Ponto de Controle - 12,10,50,false,false,true,false,-13.86124,-40.089063
+RODOVIARIA DE SENHOR DO BONFIM-BA,S.BONFIM,164,Ponto de Controle - 12,0,50,false,false,true,false,-10.448483,-40.185774
+AMELIA RODRIGUES - BA - POSTO SÃO GONÇALO,S.GONÇALO1,424,Ponto de Controle - 12,0,50,false,false,false,false,-12.339847,-38.847642
+RODOVIARIA DE SANTO ANDRE - SP,SAD,348,Ponto de Controle - 12,10,100,false,false,true,false,-23.639087,-46.537991
+RODOVIARIA DE SALGUEIRO PE,SALGUEIRO,160,Ponto de Controle - 12,0,80,false,false,true,false,-8.071627,-39.134952
+CHURRASCARIA COMETAO SANTA CRUZ DE SALINAS - MG,SANTA CRUZ,47,Ponto de Controle - 12,10,50,false,false,false,false,-15.982422,-41.829773
+RODOVIÁRIA SAO PAULO - SP,SAO,16,Ponto de Controle - 12,10,200,false,false,true,false,-23.516648,-46.623505
+AGRESTINA - PE / CHURR. SÃO JOÃO,SÃO JOÃO,458,Local Não Autorizado - 42,0,50,false,false,false,false,-8.437717,-35.956233
+OLIVEIRA DOS BREJINHOS - BA - CHURR. SÃO PEDRO,SÃO PEDRO,454,Local Não Autorizado - 42,5,15,false,false,false,false,-12.255138,-42.756302
+RODOVIARIA DE SAO BERNARDO DO CAMPO - SP,SBE,350,Ponto de Controle - 12,10,50,false,false,true,false,-23.727523,-46.574519
+RODOVIARIA DE SAO CAETANO DO SUL - SP,SCN,351,Ponto de Controle - 12,10,50,false,false,true,false,-23.610025,-46.571642
+RODOVIARIA DE SERRA DOURADA - BA,SDW,358,Ponto de Controle - 12,10,50,false,false,true,false,-12.753297,-43.950602
+RODOVIARIA  SEABRA - BA,SEB,57,Ponto de Controle - 12,10,30,false,false,true,false,-12.429857,-41.771263
+RODOVIARIA DE SERRINHA - BA,SEH,359,Ponto de Controle - 12,10,100,false,false,true,false,-11.669584,-39.004587
+GUARANI  DE GOIAIS - GO - SERTEÃZINHO,SERTEÃZINH,384,Local Não Autorizado - 42,10,30,false,false,false,false,-14.052852,-46.276137
+RODOVIARIA DE SANTO ESTEVAO - BA,SEV,349,Ponto de Controle - 12,10,50,false,false,true,false,-12.443616,-39.24363
+RODOVIARIA DE SAO JOSE DE MIPIBU - RN,SII,354,Ponto de Controle - 12,10,50,false,false,true,false,-6.072266,-35.236407
+RODOVIARIA DE SUMIDOURO - RJ,SIU,361,Ponto de Controle - 12,10,50,false,false,true,false,-22.048399,-42.674233
+RODOVIARIA DE SAO JOAQUIM DA BARRA - SP,SJB,353,Ponto de Controle - 12,10,50,false,false,true,false,-20.576576,-47.869063
+RODOVIARIA DE SAO JOSE DOS CAMPOS - SP,SJK,356,Ponto de Controle - 12,10,75,false,false,true,false,-23.19357,-45.87814
+RODOVIARIA DE SAO JOSE DO SERIDO - RN,SKS,355,Ponto de Controle - 12,10,50,false,false,true,false,-6.450727,-36.876576
+RODOVIARIA SALINAS - MG,SLN,46,Ponto de Controle - 12,10,30,false,false,true,false,-16.165196,-42.310526
+RODOVIARIA DE SAO MIGUEL DOS CAMPOS - AL,SMM,357,Ponto de Controle - 12,10,50,false,false,true,false,-9.779429,-36.105484
+RODOVIARIA DE SANTA CRUZ - RN,SNZ,347,Ponto de Controle - 12,10,50,false,false,true,false,-6.223018,-36.019915
+RODOVIARIA DE SALVADOR - BA,SSA,5,Ponto de Controle - 12,10,85,false,false,false,false,-12.977645,-38.465856
+CHURRASCARIA STILLUS 2 FORMOSA DO RIO PRETO,STILLUS 2,124,Ponto de Controle - 12,0,40,false,false,true,false,-11.048546,-45.207938
+RODOVIARIA DE SOUSA - PB,SZA,360,Ponto de Controle - 12,10,50,false,false,true,false,-6.764882,-38.22044
+TABULEIRO DA BAHIANA VITORIA DA CONQUISTA,TABUL,66,Ponto de Controle - 12,20,100,false,false,true,false,-15.122237,-41.032715
+RODOVIARIA DE TAGUATINGA - BSB,TAG,29,Ponto de Controle - 12,0,70,false,false,true,false,-15.835736,-48.082625
+RODOVIARIA DE TAUBATE - SP,TAU,364,Ponto de Controle - 12,10,75,false,false,true,false,-23.02012,-45.53602
+RODOVIARIA DE TUCANO - BA,TCN,370,Ponto de Controle - 12,10,50,false,false,true,false,-10.961703,-38.788562
+RODOVIARIA DE TRES CORACOES - MG,TCS,368,Ponto de Controle - 12,10,50,false,false,true,false,-21.700144,-45.259711
+VITORIA DA CONQUISTA - BA - REST.E & LANCH. TUDO C,TD CAIPIRA,399,Local Não Autorizado - 42,10,50,false,false,false,false,-16.99574,-44.277862
+RODOVIARIA DE TRINDADE - PE,TDD,369,Ponto de Controle - 12,10,50,false,false,true,false,-7.760439,-40.264224
+RODOVIARIA DE TEODORO SAMPAIO - BA,TDS,365,Ponto de Controle - 12,10,50,false,false,true,false,-22.528959,-52.168257
+RODOVIARIA DE TANGARA - RN,TNG,362,Ponto de Controle - 12,10,50,false,false,true,false,-6.199318,-35.801367
+RODOVIARIA DE TEOTONIO VILELA - AL,TNVL,367,Ponto de Controle - 12,10,50,false,false,true,false,-9.900636,-36.363608
+RODOVIARIA DE TEOFILO OTONI - MG,TOT,366,Ponto de Controle - 12,10,50,false,false,true,false,-17.868056,-41.51226
+RODOVIARIA DE TUPACIGUARA - MG,TPC,371,Ponto de Controle - 12,10,50,false,false,true,false,-18.604023,-48.686919
+RODOVIARIA DE TAQUARALTO - TO,TQRT,363,Ponto de Controle - 12,10,50,false,false,true,false,-10.329214,-48.298602
+RODOVIARIA UBERLANDIA - MG,UDI,32,Ponto de Controle - 12,10,80,false,false,true,false,-18.905253,-48.285044
+RODOVIARIA DE UMBAUBA - SE,UMB,372,Ponto de Controle - 12,10,50,false,false,true,false,-11.382678,-37.659405
+RODOVIARIA DE UNIAO DOS PALMARES - AL,UPS,373,Ponto de Controle - 12,10,50,false,false,true,false,-9.159379,-36.032024
+RODOVIARIA DE UBERABA - MG,URA,30,Ponto de Controle - 12,10,80,false,false,true,false,-19.762849,-47.945511
+RODOVIARIA DE UTINGA - BA,UTG,374,Ponto de Controle - 12,10,50,false,false,true,false,-12.077585,-41.093491
+RODOVIARIA DE VARGEM - SP,VARG,375,Ponto de Controle - 12,10,50,false,false,true,false,-22.892437,-46.416359
+RODOVIARIA VITORIA DA CONQUISTA - BA,VDC,51,Ponto de Controle - 12,10,100,false,false,true,false,-14.879962,-40.853949
+VIA MONTES (POSTO MONTES CLAROS),VIA.MONT,380,Ponto de Controle - 12,30,59,false,false,false,false,-16.771158,-43.856098
+VOLVO BRASÍLIA,VOLVO DF,394,Ponto de Fechamento - 1,30,200,false,false,false,false,-16.020226,-47.9831
+VOLVO GUARULHOS,VOLVO GRS,472,Ponto de Fechamento - 1,30,100,false,false,false,false,-23.423035,-46.391955
+VOLVO GOIÂNIA,VOLVO GYN,391,Ponto de Fechamento - 1,30,100,false,false,false,false,-16.829352,-49.241732
+VOLVO PATO DE MINAS,VOLVO PATO,392,Ponto de Fechamento - 1,30,100,false,false,false,false,-18.640509,-46.492393
+VOLVO SERGIPE,VOLVO SE,404,Ponto de Fechamento - 1,30,100,false,false,false,false,-10.910455,-37.157787
+VOLVO VILA JARAGUÁ SP,VOLVO SP,405,Ponto de Fechamento - 1,30,100,false,false,false,false,-23.492361,-46.757132
+VOLVO TERESINA PI,VOLVOPIAUÍ,393,Ponto de Fechamento - 1,30,100,false,false,false,false,-5.172407,-42.767504
+RODOVIARIA DE VITORIA DE SANTO ANTAO - PE,VSA,376,Ponto de Controle - 12,10,50,false,false,true,false,-8.114146,-35.296829
