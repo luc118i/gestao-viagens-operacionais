@@ -16,6 +16,7 @@ Principais recursos:
 - Gestao de esquemas e pontos via interface web/sidebar.
 - Geracao de relatorios por motorista, trecho ou viagem completa.
 - Integracao opcional com API externa de ocorrencias e PDFs.
+- Copia automatica do relatorio gerado (PDF/DOCX) para uma pasta do Google Drive.
 
 ## Estrutura
 
@@ -66,6 +67,9 @@ Configure estas propriedades no Google Apps Script quando aplicavel:
 - `REPORT_API_URL`: URL base da API externa de ocorrencias.
 - `REPORT_TYPE_CODE`: codigo do tipo de ocorrencia usado na API externa.
 - `REPORTS_PDF_TTL`: tempo de validade da URL assinada do PDF, em segundos.
+- `REPORTS_DRIVE_FOLDER_ID`: ID da pasta do Google Drive onde o relatorio gerado e salvo. Se nao definida, o script cria/reutiliza a pasta `Relatorios Operacionais` na raiz do Drive e grava o ID nesta mesma propriedade no primeiro uso.
+
+> A copia para o Drive usa o escopo `https://www.googleapis.com/auth/drive` (em `appsscript.json`). Ao atualizar a partir de uma versao antiga, a conta que faz o deploy precisa reautorizar o script uma vez. Falha ao salvar no Drive nao interrompe a geracao: o relatorio continua acessivel pela URL assinada da API enquanto ela durar.
 
 ## Planilha Esperada
 
