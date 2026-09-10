@@ -655,22 +655,49 @@
       });
     }
 
+    // Normaliza texto para busca: min\u00fasculo, sem acentos
+    function _normBusca(s) {
+      return String(s || '').trim().toLowerCase()
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+    }
+
+    // Casa um esquema com o texto digitado.
+    // Al\u00e9m da busca literal em c\u00f3digo/nome/hor\u00e1rio/sentido, entende hor\u00e1rio
+    // sem separadores: "1030" \u2192 10:30, "930"/"0930" \u2192 09:30, "10h30"/"10 30" ok.
+    function _esquemaCasaBusca(esq, rawQuery) {
+      var q = _normBusca(rawQuery);
+      if (!q) return true;
+
+      var id   = String(esq.id_esquema || '').toLowerCase();
+      var nome = _normBusca(esq.nome_linha);
+      var hor  = String(esq.horario || '').toLowerCase();
+      var sent = _normBusca(esq.sentido);
+
+      if (id.includes(q) || nome.includes(q) || hor.includes(q) || sent.includes(q)) return true;
+
+      // Busca por hor\u00e1rio: query s\u00f3 com d\u00edgitos e separadores de hora (: h . espa\u00e7o)
+      if (/^[\d\s:h.]+$/.test(q)) {
+        var qDig   = q.replace(/\D/g, '');
+        var horDig = hor.replace(/\D/g, '');
+        if (qDig && horDig) {
+          // Compara ignorando zeros \u00e0 esquerda dos dois lados: "930" = "0930", "0930" = "930"
+          var qTrim   = qDig.replace(/^0+/, '');
+          var horTrim = horDig.replace(/^0+/, '');
+          if (horDig.indexOf(qDig) !== -1) return true;   // "1030" em "1030"
+          if (horTrim.indexOf(qTrim) === 0) return true;  // "930"/"0930" \u2192 "09:30"
+        }
+      }
+      return false;
+    }
+
     function _renderEsquemaOpts(query) {
       var dropdown = document.getElementById('esquemaDropdown');
       if (!dropdown) return;
 
-      var q = (query || '').trim().toLowerCase()
-        .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      var q = _normBusca(query);
 
       var filtrados = _esquemas.filter(function(esq) {
-        if (!q) return true;
-        var id   = String(esq.id_esquema || '').toLowerCase();
-        var nome = (esq.nome_linha || '').toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        var hor  = (esq.horario || '').toLowerCase();
-        var sent = (esq.sentido || '').toLowerCase()
-          .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
-        return id.includes(q) || nome.includes(q) || hor.includes(q) || sent.includes(q);
+        return _esquemaCasaBusca(esq, query);
       });
 
       var selectedId = document.getElementById('selectEsquema')
@@ -796,16 +823,9 @@
       }
 
       function renderOpts(query) {
-        var q = (query || '').trim().toLowerCase()
-          .normalize('NFD').replace(/[̀-ͯ]/g, '');
+        var q = _normBusca(query);
         var list = _esquemas.filter(function(esq) {
-          if (!q) return true;
-          var id   = String(esq.id_esquema || '').toLowerCase();
-          var nome = (esq.nome_linha || '').toLowerCase()
-            .normalize('NFD').replace(/[̀-ͯ]/g, '');
-          var hor  = (esq.horario || '').toLowerCase();
-          var sent = (esq.sentido || '').toLowerCase();
-          return id.includes(q) || nome.includes(q) || hor.includes(q) || sent.includes(q);
+          return _esquemaCasaBusca(esq, query);
         });
 
         if (list.length === 0) {
