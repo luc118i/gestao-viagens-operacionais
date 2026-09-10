@@ -522,10 +522,11 @@
         _comparacao = null;
         if (infoEl) infoEl.style.display = "none";
         if (uploadAviso) uploadAviso.style.display = 'block';
-        if (uploadInfo)  uploadInfo.style.display  = 'none';
+        if (uploadInfo)  { uploadInfo.style.display = 'none'; uploadInfo.innerHTML = ''; }
         // Desabilita btnProcessar se não há esquema
         var btnP = document.getElementById('btnProcessar');
         if (btnP && !UIModule.getCsvText()) btnP.disabled = true;
+        _atualizarConfigProgresso();
         return;
       }
 
@@ -535,23 +536,47 @@
         return e.id_esquema === idEsquema;
       });
 
+      // Feedback de carregamento — os pontos vêm do servidor e podem demorar
+      var btnLoad = document.getElementById('btnProcessar');
+      if (btnLoad) btnLoad.disabled = true;
+      if (infoEl) { infoEl.textContent = 'carregando…'; infoEl.style.display = 'inline-flex'; }
+      if (uploadInfo) {
+        var esqNomeLoad = esqObj ? (esqObj.nome_linha || esqObj.id_esquema) : idEsquema;
+        uploadInfo.className = 'config-esq-selected is-loading';
+        uploadInfo.innerHTML =
+          '<div class="es-line"><span class="es-spin"></span>Carregando ' + _escHtml(esqNomeLoad) + '…</div>' +
+          '<div class="es-meta">Buscando os pontos do esquema</div>';
+        uploadInfo.style.display = 'block';
+      }
+
       google.script.run
         .withSuccessHandler(function (pontos) {
           _esquemaPontos = pontos || [];
 
-          var esqLabel = (esqObj ? esqObj.nome_linha + (esqObj.sentido ? " · " + esqObj.sentido : "") + " · " : "") + _esquemaPontos.length + " pontos";
           // No navbar o combobox já exibe linha/sentido/horário — aqui mostra só a contagem de pontos (sem redundância)
           if (infoEl) {
             infoEl.textContent = _esquemaPontos.length + (_esquemaPontos.length === 1 ? " ponto" : " pontos");
             infoEl.style.display = _esquemaPontos.length > 0 ? "inline-flex" : "none";
           }
           if (uploadInfo) {
-            uploadInfo.textContent = "" + esqLabel;
+            uploadInfo.className = 'config-esq-selected';
+            var esqNome = esqObj ? (esqObj.nome_linha || esqObj.id_esquema) : idEsquema;
+            var esqMeta = [];
+            if (esqObj && esqObj.horario) esqMeta.push('<span class="es-hor">' + _escHtml(esqObj.horario) + '</span>');
+            if (esqObj && esqObj.sentido) esqMeta.push(_escHtml(esqObj.sentido));
+            esqMeta.push(_esquemaPontos.length + (_esquemaPontos.length === 1 ? ' ponto' : ' pontos'));
+            uploadInfo.innerHTML =
+              '<div class="es-line">' +
+                '<svg class="es-check" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>' +
+                _escHtml(esqNome) +
+              '</div>' +
+              '<div class="es-meta">' + esqMeta.join(' &middot; ') + '</div>';
             uploadInfo.style.display = 'block';
           }
           // Habilita btnProcessar se CSV também já carregado
           var btnP = document.getElementById('btnProcessar');
           if (btnP && UIModule.getCsvText()) btnP.disabled = false;
+          _atualizarConfigProgresso();
 
           _popularDropdownsPontos(_esquemaPontos);
 
@@ -581,9 +606,59 @@
         })
         .withFailureHandler(function (err) {
           console.warn("[App] Erro ao carregar pontos do esquema:", err);
+          _esquemaPontos = [];
+          var btnErr = document.getElementById('btnProcessar');
+          if (btnErr) { btnErr.disabled = true; btnErr.textContent = 'Selecione o esquema'; }
+          if (infoEl) infoEl.style.display = 'none';
+          if (uploadInfo) {
+            uploadInfo.className = 'config-esq-selected is-error';
+            uploadInfo.innerHTML =
+              '<div class="es-line">Não foi possível carregar o esquema.</div>' +
+              '<div class="es-meta">Selecione o esquema de novo para tentar outra vez.</div>';
+            uploadInfo.style.display = 'block';
+          }
           UIModule.showToast("Erro ao carregar esquema.", "error");
         })
         .getEsquemaPontos(idEsquema);
+    }
+
+    // ------------------------------------------------------------
+    //  Progresso da tela inicial (stepper ①②③ + rótulo do botão)
+    // ------------------------------------------------------------
+    function _atualizarConfigProgresso() {
+      var temArquivo = !!UIModule.getCsvText();
+      var selEsq     = document.getElementById('selectEsquema');
+      var temEsquema = !!(selEsq && selEsq.value);
+
+      // Stepper
+      var passos = {
+        1: temArquivo,
+        2: temEsquema,
+        3: temArquivo && temEsquema
+      };
+      document.querySelectorAll('#configSteps .config-step').forEach(function (li) {
+        var n = parseInt(li.getAttribute('data-step'), 10);
+        li.classList.remove('is-active', 'is-done');
+        if (passos[n]) {
+          li.classList.add(n === 3 ? 'is-active' : 'is-done');
+        } else if ((n === 1 && !temArquivo) || (n === 2 && temArquivo && !temEsquema)) {
+          li.classList.add('is-active');
+        }
+      });
+
+      // Rótulo do botão
+      var btn = document.getElementById('btnProcessar');
+      if (btn) {
+        if (temArquivo && temEsquema) {
+          btn.textContent = 'Iniciar análise →';
+        } else if (temArquivo) {
+          btn.textContent = 'Selecione o esquema';
+        } else if (temEsquema) {
+          btn.textContent = 'Envie o relatório GPS';
+        } else {
+          btn.textContent = 'Selecione o relatório e o esquema';
+        }
+      }
     }
 
     // ============================================================
@@ -1179,8 +1254,9 @@
     // ============================================================
 
     function _onFileLoaded(csvText) {
+      _atualizarConfigProgresso();
       UIModule.showToast(
-        'Arquivo carregado. Clique em "Processar Viagem".',
+        'Relatório carregado. Selecione o esquema para iniciar a análise.',
         "info",
       );
     }
@@ -3070,7 +3146,8 @@
       var uploadEsqInput = document.getElementById('uploadEsquemaSearch');
       var uploadEsqInfo  = document.getElementById('uploadEsquemaInfo');
       if (uploadEsqInput) uploadEsqInput.value = '';
-      if (uploadEsqInfo)  { uploadEsqInfo.style.display = 'none'; uploadEsqInfo.textContent = ''; }
+      if (uploadEsqInfo)  { uploadEsqInfo.style.display = 'none'; uploadEsqInfo.innerHTML = ''; }
+      _atualizarConfigProgresso();
 
       // Restaura o card de upload para nova análise
       var secConfig = document.getElementById('sectionConfig');
@@ -5556,6 +5633,7 @@
       fecharModalPendencias: fecharModalPendencias,
       confirmarGerarComPendencias: confirmarGerarComPendencias,
       _novaAnalise: _onLimpar,
+      _atualizarConfigProgresso: _atualizarConfigProgresso,
       _setModo,
       abrirMapa,
       abrirModalUsuario: abrirModalUsuario,

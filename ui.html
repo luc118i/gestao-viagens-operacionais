@@ -69,11 +69,16 @@
         const fname = document.getElementById("uploadedFileName");
 
         zone.classList.add("has-file");
-        if (icon) icon.textContent = "OK";
-        if (label) label.textContent = "Arquivo carregado";
-        if (hint) hint.textContent = file.name;
+        if (icon) icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="30" height="30"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>';
+        if (label) label.textContent = "Relatório recebido";
+        if (hint) hint.textContent = "clique para trocar o arquivo";
         if (fname) {
-          fname.textContent = `${file.name} (${_fmtBytes(file.size)})`;
+          // nº de linhas de dados (descontando cabeçalho e linha vazia final)
+          const linhas = (_csvText.match(/\n/g) || []).length;
+          const registros = Math.max(0, linhas - 1);
+          fname.innerHTML =
+            `<span class="fm-name">${_escHtml(file.name)}</span><br>` +
+            `${registros.toLocaleString("pt-BR")} registros · ${_fmtBytes(file.size)}`;
           fname.style.display = "block";
         }
 
@@ -105,10 +110,10 @@
       const btn   = document.getElementById("btnProcessar");
       const input = document.getElementById("fileInput");
       if (zone)  zone.classList.remove("has-file");
-      if (icon)  icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="28" height="28"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
-      if (label) label.textContent = "Clique ou arraste o arquivo";
-      if (hint)  hint.textContent  = "Formato: .csv (separado por TAB)";
-      if (fname) { fname.textContent = ""; fname.style.display = "none"; }
+      if (icon)  icon.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="30" height="30"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+      if (label) label.textContent = "Arraste o relatório GPS aqui";
+      if (hint)  hint.innerHTML    = "ou clique para selecionar &middot; CSV separado por TAB";
+      if (fname) { fname.innerHTML = ""; fname.style.display = "none"; }
       if (btn)   btn.disabled = true;
       if (input) input.value = "";
     }

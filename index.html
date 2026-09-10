@@ -109,7 +109,7 @@
               id="btnAnaliseMassa"
               class="header-btn"
               title="Importar PDFs de viagens anteriores para análise histórica por trecho"
-            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Análise em Massa</button>
+            ><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="13" height="13"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>Análise em Massa</button>
             <button
               id="btnNovaAnalise"
               class="header-btn header-btn-primary"
@@ -137,48 +137,80 @@
       <!-- ========== SEÇÃO CONFIGURAÇÃO ========== -->
       <section class="section section-config" id="sectionConfig">
 
-        <!-- Card centralizado de upload -->
-        <div style="display:flex; justify-content:center; padding:32px 16px 24px;">
-          <div style="width:100%; max-width:480px; background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:28px 28px 24px; box-shadow:0 2px 12px rgba(0,0,0,0.06);">
+        <!-- Ponto de entrada da central de análise -->
+        <div class="config-stage">
 
-            <div style="text-align:center; margin-bottom:20px;">
-              <div style="font-size:16px; font-weight:700; color:var(--text); margin-bottom:4px;">Análise Operacional de Viagem</div>
-              <div style="font-size:12px; color:var(--text3);">Envie o relatório CSV e selecione o esquema para iniciar</div>
+          <div class="config-hero">
+            <div class="config-hero-text">
+              <h1 class="config-hero-title">Análise Operacional</h1>
+              <p class="config-hero-sub">
+                Compare o realizado da viagem com o esquema operacional — atrasos,
+                permanências e desvios de rota a partir do relatório GPS.
+              </p>
+            </div>
+            <div class="config-hero-status" title="Sistema disponível">
+              <span class="op-dot"></span> Sistema operacional
+            </div>
+          </div>
+
+          <!-- Sequência do fluxo -->
+          <ol class="config-steps" id="configSteps" aria-label="Etapas da análise">
+            <li class="config-step is-active" data-step="1">
+              <span class="config-step-num">1</span><span class="config-step-label">Relatório GPS</span>
+            </li>
+            <li class="config-step" data-step="2">
+              <span class="config-step-num">2</span><span class="config-step-label">Esquema</span>
+            </li>
+            <li class="config-step" data-step="3">
+              <span class="config-step-num">3</span><span class="config-step-label">Análise</span>
+            </li>
+          </ol>
+
+          <!-- Área de trabalho: relatório + esquema lado a lado -->
+          <div class="config-workarea">
+
+            <!-- 01 · Relatório GPS -->
+            <div class="config-panel" id="configPanelUpload">
+              <div class="config-panel-head"><span class="config-panel-idx">01</span> Relatório GPS</div>
+              <!-- label nativo abre o diálogo sem JS (.click bloqueado em iframe GAS) -->
+              <label for="fileInput" class="upload-zone" id="uploadZone">
+                <span class="upload-icon" id="uploadIcon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="30" height="30"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg></span>
+                <div class="upload-text">
+                  <strong id="uploadLabel">Arraste o relatório GPS aqui</strong>
+                  <span id="uploadHint">ou clique para selecionar &middot; CSV separado por TAB</span>
+                </div>
+              </label>
+              <input type="file" id="fileInput" accept=".csv,.txt" hidden />
+              <div id="uploadedFileName" class="upload-filemeta" style="display:none;"></div>
             </div>
 
-            <!-- Zona de upload — label nativo abre o diálogo sem JS (.click bloqueado em iframe GAS) -->
-            <label for="fileInput" class="upload-zone" id="uploadZone" style="cursor:pointer; display:flex;">
-              <span class="upload-icon" id="uploadIcon"><svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="28" height="28"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg></span>
-              <div class="upload-text">
-                <strong id="uploadLabel">Clique ou arraste o arquivo</strong>
-                <span id="uploadHint">Formato: .csv (separado por TAB)</span>
-              </div>
-            </label>
-            <input type="file" id="fileInput" accept=".csv,.txt" style="display:none;" />
-            <div id="uploadedFileName" style="display:none; font-size:11px; color:var(--text3); margin-top:6px; text-align:center;"></div>
-
-            <!-- Esquema -->
-            <div id="uploadEsquemaWrap" style="margin-top:16px;">
-              <div style="font-size:11px; font-weight:600; color:var(--text2); margin-bottom:6px;">Esquema da viagem *</div>
-              <div style="position:relative;" id="uploadEsquemaCombobox">
-                <input
-                  type="text"
-                  id="uploadEsquemaSearch"
-                  autocomplete="off"
-                  placeholder="Buscar linha, código ou horário…"
-                  style="width:100%; box-sizing:border-box; padding:8px 12px; border:1.5px solid var(--border); border-radius:8px; font-size:13px; color:var(--text); background:var(--bg); outline:none; transition:border-color 0.15s;"
-                />
-                <div id="uploadEsquemaDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:var(--bg); border:1px solid var(--border); border-radius:8px; box-shadow:0 4px 16px rgba(0,0,0,0.1); max-height:200px; overflow-y:auto; z-index:200; margin-top:3px;"></div>
-              </div>
-              <div id="uploadEsquemaInfo" style="font-size:11px; margin-top:6px; padding:6px 10px; border-radius:6px; background:rgba(34,169,106,0.07); border:1px solid rgba(34,169,106,0.25); color:#22a96a; display:none; font-weight:600;"></div>
-              <div id="uploadEsquemaEmpty" style="display:none; margin-top:8px; padding:10px 12px; border-radius:8px; background:rgba(244,121,32,0.06); border:1px solid rgba(244,121,32,0.2); font-size:12px; color:var(--text2);">
-                Nenhum esquema cadastrado.
-                <a onclick="window.open(WEB_APP_URL+'?page=manager','_blank')" style="color:var(--laranja); font-weight:600; cursor:pointer; margin-left:4px;">→ Cadastrar esquemas</a>
+            <!-- 02 · Esquema da viagem -->
+            <div class="config-panel" id="configPanelEsquema">
+              <div class="config-panel-head"><span class="config-panel-idx">02</span> Esquema da viagem</div>
+              <div id="uploadEsquemaWrap">
+                <div class="config-esq-search" id="uploadEsquemaCombobox">
+                  <svg class="config-esq-search-icon" xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" width="15" height="15"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                  <input
+                    type="text"
+                    id="uploadEsquemaSearch"
+                    autocomplete="off"
+                    placeholder="Buscar linha, código ou horário…"
+                  />
+                  <div id="uploadEsquemaDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:var(--surface); border:1px solid var(--border); border-radius:8px; box-shadow:0 8px 24px rgba(16,20,30,0.12); max-height:240px; overflow-y:auto; z-index:200; margin-top:4px;"></div>
+                </div>
+                <div id="uploadEsquemaInfo" class="config-esq-selected" style="display:none;"></div>
+                <div id="uploadEsquemaEmpty" class="config-esq-empty" style="display:none;">
+                  Nenhum esquema cadastrado.
+                  <a onclick="window.open(WEB_APP_URL+'?page=manager','_blank')">→ Cadastrar esquemas</a>
+                </div>
               </div>
             </div>
 
-            <button class="btn btn-primary btn-full" id="btnProcessar" style="margin-top:18px; height:42px; font-size:14px;" disabled>
-              ▶ Processar Viagem
+          </div>
+
+          <div class="config-action">
+            <button class="btn btn-primary" id="btnProcessar" disabled>
+              Selecione o relatório e o esquema
             </button>
           </div>
         </div>

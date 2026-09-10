@@ -3177,23 +3177,9 @@
   #btnAnaliseMassa { display: none; }
   .app--upload-only #btnAnaliseMassa { display: inline-flex; }
 
-  /* A seção de config ocupa todo o espaço disponível e centraliza */
-  .app--upload-only .section-config {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    padding: 64px 24px;
-  }
-
-  /* Card de upload centralizado e compacto */
-  .app--upload-only .config-grid {
-    max-width: 500px;
-    width: 100%;
-    border-radius: 16px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.08);
-  }
+  /* "+ Nova Análise" não faz sentido na própria tela de nova análise */
+  .app--upload-only #btnNovaAnalise { display: none; }
+  .app--upload-only .header-divider { display: none; }
 
   /* Esconde as colunas de motorista e modo de relatório */
   .app--upload-only #sectionMotorista,
@@ -3201,68 +3187,330 @@
     display: none !important;
   }
 
-  /* Coluna de upload sem borda direita e com mais respiro */
-  .app--upload-only #colUpload {
-    border-right: none !important;
-    padding: 36px 40px 32px;
+  /* A seção de config ocupa o espaço e alinha o palco no topo */
+  .app--upload-only .section-config {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 0;
   }
 
-  /* Esconde o título genérico "Relatório de Viagem" */
-  .app--upload-only #colUpload > .col-title { display: none; }
-
-  /* Bloco de boas-vindas (visível só no modo upload) */
-  #uploadWelcome {
-    display: none;
-    text-align: center;
-    margin-bottom: 28px;
+  /* ---- Palco da central de análise ---- */
+  .config-stage {
+    width: 100%;
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 40px 24px 48px;
   }
 
-  .upload-welcome-title {
-    font-size: 24px;
+  /* Hero */
+  .config-hero {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 24px;
+    margin-bottom: 26px;
+  }
+  .config-hero-title {
+    font-size: 22px;
     font-weight: 800;
     color: var(--text);
-    letter-spacing: -0.5px;
-    line-height: 1.2;
-    margin-bottom: 8px;
+    letter-spacing: -0.4px;
+    margin: 0 0 6px;
   }
-
-  .upload-welcome-sub {
+  .config-hero-sub {
     font-size: 13px;
-    color: var(--text3);
-    line-height: 1.65;
-    max-width: 340px;
-    margin: 0 auto;
+    color: var(--text2);
+    line-height: 1.6;
+    max-width: 560px;
+    margin: 0;
+  }
+  .config-hero-status {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--text2);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 6px 12px;
+    white-space: nowrap;
+  }
+  .config-hero-status .op-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--verde);
+    box-shadow: 0 0 0 3px var(--verde-bg);
   }
 
-  .app--upload-only #uploadWelcome { display: block; }
-
-  /* Dropzone maior e mais expressiva */
-  .app--upload-only .upload-zone {
-    padding: 48px 32px;
-    margin-bottom: 16px;
-    border-width: 2px;
+  /* Stepper ①─②─③ */
+  .config-steps {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    list-style: none;
+    margin: 0 0 20px;
+    padding: 0;
   }
-
-  .app--upload-only .upload-icon {
-    font-size: 40px;
-    margin-bottom: 12px;
-  }
-
-  .app--upload-only .upload-text strong {
-    font-size: 14px;
-    margin-bottom: 6px;
-  }
-
-  .app--upload-only .upload-text span {
+  .config-step {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
     font-size: 12px;
+    font-weight: 600;
+    color: var(--text3);
+  }
+  .config-step:not(:last-child)::after {
+    content: "";
+    width: 44px;
+    height: 1px;
+    background: var(--border-strong);
+    margin-left: 10px;
+  }
+  .config-step-num {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    border: 1.5px solid var(--border-strong);
+    background: var(--surface);
+    color: var(--text3);
+  }
+  .config-step.is-active { color: var(--text); }
+  .config-step.is-active .config-step-num {
+    border-color: var(--laranja);
+    background: var(--laranja);
+    color: #fff;
+  }
+  .config-step.is-done { color: var(--text2); }
+  .config-step.is-done .config-step-num {
+    border-color: var(--verde);
+    background: var(--verde);
+    color: #fff;
+    font-size: 0;
+  }
+  .config-step.is-done .config-step-num::after {
+    content: "✓";
+    font-size: 11px;
   }
 
-  /* Botão processar mais alto */
-  .app--upload-only #btnProcessar {
+  /* Área de trabalho — duas colunas */
+  .config-workarea {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    align-items: stretch;
+  }
+  .config-panel {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    min-height: 210px;
+  }
+  .config-panel-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--text);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 14px;
+  }
+  .config-panel-idx {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    background: var(--bg2);
+    border-radius: 4px;
+    padding: 2px 6px;
+  }
+
+  /* Dropzone no palco */
+  .config-panel .upload-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    min-height: 148px;
+    margin: 0;
+    padding: 24px 16px;
+    border: 1.5px dashed var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--bg);
+    cursor: pointer;
+    transition: border-color 0.15s, background 0.15s;
+  }
+  .config-panel .upload-zone:hover,
+  .config-panel .upload-zone.drag-over {
+    border-color: var(--laranja);
+    background: var(--laranja4);
+  }
+  .config-panel .upload-zone.has-file {
+    border-style: solid;
+    border-color: var(--verde);
+    background: var(--verde-bg);
+  }
+  .config-panel .upload-icon {
+    margin: 0;
+    color: var(--text3);
+  }
+  .config-panel .upload-zone:hover .upload-icon { color: var(--laranja); }
+  .config-panel .upload-zone.has-file .upload-icon { color: var(--verde); }
+  .config-panel .upload-text {
+    text-align: center;
+    font-size: 12px;
+    color: var(--text3);
+  }
+  .config-panel .upload-text strong {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .config-panel .upload-zone.has-file .upload-text strong { color: var(--verde); }
+
+  .upload-filemeta {
+    margin-top: 10px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    color: var(--text2);
+    text-align: center;
+  }
+  .upload-filemeta .fm-name { font-weight: 600; color: var(--text); }
+  .upload-filemeta .fm-swap {
+    color: var(--laranja);
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* Campo de busca do esquema no palco */
+  .config-esq-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+  }
+  .config-esq-search-icon {
+    position: absolute;
+    left: 11px;
+    color: var(--text3);
+    pointer-events: none;
+  }
+  #uploadEsquemaSearch {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px 10px 32px;
+    border: 1.5px solid var(--border);
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text);
+    background: var(--bg);
+    outline: none;
+    transition: border-color 0.15s;
+  }
+  #uploadEsquemaSearch:focus { border-color: var(--laranja); }
+  #uploadEsquemaSearch::placeholder { color: var(--text3); }
+
+  .config-esq-selected {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--laranja);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .config-esq-selected .es-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .config-esq-selected .es-check { color: var(--verde); flex-shrink: 0; }
+  .config-esq-selected .es-meta {
+    margin-top: 4px;
+    font-size: 11.5px;
+    color: var(--text2);
+    font-variant-numeric: tabular-nums;
+  }
+  .config-esq-selected .es-meta .es-hor { color: var(--laranja); font-weight: 600; }
+
+  /* Estado: carregando pontos do esquema (chamada ao servidor) */
+  .config-esq-selected.is-loading {
+    border-left-color: var(--border-strong);
+  }
+  .config-esq-selected.is-loading .es-line {
+    font-weight: 600;
+    color: var(--text2);
+  }
+  .config-esq-selected .es-spin {
+    width: 13px;
+    height: 13px;
+    flex-shrink: 0;
+    border: 2px solid var(--border-strong);
+    border-top-color: var(--laranja);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+  }
+  /* Estado: falha ao carregar */
+  .config-esq-selected.is-error {
+    border-left-color: var(--vermelho, #d64545);
+    background: rgba(214, 69, 69, 0.05);
+  }
+  .config-esq-selected.is-error .es-line { color: var(--vermelho, #d64545); }
+
+  .config-esq-empty {
+    margin-top: 10px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    background: var(--laranja4);
+    border: 1px solid var(--laranja3);
+    font-size: 12px;
+    color: var(--text2);
+  }
+  .config-esq-empty a {
+    color: var(--laranja);
+    font-weight: 600;
+    cursor: pointer;
+    margin-left: 4px;
+  }
+
+  /* Ação */
+  .config-action {
+    margin-top: 20px;
+    display: flex;
+    justify-content: flex-end;
+  }
+  .config-action #btnProcessar {
+    min-width: 240px;
     height: 44px;
     font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.01em;
+  }
+
+  @media (max-width: 860px) {
+    .config-workarea { grid-template-columns: 1fr; }
+    .config-hero { flex-direction: column; }
+    .config-action { justify-content: stretch; }
+    .config-action #btnProcessar { width: 100%; }
+    .config-step-label { display: none; }
+    .config-step:not(:last-child)::after { width: 24px; }
   }
 
   /* ============================================================
